@@ -1,0 +1,23 @@
+(Save) {
+    greeting: "Hello world!",
+    keybinds: {
+        Action::Up => 'W',
+        Action::Down => 'S',
+        Action::Left => 'A',
+        Action::Right => 'D',
+    },
+    difficulty_factor: 4.3,
+    respawn_point: (
+        1107.1487,
+        1249.0458,
+    ),
+    inventory: [
+        Item::Water,
+        Item::CannedFood,
+        Item::IdCard > 101,
+        Item::RocketLauncher {
+            damage: 250,
+            explosion_radius: 60.0,
+        },
+    ],
+}

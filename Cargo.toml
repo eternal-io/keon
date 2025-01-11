@@ -1,0 +1,31 @@
+[package]
+name = "keon"
+version = "0.1.1"
+edition = "2021"
+rust-version = "1.70.0"
+authors = ["K--Aethiax"]
+publish = true
+
+description = "A human readable object notation that syntactic similar to Rust and fully supports Serde data model."
+
+documentation = "https://docs.rs/keon"
+repository = "https://github.com/eternal-io/keon"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+keywords = ["serde", "serialization", "keon", "parser", "friendly"]
+categories = ["encoding"]
+
+
+[dependencies]
+serde = { version = "1.0.210", features = ["derive"] }
+logos = "0.14.2"
+smol_str = "0.3.2"
+data-encoding = "2.6.0"
+unicode-ident = "1.0.13"
+lexical-core = { version = "1.0.2", features = ["format", "power-of-two"] }
+
+
+[dev-dependencies]
+serde_json = "1.0.133"
+serde_bytes = "0.11.15"
