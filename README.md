@@ -10,8 +10,7 @@
 
 KEON is a human readable object notation / serialization format that syntactic similar to Rust and completely supports [Serde's data model](https://serde.rs/data-model.html).
 
-
-<details><summary><b>Cheat sheet</b></summary>
+<details><summary><b>📝 Cheat sheet</b></summary>
 
 | Unit     | `()`
 | --------:|:------ |
@@ -64,6 +63,9 @@ And the Paragraphs, leave anything after the *start sign* of each line intact:
 
 The start signs can be mixed, but the first must be the vertical-bar `|`.
 </details>
+
+> [!NOTE]
+> This is not ready for production use, more comprehensive tests are needed, and there is no standard yet.
 
 
 ## [Example](https://github.com/eternal-io/keon/blob/master/examples/roundtrip.rs)
