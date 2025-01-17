@@ -12,7 +12,7 @@ use std::{cell::RefCell, cmp::Ordering, num::NonZeroU8, rc::Rc};
 
 pub(crate) type LexerResult<T> = core::result::Result<T, ErrorKind>;
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 const NUMBER_FMT: u128 = NumberFormatBuilder::rebuild(lexical_core::format::RUST_STRING)
     .no_special(false)
@@ -48,7 +48,7 @@ const fn raise(kind: ErrorKind) -> LexerResult<()> {
     Err(kind)
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +56,7 @@ pub(crate) enum TokenKind {
     Ident, Literal,
     Comma, Question,
     Colon, PathSep,
-    Angle, FatArrow,
+    Percent, FatArrow,
     Paren_, _Paren,
     Brack_, _Brack,
     Brace_, _Brace,
@@ -87,9 +87,9 @@ impl<'i> Token<'i> {
 
             Token::Comma => TokenKind::Comma,
             Token::Colon => TokenKind::Colon,
-            Token::Angle => TokenKind::Angle,
-            Token::Question => TokenKind::Question,
+            Token::Percent => TokenKind::Percent,
             Token::PathSep => TokenKind::PathSep,
+            Token::Question => TokenKind::Question,
             Token::FatArrow => TokenKind::FatArrow,
 
             Token::Paren_ => TokenKind::Paren_,
@@ -102,7 +102,7 @@ impl<'i> Token<'i> {
     }
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 #[rustfmt::skip]
 #[derive(Debug, Logos, Clone, PartialEq, PartialOrd)]
@@ -139,7 +139,7 @@ pub(crate) enum Token<'src> {
 
     #[token(",")] Comma,
     #[token(":")] Colon,
-    #[token(">")] Angle,
+    #[token("%")] Percent,
     #[token("?")] Question,
     #[token("::")] PathSep,
     #[token("=>")] FatArrow,
@@ -231,8 +231,7 @@ pub(crate) enum Radix { Dec, Bin, Oct, Hex }
 #[derive(Debug)] #[rustfmt::skip]
 pub(crate) enum BaseXX { Base16, Base32, Base64 }
 
-// The [`Lexer::morph`] isn't what we want.
-fn morph<'i, Token1, Token2>(lex: &Lexer<'i, Token1>) -> Lexer<'i, Token2>
+fn switch<'i, Token1, Token2>(lex: &Lexer<'i, Token1>) -> Lexer<'i, Token2>
 where
     Token1: Logos<'i, Extras = Extras, Source = str>,
     Token2: Logos<'i, Extras = Extras, Source = str>,
@@ -265,7 +264,7 @@ mod cb {
     }
 
     pub(crate) fn block_comment<'i>(lex: &mut Lexer<'i, Token<'i>>) -> FilterResult<(), ErrorKind> {
-        let mut tk = morph::<_, TokenComment>(lex);
+        let mut tk = switch::<_, TokenComment>(lex);
         let mut ctr = 1;
         let mut cursor = lex.span().end;
 
@@ -292,16 +291,12 @@ mod cb {
 
     pub(crate) fn ident<'i>(lex: &mut Lexer<'i, Token<'i>>, slice: &'i str) -> LexerResult<&'i str> {
         let mut chs = slice.chars();
-        let mut len = 0;
-
         if let Some(start) = chs.next() {
             if unicode_ident::is_xid_start(start) || start == '_' {
-                for ch in chs {
-                    match unicode_ident::is_xid_continue(ch) {
-                        true => len += ch.len_utf8(),
-                        false => break,
-                    }
-                }
+                let len = chs
+                    .take_while(|ch| unicode_ident::is_xid_continue(*ch))
+                    .map(char::len_utf8)
+                    .sum();
 
                 lex.bump(len);
                 return Ok(&slice[..start.len_utf8() + len]);
@@ -346,7 +341,7 @@ mod cb {
     }
 
     pub(crate) fn char<'i>(lex: &mut Lexer<'i, Token<'i>>) -> LexerResult<Literal<'i>> {
-        let mut tk = morph::<_, TokenEscape>(lex);
+        let mut tk = switch::<_, TokenEscape>(lex);
 
         if let Some(t) = tk.next().transpose()? {
             lex.bump(tk.slice().len());
@@ -381,7 +376,7 @@ mod cb {
 
     // IMPROVE: Is it possible to borrow a "normal string without escape"?
     pub(crate) fn string<'i>(lex: &mut Lexer<'i, Token<'i>>) -> LexerResult<Literal<'i>> {
-        let mut tk = morph::<_, TokenEscape>(lex);
+        let mut tk = switch::<_, TokenEscape>(lex);
         let mut s = String::new();
 
         while let Some(t) = tk.next().transpose()? {
@@ -405,7 +400,7 @@ mod cb {
 
     pub(crate) fn raw_string<'i>(lex: &mut Lexer<'i, Token<'i>>, q: usize) -> LexerResult<Literal<'i>> {
         let j = lex.remainder();
-        let mut tk = morph::<_, TokenNoEscape>(lex);
+        let mut tk = switch::<_, TokenNoEscape>(lex);
         let mut len = 0;
 
         while let Some(t) = tk.next().transpose()? {
@@ -430,7 +425,7 @@ mod cb {
 
     // IMPROVE: Is it possible to borrow a "normal bytes without escape"?
     pub(crate) fn bytes<'i>(lex: &mut Lexer<'i, Token<'i>>) -> LexerResult<Literal<'i>> {
-        let mut tk = morph::<_, TokenEscape>(lex);
+        let mut tk = switch::<_, TokenEscape>(lex);
         let mut buf = ByteBuf::new();
 
         while let Some(t) = tk.next().transpose()? {
@@ -455,7 +450,7 @@ mod cb {
 
     pub(crate) fn raw_bytes<'i>(lex: &mut Lexer<'i, Token<'i>>, q: usize) -> LexerResult<Literal<'i>> {
         let j = lex.remainder();
-        let mut tk = morph::<_, TokenNoEscape>(lex);
+        let mut tk = switch::<_, TokenNoEscape>(lex);
         let mut len = 0;
 
         while let Some(t) = tk.next().transpose()? {
@@ -503,7 +498,7 @@ mod cb {
         }
 
         let first = trim(lex.slice());
-        let mut tk = morph::<_, TokenParagraph>(lex);
+        let mut tk = switch::<_, TokenParagraph>(lex);
         let mut newlined = false;
 
         Ok(match tk.next().transpose()? {

@@ -8,6 +8,9 @@
 [![](https://img.shields.io/github/stars/eternal-io/keon?style=social)](https://github.com/eternal-io/keon)
 
 
+***🚧 This is the development branch. If you see this message, it means the following contents are still outdated. 🚧***
+
+
 KEON is a human readable object notation / serialization format that syntactic similar to Rust and completely supports [Serde's data model](https://serde.rs/data-model.html).
 
 <details><summary><b>📝 Cheat sheet</b></summary>

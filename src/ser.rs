@@ -36,7 +36,7 @@ pub fn to_writer_pretty<W: Write, T: ?Sized + Serialize>(writer: W, value: &T) -
     value.serialize(&mut ser)
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
@@ -80,7 +80,7 @@ enum ObjectType {
     Something,
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 /// The KEON Serializer.
 ///
@@ -203,7 +203,7 @@ impl<W: Write> Serializer<W> {
     }
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 #[doc(hidden)]
 pub struct SerializerEntry<'se, W: Write> {
@@ -225,7 +225,7 @@ impl<'se, W: Write> SerializerEntry<'se, W> {
             ObjectType::Seq => write!(ser.dst, "[")?,
             ObjectType::Map | ObjectType::Struct => write!(ser.dst, "{{")?,
             ObjectType::Newtype => {
-                write!(ser.dst, ">")?;
+                write!(ser.dst, "%")?;
                 ser.maybe_write_space()?;
             }
             ObjectType::Something => {
@@ -274,7 +274,7 @@ impl<'se, W: Write> SerializerEntry<'se, W> {
     }
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
     type Ok = ();
@@ -383,7 +383,7 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
         SerializerEntry::enter(self, ObjectType::Map)
     }
 
-    //----------------------------------------------------------------------
+    //------------------------------------------------------------------------------
 
     fn serialize_unit_struct(self, name: &'static str) -> Result<()> {
         write!(self.dst, "(")?;
@@ -426,7 +426,7 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
         SerializerEntry::enter(self, ObjectType::Struct)
     }
 
-    //----------------------------------------------------------------------
+    //------------------------------------------------------------------------------
 
     fn serialize_unit_variant(self, name: &'static str, _variant_index: u32, variant: &'static str) -> Result<()> {
         self.maybe_write_enum_name(name)?;
@@ -481,7 +481,7 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
     }
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 impl<'se, W: Write> SerializeSeq for SerializerEntry<'se, W> {
     type Ok = ();

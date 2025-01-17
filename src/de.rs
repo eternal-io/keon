@@ -15,7 +15,7 @@ pub fn from_str<'de, T: serde::Deserialize<'de>>(s: &'de str) -> Result<T> {
     Ok(val)
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 struct Kexer<'i> {
     lex: Lexer<'i, Token<'i>>,
@@ -76,7 +76,7 @@ impl Location {
     }
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 /// The KEON deserializer.
 ///
@@ -175,7 +175,7 @@ impl<'i, 'de> serde::Deserializer<'de> for &'i mut Deserializer<'de> {
             Token::Paren_ => parse_parenthesis(self, vis),
             Token::Brack_ => parse_seq(self, vis),
             Token::Brace_ => parse_map(self, vis),
-            Token::Angle => vis.visit_newtype_struct(&mut *self),
+            Token::Percent => vis.visit_newtype_struct(&mut *self),
             Token::Ident(ident) => {
                 let name = SmolStr::new(ident);
                 parse_enum(self, vis, name)
@@ -266,7 +266,7 @@ fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, v
                 der.next().ok();
                 parse_map(der, vis)
             }
-            TokenKind::Angle => {
+            TokenKind::Percent => {
                 der.next().ok();
                 vis.visit_newtype_struct(der)
             }
@@ -556,7 +556,7 @@ impl<'i, 'de> VariantAccess<'de> for VariantAccessor<'i, 'de> {
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
         let (tk, loc, src) = self.der.expect_next()?;
         match tk {
-            Token::Angle => seed.deserialize(&mut *self.der),
+            Token::Percent => seed.deserialize(&mut *self.der),
             Token::Paren_ => {
                 let val = seed.deserialize(&mut *self.der)?;
                 self.der.try_consume_token(TokenKind::Comma)?;
