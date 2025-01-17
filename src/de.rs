@@ -76,6 +76,13 @@ impl Location {
     }
 }
 
+macro_rules! unwrap_ident {
+    ($expr:expr) => {{
+        let Token::Ident(name) = $expr else { unreachable!() };
+        SmolStr::new(name)
+    }};
+}
+
 //==================================================================================================
 
 /// The KEON deserializer.
@@ -175,7 +182,7 @@ impl<'i, 'de> serde::Deserializer<'de> for &'i mut Deserializer<'de> {
             Token::Paren_ => parse_parenthesis(self, vis),
             Token::Brack_ => parse_seq(self, vis),
             Token::Brace_ => parse_map(self, vis),
-            Token::Percent => vis.visit_newtype_struct(&mut *self),
+            Token::Percent => parse_mayary(self, vis),
             Token::Ident(ident) => {
                 let name = SmolStr::new(ident);
                 parse_enum(self, vis, name)
@@ -186,13 +193,6 @@ impl<'i, 'de> serde::Deserializer<'de> for &'i mut Deserializer<'de> {
         self.ttl += 1;
         Ok(val)
     }
-}
-
-macro_rules! unwrap_ident {
-    ($expr:expr) => {{
-        let Token::Ident(name) = $expr else { unreachable!() };
-        SmolStr::new(name)
-    }};
 }
 
 fn parse_literal<'de, V: Visitor<'de>>(literal: Literal, vis: V) -> Result<V::Value> {
@@ -209,7 +209,7 @@ fn parse_literal<'de, V: Visitor<'de>>(literal: Literal, vis: V) -> Result<V::Va
     }
 }
 
-/// Requires the leading question mark `?` is already consumed.
+/// Requires the leading question mark `?` has been consumed.
 ///
 /// - None: `?`.
 /// - Some: `? Thing`.
@@ -223,7 +223,25 @@ fn parse_option<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V
     }
 }
 
-/// Requires the leading parenthesis `(` is already consumed.
+/// Requires the leading percentage `%` has been consumed.
+///
+/// A mayary, "maybe-ary", equivalent to a tuple with zero or one item.
+///
+/// - Nullary: `%`, a rare case, but Serde does support it.
+/// - Unary: `% T`, also known as "newtype".
+///
+/// Usage is like option: `%` and `% Thing`.
+fn parse_mayary<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
+    match der.peek()? {
+        None => vis.visit_seq(NullaryAccessor),
+        Some((tk, ..)) => match tk.is_delimiter() {
+            true => vis.visit_seq(NullaryAccessor),
+            false => vis.visit_newtype_struct(der),
+        },
+    }
+}
+
+/// Requires the leading parenthesis `(` has been consumed.
 ///
 /// - Unit: `()` or `(MyStruct)` optional struct name just like type conversion in C.
 /// - Tuple: `(T, U, V, ...)`.
@@ -231,8 +249,8 @@ fn parse_option<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V
 ///
 /// and the following notable representations:
 ///
-/// - Nullary tuple: `(WorseTupleStruct)()` or simply `()()`.
-/// - Alt unary tuple: `(UncommonNewtype)(T)` or simply `()(T)`.
+/// - Nullary tuple: `(AwfulNullary)()` or simply `()()`.
+/// - Alt unary tuple: `(CommonNewtype)(T)` or simply `()(T)`.
 fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
     match der.expect_peek()?.0 {
         TokenKind::_Paren => {
@@ -247,9 +265,9 @@ fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, v
                 TokenKind::PathSep => {
                     der.next().ok();
                     name = unwrap_ident!(der.expect_consume_token(TokenKind::Ident, ErrorKind::ExpectedVariant)?);
-                    return parse_tuple_alt::<_, false>(der, vis, name);
+                    return parse_tuple_alt(der, vis, name);
                 }
-                _ => return parse_tuple_alt::<_, false>(der, vis, name),
+                _ => return parse_tuple_alt(der, vis, name),
             }
         }
         _ => return parse_tuple::<_, false>(der, vis),
@@ -276,10 +294,10 @@ fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, v
     }
 }
 
-/// Requires the leading parenthesis `(` is already consumed.
+/// Requires the leading parenthesis `(` has been consumed.
 ///
 /// - Tuple: `(T,)`, `(T, U, V, ...)`.
-/// - Docile tuple: `()` and `(T)` are both legal.
+/// - Docile tuple: `()` and `(Name)` are both legal.
 fn parse_tuple<'i, 'de, V: Visitor<'de>, const DOCILE: bool>(
     der: &'i mut Deserializer<'de>,
     vis: V,
@@ -287,26 +305,25 @@ fn parse_tuple<'i, 'de, V: Visitor<'de>, const DOCILE: bool>(
     vis.visit_seq(TupleAccessor::new::<DOCILE>(der)?)
 }
 
-/// Requires the leadings `(` `Enum::Variant` are already consumed, and the `Variant` must be provided in parameter.
+/// Requires the leading `(` `Enum::Variant` has been consumed, and the `Variant` must be provided in parameter.
 ///
 /// - Tuple starts with variant: `(Enum::Variant,)`, `(Variant,)` or `(Variant, ...)`.
-/// - "Docile" tuple: `(Enum::Variant)` and `(Variant)` are both legal.
-fn parse_tuple_alt<'i, 'de, V: Visitor<'de>, const DOCILE: bool>(
+fn parse_tuple_alt<'i, 'de, V: Visitor<'de>>(
     der: &'i mut Deserializer<'de>,
     vis: V,
     variant: SmolStr,
 ) -> Result<V::Value> {
-    vis.visit_seq(TupleAccessor::with_first_variant::<DOCILE>(der, variant)?)
+    vis.visit_seq(TupleAccessor::with_first_variant::<false>(der, variant)?)
 }
 
-/// Requires the leading bracket `[` is already consumed.
+/// Requires the leading bracket `[` has been consumed.
 ///
 /// - Sequence: `[0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]`.
 fn parse_seq<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
     vis.visit_seq(SeqAccessor::new(der)?)
 }
 
-/// Requires the leading brace `{` is already consumed.
+/// Requires the leading brace `{` has been consumed.
 ///
 /// - Map-like: `{ 1 => 2, 3 => 4 }`.
 /// - Struct-like: `{ name: "Alex", age: 31 }`.
@@ -333,6 +350,20 @@ fn parse_enum<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V, 
     vis.visit_enum(EnumAccessor::new(der, name))
 }
 
+//==================================================================================================
+
+struct NullaryAccessor;
+impl<'de> SeqAccess<'de> for NullaryAccessor {
+    type Error = Error;
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(0)
+    }
+    fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, _seed: T) -> Result<Option<T::Value>> {
+        Ok(None)
+    }
+}
+
 struct TupleAccessor<'i, 'de> {
     der: &'i mut Deserializer<'de>,
     yielding: bool,
@@ -344,12 +375,12 @@ struct TupleAccessor<'i, 'de> {
     ctr: u32,
 }
 impl<'i, 'de> TupleAccessor<'i, 'de> {
-    /// Requires the leading parenthesis `(` is already consumed.
+    /// Requires the leading parenthesis `(` has been consumed.
     fn new<const DOCILE: bool>(der: &'i mut Deserializer<'de>) -> Result<Self> {
         Self::_build::<DOCILE>(der, None)
     }
 
-    /// Requires the leadings `(` `Enum::Variant` are already consumed, and the `Variant` must be provided in parameter.
+    /// Requires the leading `(` `Enum::Variant` has been consumed, and the `Variant` must be provided in parameter.
     fn with_first_variant<const DOCILE: bool>(der: &'i mut Deserializer<'de>, first_variant: SmolStr) -> Result<Self> {
         Self::_build::<DOCILE>(der, Some(first_variant))
     }
@@ -403,7 +434,7 @@ struct SeqAccessor<'i, 'de> {
     yielding: bool,
 }
 impl<'i, 'de> SeqAccessor<'i, 'de> {
-    /// Requires the leading bracket `[` is already consumed.
+    /// Requires the leading bracket `[` has been consumed.
     fn new(der: &'i mut Deserializer<'de>) -> Result<Self> {
         Ok(Self {
             yielding: der.try_consume_token(TokenKind::_Brack)?.is_none(),
@@ -439,7 +470,7 @@ struct MapAccessor<'i, 'de> {
     yielding: bool,
 }
 impl<'i, 'de> MapAccessor<'i, 'de> {
-    /// Requires the leading brace `{` is already consumed.
+    /// Requires the leading brace `{` has been consumed.
     fn new(der: &'i mut Deserializer<'de>) -> Result<Self> {
         Ok(Self {
             yielding: der.try_consume_token(TokenKind::_Brace)?.is_none(),
@@ -514,7 +545,7 @@ struct EnumAccessor<'i, 'de> {
     variant: SmolStr,
 }
 impl<'i, 'de> EnumAccessor<'i, 'de> {
-    /// Requires the leading `Enum::Variant` is already consumed, and the `Variant` must be provided in parameter.
+    /// Requires the leading `Enum::Variant` has been consumed, and the `Variant` must be provided in parameter.
     fn new(der: &'i mut Deserializer<'de>, variant: SmolStr) -> Self {
         Self { der, variant }
     }
