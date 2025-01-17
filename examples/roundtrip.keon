@@ -14,7 +14,7 @@
     inventory: [
         Item::Water,
         Item::CannedFood,
-        Item::IdCard > 101,
+        Item::IdCard(101),
         Item::RocketLauncher {
             damage: 250,
             explosion_radius: 60.0,

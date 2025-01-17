@@ -397,9 +397,12 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> Result<()> {
         self.maybe_write_struct_name(name)?;
-        self.maybe_write_space()?;
 
-        let entry = SerializerEntry::enter(self, ObjectType::Newtype)?;
+        let entry = match self.minimize() {
+            true => SerializerEntry::enter(self, ObjectType::Newtype)?,
+            false => SerializerEntry::enter(self, ObjectType::DocileTuple)?,
+        };
+
         value.serialize(&mut *entry.ser)?;
         entry.leave()?;
 
@@ -444,9 +447,12 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
     ) -> Result<()> {
         self.maybe_write_enum_name(name)?;
         self.write_ident(variant)?;
-        self.maybe_write_space()?;
 
-        let entry = SerializerEntry::enter(self, ObjectType::Newtype)?;
+        let entry = match self.minimize() {
+            true => SerializerEntry::enter(self, ObjectType::Newtype)?,
+            false => SerializerEntry::enter(self, ObjectType::DocileTuple)?,
+        };
+
         value.serialize(&mut *entry.ser)?;
         entry.leave()?;
 
