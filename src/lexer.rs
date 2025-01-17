@@ -77,7 +77,7 @@ impl TokenKind {
     }
 }
 
-impl<'i> Token<'i> {
+impl Token<'_> {
     pub(crate) fn kind(&self) -> TokenKind {
         match self {
             Token::__ => unreachable!(),
@@ -481,11 +481,11 @@ mod cb {
                 lex.bump(n + 1);
                 let content = j[..n].as_bytes();
                 let base_err = |e| ErrorKind::InvalidBytesEncoding(e);
-                return Ok(Literal::ByteBuf(match flavor {
+                Ok(Literal::ByteBuf(match flavor {
                     BaseXX::Base16 => HEXUPPER_PERMISSIVE.decode(content).map_err(base_err)?,
                     BaseXX::Base32 => BASE32_NOPAD.decode(content).map_err(base_err)?,
                     BaseXX::Base64 => BASE64URL_NOPAD.decode(content).map_err(base_err)?,
-                }));
+                }))
             }
             None => Err(ErrorKind::UnexpectedEof)?,
         }

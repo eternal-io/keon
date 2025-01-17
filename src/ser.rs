@@ -483,7 +483,7 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
 
 //==================================================================================================
 
-impl<'se, W: Write> SerializeSeq for SerializerEntry<'se, W> {
+impl<W: Write> SerializeSeq for SerializerEntry<'_, W> {
     type Ok = ();
     type Error = Error;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<()> {
@@ -495,7 +495,7 @@ impl<'se, W: Write> SerializeSeq for SerializerEntry<'se, W> {
     }
 }
 
-impl<'se, W: Write> SerializeTuple for SerializerEntry<'se, W> {
+impl<W: Write> SerializeTuple for SerializerEntry<'_, W> {
     type Ok = ();
     type Error = Error;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<()> {
@@ -507,7 +507,7 @@ impl<'se, W: Write> SerializeTuple for SerializerEntry<'se, W> {
     }
 }
 
-impl<'se, W: Write> SerializeTupleStruct for SerializerEntry<'se, W> {
+impl<W: Write> SerializeTupleStruct for SerializerEntry<'_, W> {
     type Ok = ();
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<()> {
@@ -519,7 +519,7 @@ impl<'se, W: Write> SerializeTupleStruct for SerializerEntry<'se, W> {
     }
 }
 
-impl<'se, W: Write> SerializeTupleVariant for SerializerEntry<'se, W> {
+impl<W: Write> SerializeTupleVariant for SerializerEntry<'_, W> {
     type Ok = ();
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<()> {
@@ -531,7 +531,7 @@ impl<'se, W: Write> SerializeTupleVariant for SerializerEntry<'se, W> {
     }
 }
 
-impl<'se, W: Write> SerializeMap for SerializerEntry<'se, W> {
+impl<W: Write> SerializeMap for SerializerEntry<'_, W> {
     type Ok = ();
     type Error = Error;
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<()> {
@@ -549,7 +549,7 @@ impl<'se, W: Write> SerializeMap for SerializerEntry<'se, W> {
     }
 }
 
-impl<'se, W: Write> SerializeStruct for SerializerEntry<'se, W> {
+impl<W: Write> SerializeStruct for SerializerEntry<'_, W> {
     type Ok = ();
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Result<()> {
@@ -564,7 +564,7 @@ impl<'se, W: Write> SerializeStruct for SerializerEntry<'se, W> {
     }
 }
 
-impl<'se, W: Write> SerializeStructVariant for SerializerEntry<'se, W> {
+impl<W: Write> SerializeStructVariant for SerializerEntry<'_, W> {
     type Ok = ();
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Result<()> {

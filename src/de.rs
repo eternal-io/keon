@@ -159,7 +159,7 @@ impl<'de> Deserializer<'de> {
     }
 }
 
-impl<'i, 'de> serde::Deserializer<'de> for &'i mut Deserializer<'de> {
+impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     type Error = Error;
     serde::forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
@@ -394,7 +394,7 @@ impl<'i, 'de> TupleAccessor<'i, 'de> {
         })
     }
 }
-impl<'i, 'de> SeqAccess<'de> for TupleAccessor<'i, 'de> {
+impl<'de> SeqAccess<'de> for TupleAccessor<'_, 'de> {
     type Error = Error;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
@@ -442,7 +442,7 @@ impl<'i, 'de> SeqAccessor<'i, 'de> {
         })
     }
 }
-impl<'i, 'de> SeqAccess<'de> for SeqAccessor<'i, 'de> {
+impl<'de> SeqAccess<'de> for SeqAccessor<'_, 'de> {
     type Error = Error;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
@@ -478,7 +478,7 @@ impl<'i, 'de> MapAccessor<'i, 'de> {
         })
     }
 }
-impl<'i, 'de> MapAccess<'de> for MapAccessor<'i, 'de> {
+impl<'de> MapAccess<'de> for MapAccessor<'_, 'de> {
     type Error = Error;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
@@ -570,7 +570,7 @@ impl<'i, 'de> VariantAccessor<'i, 'de> {
         Self { der }
     }
 }
-impl<'i, 'de> VariantAccess<'de> for VariantAccessor<'i, 'de> {
+impl<'de> VariantAccess<'de> for VariantAccessor<'_, 'de> {
     type Error = Error;
 
     /// Note that inputs like `Variant()` is a nullary tuple variant instead.
