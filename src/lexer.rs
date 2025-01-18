@@ -63,16 +63,11 @@ pub(crate) enum TokenKind {
 }
 
 impl TokenKind {
-    /// `)`, `]`, `}`, `,`, `:` and `=>`.
+    /// `)`, `]`, `}`, `,` and `=>`.
     pub(crate) fn is_delimiter(&self) -> bool {
         matches!(
             self,
-            TokenKind::Comma
-                | TokenKind::Colon
-                | TokenKind::FatArrow
-                | TokenKind::_Paren
-                | TokenKind::_Brack
-                | TokenKind::_Brace
+            TokenKind::Comma | TokenKind::FatArrow | TokenKind::_Paren | TokenKind::_Brack | TokenKind::_Brace
         )
     }
 }

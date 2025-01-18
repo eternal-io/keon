@@ -72,12 +72,13 @@ pub enum BytesFlavor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObjectType {
     Tuple,
-    DocileTuple,
+    TupleDocile,
     Seq,
     Map,
     Struct,
-    Newtype,
     Something,
+    MinNewtype,
+    MinNullary,
 }
 
 //==================================================================================================
@@ -131,14 +132,17 @@ impl<W: Write> Serializer<W> {
         }
         Ok(())
     }
+
     #[inline]
-    fn maybe_write_struct_name(&mut self, name: &str) -> Result<()> {
+    fn maybe_write_struct_name(&mut self, name: &str) -> Result<bool> {
         if !self.minimize() && !name.is_empty() {
             write!(self.dst, "(")?;
             self.write_ident(name)?;
             write!(self.dst, ")")?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
     #[inline]
     fn maybe_write_enum_name(&mut self, name: &str) -> Result<()> {
@@ -168,7 +172,7 @@ impl<W: Write> Serializer<W> {
     fn write_f64(&mut self, v: f64) -> Result<()> {
         Ok(self.dst.write_all(lexical_core::write(v, &mut *self.buf))?)
     }
-    #[inline] // avoiding ugly and unnecessary mantissas.
+    #[inline] // avoids ugly and unnecessary mantissas.
     fn write_f32(&mut self, v: f32) -> Result<()> {
         Ok(self.dst.write_all(lexical_core::write(v, &mut *self.buf))?)
     }
@@ -221,17 +225,14 @@ impl<'se, W: Write> SerializerEntry<'se, W> {
         }
 
         match typ {
-            ObjectType::Tuple | ObjectType::DocileTuple => write!(ser.dst, "(")?,
             ObjectType::Seq => write!(ser.dst, "[")?,
+            ObjectType::Tuple | ObjectType::TupleDocile => write!(ser.dst, "(")?,
             ObjectType::Map | ObjectType::Struct => write!(ser.dst, "{{")?,
-            ObjectType::Newtype => {
-                write!(ser.dst, "%")?;
-                ser.maybe_write_space()?;
-            }
             ObjectType::Something => {
                 write!(ser.dst, "?")?;
                 ser.maybe_write_space()?;
             }
+            ObjectType::MinNewtype | ObjectType::MinNullary => write!(ser.dst, "%")?,
         }
 
         Ok(Self { ser, typ, ctr: 0 })
@@ -245,14 +246,11 @@ impl<'se, W: Write> SerializerEntry<'se, W> {
         }
 
         match self.typ {
-            ObjectType::Tuple => match self.ctr {
-                1 => write!(self.ser.dst, ",)")?,
-                _ => write!(self.ser.dst, ")")?,
-            },
-            ObjectType::DocileTuple => write!(self.ser.dst, ")")?,
             ObjectType::Seq => write!(self.ser.dst, "]")?,
+            ObjectType::Tuple if self.ctr == 1 => write!(self.ser.dst, ",)")?,
+            ObjectType::Tuple | ObjectType::TupleDocile => write!(self.ser.dst, ")")?,
             ObjectType::Map | ObjectType::Struct => write!(self.ser.dst, "}}")?,
-            ObjectType::Newtype | ObjectType::Something => (),
+            ObjectType::Something | ObjectType::MinNewtype | ObjectType::MinNullary => (),
         }
 
         Ok(())
@@ -386,23 +384,20 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
     //------------------------------------------------------------------------------
 
     fn serialize_unit_struct(self, name: &'static str) -> Result<()> {
-        write!(self.dst, "(")?;
-        if !self.minimize() && !name.is_empty() {
-            self.write_ident(name)?;
+        if !self.maybe_write_struct_name(name)? {
+            self.serialize_unit()?
         }
-        write!(self.dst, ")")?;
 
         Ok(())
     }
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> Result<()> {
-        self.maybe_write_struct_name(name)?;
+        let leading = self.maybe_write_struct_name(name)?;
 
-        let entry = match self.minimize() {
-            true => SerializerEntry::enter(self, ObjectType::Newtype)?,
-            false => SerializerEntry::enter(self, ObjectType::DocileTuple)?,
+        let entry = match !self.minimize() {
+            true if leading => SerializerEntry::enter(self, ObjectType::TupleDocile)?,
+            true | false => SerializerEntry::enter(self, ObjectType::MinNewtype)?,
         };
-
         value.serialize(&mut *entry.ser)?;
         entry.leave()?;
 
@@ -410,15 +405,14 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
     }
 
     fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
-        self.maybe_write_struct_name(name)?;
+        let leading = self.maybe_write_struct_name(name)?;
 
-        if len == 0 && (self.minimize() || name.is_empty()) {
-            write!(self.dst, "()")?
-        }
-
-        match self.minimize() {
-            true => SerializerEntry::enter(self, ObjectType::Tuple),
-            false => SerializerEntry::enter(self, ObjectType::DocileTuple),
+        match len {
+            0 => SerializerEntry::enter(self, ObjectType::MinNullary),
+            _ => match leading {
+                true => SerializerEntry::enter(self, ObjectType::TupleDocile),
+                false => SerializerEntry::enter(self, ObjectType::Tuple),
+            },
         }
     }
 
@@ -448,11 +442,10 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
         self.maybe_write_enum_name(name)?;
         self.write_ident(variant)?;
 
-        let entry = match self.minimize() {
-            true => SerializerEntry::enter(self, ObjectType::Newtype)?,
-            false => SerializerEntry::enter(self, ObjectType::DocileTuple)?,
+        let entry = match !self.minimize() {
+            true => SerializerEntry::enter(self, ObjectType::TupleDocile)?,
+            false => SerializerEntry::enter(self, ObjectType::MinNewtype)?,
         };
-
         value.serialize(&mut *entry.ser)?;
         entry.leave()?;
 
@@ -464,12 +457,15 @@ impl<'se, W: Write> serde::Serializer for &'se mut Serializer<W> {
         name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
         self.maybe_write_enum_name(name)?;
         self.write_ident(variant)?;
 
-        SerializerEntry::enter(self, ObjectType::DocileTuple)
+        match len {
+            0 => SerializerEntry::enter(self, ObjectType::MinNullary),
+            _ => SerializerEntry::enter(self, ObjectType::TupleDocile),
+        }
     }
 
     fn serialize_struct_variant(

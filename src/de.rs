@@ -233,12 +233,17 @@ fn parse_option<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V
 /// Usage is like option: `%` and `% Thing`.
 fn parse_mayary<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
     match der.peek()? {
-        None => vis.visit_seq(NullaryAccessor),
+        None => parse_nullary(vis),
         Some((tk, ..)) => match tk.is_delimiter() {
-            true => vis.visit_seq(NullaryAccessor),
+            true => parse_nullary(vis),
             false => vis.visit_newtype_struct(der),
         },
     }
+}
+
+/// Parse the awful nullary.
+fn parse_nullary<'de, V: Visitor<'de>>(vis: V) -> Result<V::Value> {
+    vis.visit_seq(NullaryAccessor)
 }
 
 /// Requires the leading parenthesis `(` has been consumed.
@@ -249,8 +254,8 @@ fn parse_mayary<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V
 ///
 /// and the following notable representations:
 ///
-/// - Nullary tuple: `(AwfulNullary)()` or simply `()()`.
-/// - Alt unary tuple: `(CommonNewtype)(T)` or simply `()(T)`.
+/// - Nullary tuple: `(AwfulNullary)()` or simply `()%`.
+/// - Alt unary tuple: `(CommonNewtype)(T)` or equally `()(T)`.
 fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
     match der.expect_peek()?.0 {
         TokenKind::_Paren => {
@@ -286,7 +291,13 @@ fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, v
             }
             TokenKind::Percent => {
                 der.next().ok();
-                vis.visit_newtype_struct(der)
+                match der.peek()? {
+                    None => parse_nullary(vis),
+                    Some((tk, ..)) => match tk.is_delimiter() {
+                        true => parse_nullary(vis),
+                        false => vis.visit_newtype_struct(der),
+                    },
+                }
             }
             _ if tk.is_delimiter() => vis.visit_unit(),
             _ => loc.raise(src, ErrorKind::ExpectedNonUnitStruct),
@@ -600,10 +611,12 @@ impl<'de> VariantAccess<'de> for VariantAccessor<'_, 'de> {
     }
 
     fn tuple_variant<V: Visitor<'de>>(self, _: usize, vis: V) -> Result<V::Value> {
-        self.der
-            .expect_consume_token(TokenKind::Paren_, ErrorKind::ExpectedTupleVariant)?;
-
-        parse_tuple::<_, true>(self.der, vis)
+        let (tk, loc, src) = self.der.expect_next()?;
+        match tk {
+            Token::Percent => parse_nullary(vis),
+            Token::Paren_ => parse_tuple::<_, true>(self.der, vis),
+            _ => loc.raise(src, ErrorKind::ExpectedTupleVariant)?,
+        }
     }
 
     fn struct_variant<V: Visitor<'de>>(self, _: &'static [&'static str], vis: V) -> Result<V::Value> {
