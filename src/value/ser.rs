@@ -30,10 +30,10 @@ impl Serialize for Value {
             },
             Value::String(s) => ser.serialize_str(s),
             Value::Bytes(bytes) => ser.serialize_bytes(bytes),
-            Value::Newtype(obj) => ser.serialize_newtype_struct("", obj),
+            Value::Newtype(v) => ser.serialize_newtype_struct("", v),
             Value::Opt(opt) => match opt {
-                None => ser.serialize_none(),
                 Some(v) => ser.serialize_some(v),
+                None => ser.serialize_none(),
             },
             Value::Seq(seq) => ser.collect_seq(seq),
             Value::Map(map) => ser.collect_map(map),

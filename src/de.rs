@@ -42,12 +42,12 @@ impl<'i> Kexer<'i> {
 impl<'i> Iterator for Kexer<'i> {
     type Item = LexerResult<Token<'i>>;
     fn next(&mut self) -> Option<Self::Item> {
-        let tk = match self.peeked.take() {
-            Some(tk) => tk,
+        let t = match self.peeked.take() {
+            Some(t) => t,
             None => self.lex.next(),
         };
         self.offset = self.lex.span().end;
-        tk
+        t
     }
 }
 
@@ -109,7 +109,7 @@ impl<'de> Deserializer<'de> {
             None => Ok(None),
             Some(res) => match res {
                 Ok(t) => Ok(Some(t)),
-                Err(e) => Error::raise(e),
+                Err(ek) => Error::raise(ek),
             },
         }
     }
@@ -119,7 +119,7 @@ impl<'de> Deserializer<'de> {
             None => Ok(None),
             Some(res) => match res {
                 Ok(t) => Ok(Some(t.kind())),
-                Err(e) => Error::raise(core::mem::take(e)),
+                Err(ek) => Error::raise(core::mem::take(ek)),
             },
         }
     }
@@ -133,7 +133,7 @@ impl<'de> Deserializer<'de> {
 
     fn expect_peek(&mut self) -> Result<TokenKind> {
         match self.peek()? {
-            Some(t) => Ok(t),
+            Some(tk) => Ok(tk),
             None => Error::raise(ErrorKind::UnexpectedEof),
         }
     }
@@ -168,15 +168,15 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let (ttl, overflow) = self.ttl.overflowing_sub(1);
-        if overflow {
+        let (ttl, overflowed) = self.ttl.overflowing_sub(1);
+        if overflowed {
             self.raise_error(ErrorKind::ExceededRecursionLimit)?
         }
 
         self.ttl = ttl;
 
         let val = match self.expect_next() {
-            Ok(tk) => match tk {
+            Ok(t) => match t {
                 Token::Literal(literal) => parse_literal(literal, vis),
                 Token::Question => parse_option(self, vis),
                 Token::Paren_ => parse_parenthesis(self, vis),
@@ -374,6 +374,7 @@ impl<'de> SeqAccess<'de> for NullaryAccessor {
     fn size_hint(&self) -> Option<usize> {
         Some(0)
     }
+
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, _seed: T) -> Result<Option<T::Value>> {
         Ok(None)
     }

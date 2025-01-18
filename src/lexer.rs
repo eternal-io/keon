@@ -233,9 +233,9 @@ where
     Token1: Logos<'i, Extras = Extras, Source = str>,
     Token2: Logos<'i, Extras = Extras, Source = str>,
 {
-    let mut tk = Token2::lexer_with_extras(lex.source(), lex.extras.clone());
-    tk.bump(lex.span().end);
-    tk
+    let mut tks = Token2::lexer_with_extras(lex.source(), lex.extras.clone());
+    tks.bump(lex.span().end);
+    tks
 }
 
 mod cb {
@@ -261,16 +261,16 @@ mod cb {
     }
 
     pub(crate) fn block_comment<'i>(lex: &mut Lexer<'i, Token<'i>>) -> FilterResult<(), ErrorKind> {
-        let mut tk = switch::<_, TokenComment>(lex);
+        let mut tks = switch::<_, TokenComment>(lex);
         let mut ctr = 1;
         let mut cursor = lex.span().end;
 
-        while let Some(t) = match tk.next().transpose() {
+        while let Some(t) = match tks.next().transpose() {
             Ok(opt) => opt,
-            Err(e) => return FilterResult::Error(e),
+            Err(ek) => return FilterResult::Error(ek),
         } {
-            lex.bump(tk.span().end - cursor);
-            cursor = tk.span().end;
+            lex.bump(tks.span().end - cursor);
+            cursor = tks.span().end;
 
             match t {
                 TokenComment::Block_ => ctr += 1,
@@ -338,10 +338,10 @@ mod cb {
     }
 
     pub(crate) fn char<'i>(lex: &mut Lexer<'i, Token<'i>>) -> LexerResult<Literal<'i>> {
-        let mut tk = switch::<_, TokenEscape>(lex);
+        let mut tks = switch::<_, TokenEscape>(lex);
 
-        if let Some(t) = tk.next().transpose()? {
-            lex.bump(tk.slice().len());
+        if let Some(t) = tks.next().transpose()? {
+            lex.bump(tks.slice().len());
             let ch = match t {
                 TokenEscape::Newline => Err(ErrorKind::UnexpectedNewline)?,
                 TokenEscape::Prime => Err(ErrorKind::InvalidCharacterTooLess)?,
@@ -350,19 +350,19 @@ mod cb {
                     _ => Err(ErrorKind::InvalidCharacterTooMany)?,
                 },
                 TokenEscape::NoEscapeUtf8 | TokenEscape::NoEscapeAscii => {
-                    let mut cs = tk.slice().chars();
-                    let ch = cs.next().unwrap();
-                    if cs.next().is_some() {
+                    let mut chs = tks.slice().chars();
+                    let ch = chs.next().unwrap();
+                    if chs.next().is_some() {
                         Err(ErrorKind::InvalidCharacterTooMany)?
                     }
                     ch
                 }
                 TokenEscape::EscapeByte => Err(ErrorKind::InvalidAsciiEscape)?,
-                TokenEscape::EscapeAscii => esc::ascii(&tk),
-                TokenEscape::EscapeUnicode => esc::unicode(&tk)?,
+                TokenEscape::EscapeAscii => esc::ascii(&tks),
+                TokenEscape::EscapeUnicode => esc::unicode(&tks)?,
             };
 
-            if let Some(TokenEscape::Prime) = tk.next().transpose()? {
+            if let Some(TokenEscape::Prime) = tks.next().transpose()? {
                 lex.bump(1);
                 return Ok(Literal::Char(ch));
             }
@@ -373,11 +373,11 @@ mod cb {
 
     // IMPROVE: Is it possible to borrow a "normal string without escape"?
     pub(crate) fn string<'i>(lex: &mut Lexer<'i, Token<'i>>) -> LexerResult<Literal<'i>> {
-        let mut tk = switch::<_, TokenEscape>(lex);
+        let mut tks = switch::<_, TokenEscape>(lex);
         let mut s = String::new();
 
-        while let Some(t) = tk.next().transpose()? {
-            lex.bump(tk.slice().len());
+        while let Some(t) = tks.next().transpose()? {
+            lex.bump(tks.slice().len());
             match t {
                 TokenEscape::Newline => Err(ErrorKind::UnexpectedNewline)?,
                 TokenEscape::Prime => s.push('\''),
@@ -385,30 +385,30 @@ mod cb {
                     0 => return Ok(Literal::String(s)),
                     _ => Err(ErrorKind::UnbalancedLiteralClose)?,
                 },
-                TokenEscape::NoEscapeUtf8 | TokenEscape::NoEscapeAscii => s.push_str(tk.slice()),
+                TokenEscape::NoEscapeUtf8 | TokenEscape::NoEscapeAscii => s.push_str(tks.slice()),
                 TokenEscape::EscapeByte => Err(ErrorKind::InvalidAsciiEscape)?,
-                TokenEscape::EscapeAscii => s.push(esc::ascii(&tk)),
-                TokenEscape::EscapeUnicode => s.push(esc::unicode(&tk)?),
+                TokenEscape::EscapeAscii => s.push(esc::ascii(&tks)),
+                TokenEscape::EscapeUnicode => s.push(esc::unicode(&tks)?),
             }
         }
 
         Err(ErrorKind::UnexpectedEof)
     }
 
-    pub(crate) fn raw_string<'i>(lex: &mut Lexer<'i, Token<'i>>, q: usize) -> LexerResult<Literal<'i>> {
+    pub(crate) fn raw_string<'i>(lex: &mut Lexer<'i, Token<'i>>, n_backtick: usize) -> LexerResult<Literal<'i>> {
         let j = lex.remainder();
-        let mut tk = switch::<_, TokenNoEscape>(lex);
+        let mut tks = switch::<_, TokenNoEscape>(lex);
         let mut len = 0;
 
-        while let Some(t) = tk.next().transpose()? {
-            len += tk.slice().len();
+        while let Some(t) = tks.next().transpose()? {
+            len += tks.slice().len();
 
             if let TokenNoEscape::Quote(n) = t {
-                match n.cmp(&q) {
+                match n.cmp(&n_backtick) {
                     Ordering::Less => continue,
                     Ordering::Equal => {
                         lex.bump(len);
-                        return Ok(Literal::Str(&j[..len - tk.slice().len()]));
+                        return Ok(Literal::Str(&j[..len - tks.slice().len()]));
                     }
                     Ordering::Greater => Err(ErrorKind::UnbalancedLiteralClose)?,
                 }
@@ -420,11 +420,11 @@ mod cb {
 
     // IMPROVE: Is it possible to borrow a "normal bytes without escape"?
     pub(crate) fn bytes<'i>(lex: &mut Lexer<'i, Token<'i>>) -> LexerResult<Literal<'i>> {
-        let mut tk = switch::<_, TokenEscape>(lex);
+        let mut tks = switch::<_, TokenEscape>(lex);
         let mut buf = ByteBuf::new();
 
-        while let Some(t) = tk.next().transpose()? {
-            lex.bump(tk.slice().len());
+        while let Some(t) = tks.next().transpose()? {
+            lex.bump(tks.slice().len());
             match t {
                 TokenEscape::Newline => Err(ErrorKind::UnexpectedNewline)?,
                 TokenEscape::Prime => buf.push(b'\''),
@@ -433,9 +433,9 @@ mod cb {
                     _ => Err(ErrorKind::UnbalancedLiteralClose)?,
                 },
                 TokenEscape::NoEscapeUtf8 => Err(ErrorKind::UnexpectedNonAscii)?,
-                TokenEscape::NoEscapeAscii => buf.extend_from_slice(tk.slice().as_bytes()),
-                TokenEscape::EscapeByte => buf.push(esc::byte(&tk)),
-                TokenEscape::EscapeAscii => buf.push(esc::ascii(&tk) as u8),
+                TokenEscape::NoEscapeAscii => buf.extend_from_slice(tks.slice().as_bytes()),
+                TokenEscape::EscapeByte => buf.push(esc::byte(&tks)),
+                TokenEscape::EscapeAscii => buf.push(esc::ascii(&tks) as u8),
                 TokenEscape::EscapeUnicode => Err(ErrorKind::UnexpectedUnicodeEscape)?,
             }
         }
@@ -443,20 +443,20 @@ mod cb {
         Err(ErrorKind::UnexpectedEof)
     }
 
-    pub(crate) fn raw_bytes<'i>(lex: &mut Lexer<'i, Token<'i>>, q: usize) -> LexerResult<Literal<'i>> {
+    pub(crate) fn raw_bytes<'i>(lex: &mut Lexer<'i, Token<'i>>, n_backtick: usize) -> LexerResult<Literal<'i>> {
         let j = lex.remainder();
-        let mut tk = switch::<_, TokenNoEscape>(lex);
+        let mut tks = switch::<_, TokenNoEscape>(lex);
         let mut len = 0;
 
-        while let Some(t) = tk.next().transpose()? {
-            len += tk.slice().len();
+        while let Some(t) = tks.next().transpose()? {
+            len += tks.slice().len();
 
             match t {
-                TokenNoEscape::Quote(n) => match n.cmp(&q) {
+                TokenNoEscape::Quote(n) => match n.cmp(&n_backtick) {
                     Ordering::Less => continue,
                     Ordering::Equal => {
                         lex.bump(len);
-                        return Ok(Literal::Bytes(j[..len - tk.slice().len()].as_bytes()));
+                        return Ok(Literal::Bytes(j[..len - tks.slice().len()].as_bytes()));
                     }
                     Ordering::Greater => Err(ErrorKind::UnbalancedLiteralClose)?,
                 },
@@ -493,10 +493,10 @@ mod cb {
         }
 
         let first = trim(lex.slice());
-        let mut tk = switch::<_, TokenParagraph>(lex);
+        let mut tks = switch::<_, TokenParagraph>(lex);
         let mut newlined = false;
 
-        Ok(match tk.next().transpose()? {
+        Ok(match tks.next().transpose()? {
             Some(TokenParagraph::Leave) | None => Literal::Str(first),
             Some(mut t) => {
                 let mut s = String::from(first);
@@ -505,8 +505,8 @@ mod cb {
                         TokenParagraph::Leave => break,
                         t => {
                             lex.extras.borrow_mut().line += 1;
-                            lex.bump(tk.slice().len());
-                            let line = trim(tk.slice());
+                            lex.bump(tks.slice().len());
+                            let line = trim(tks.slice());
 
                             match t {
                                 TokenParagraph::Leave => unreachable!(),
@@ -536,8 +536,8 @@ mod cb {
                         }
                     }
 
-                    match tk.next().transpose()? {
-                        Some(t_) => t = t_,
+                    match tks.next().transpose()? {
+                        Some(t2) => t = t2,
                         None => break,
                     }
                 }
