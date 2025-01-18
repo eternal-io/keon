@@ -23,20 +23,12 @@ impl Error {
 impl std::error::Error for Error {}
 impl serde::ser::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
-        Error {
-            line: None,
-            col: None,
-            kind: ErrorKind::Serialize(msg.to_string()),
-        }
+        Error::new(ErrorKind::Serialize(msg.to_string()))
     }
 }
 impl serde::de::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
-        Error {
-            line: None,
-            col: None,
-            kind: ErrorKind::Deserialize(msg.to_string()),
-        }
+        Error::new(ErrorKind::Deserialize(msg.to_string()))
     }
 }
 impl fmt::Display for Error {
@@ -54,7 +46,7 @@ impl fmt::Display for Error {
 }
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
-        Self::new(ErrorKind::Io(e.to_string()))
+        Error::new(ErrorKind::Io(e.to_string()))
     }
 }
 

@@ -1,6 +1,8 @@
 //! Everything has to fail early... mainly because this crate is not designed for editors,
 //! even if [logos] allows us to gather all errors.
 
+#![allow(clippy::upper_case_acronyms)]
+
 use super::{value::*, *};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
@@ -53,10 +55,10 @@ const fn raise(kind: ErrorKind) -> LexerResult<()> {
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TokenKind {
-    Ident, Literal,
-    Comma, Question,
-    Colon, PathSep,
-    Percent, FatArrow,
+    Ident,   Literal,
+    Comma,   PathSep,
+    Colon,   FatArrow,
+    Percent, Question,
     Paren_, _Paren,
     Brack_, _Brack,
     Brace_, _Brace,
@@ -75,7 +77,7 @@ impl TokenKind {
 impl Token<'_> {
     pub(crate) fn kind(&self) -> TokenKind {
         match self {
-            Token::__ => unreachable!(),
+            Token::UNINHABITED => unreachable!(),
 
             Token::Ident(_) => TokenKind::Ident,
             Token::Literal(_) => TokenKind::Literal,
@@ -99,14 +101,22 @@ impl Token<'_> {
 
 //==================================================================================================
 
+type Extras = Rc<RefCell<InnerExtras>>;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InnerExtras {
+    pub(crate) line: u32,
+    pub(crate) line_start: usize,
+}
+
 #[rustfmt::skip]
-#[derive(Debug, Logos, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Logos, PartialEq, PartialOrd)]
 #[logos(error = ErrorKind, extras = Extras)]
 pub(crate) enum Token<'src> {
     #[token( "//", cb::line_comment)]
     #[token( "/*", cb::block_comment)]
     #[regex(r"\n", |lex| { cb::newline(lex); Skip })]
-    #[regex(r"[\t\r\f\v ]+", |_| Skip)] __, // uninhabited.
+    #[regex(r"[\t\r\f\v ]+", |_| Skip)] UNINHABITED,
 
     #[regex( r".", callback = |lex| cb::ident(lex, &lex.source()[lex.span().start..]),     priority = 0)]
     #[regex(r"`.", callback = |lex| cb::ident(lex, &lex.source()[lex.span().start + 1..]), priority = 1)]
@@ -157,7 +167,7 @@ enum TokenComment {
     #[token("*/")] _Block,
 
     #[token("\n", |lex| { cb::newline(lex); Skip })]
-    #[regex(".",  | _ |                     Skip  )] __ // uninhabited.
+    #[regex(".",  | _ |                     Skip  )] UNINHABITED,
 }
 
 #[rustfmt::skip]
@@ -186,7 +196,7 @@ enum TokenNoEscape {
     #[regex(r#"[^"]+"#,            priority = 0)] NoEscapeUtf8,
     #[regex(r#"[\x00-\x7F--"]+"#,  priority = 1)] NoEscapeAscii,
 
-    #[token("\n", |lex| { cb::newline(lex); Skip })] __ // uninhabited.
+    #[token("\n", |lex| { cb::newline(lex); Skip })] UNINHABITED,
 }
 
 #[rustfmt::skip]
@@ -199,15 +209,7 @@ enum TokenParagraph {
     #[regex(r"\n[\t\r\v\f ]*(,|:|=>|\)|\]|\})?")] Leave,
 }
 
-type Extras = Rc<RefCell<InnerExtras>>;
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InnerExtras {
-    pub(crate) line: u32,
-    pub(crate) line_start: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, PartialEq, PartialOrd)]
 pub(crate) enum Literal<'i> {
     Bool(bool),
     Int(i64),
@@ -273,7 +275,7 @@ mod cb {
             match t {
                 TokenComment::Block_ => ctr += 1,
                 TokenComment::_Block => ctr -= 1,
-                TokenComment::__ => unreachable!(),
+                TokenComment::UNINHABITED => unreachable!(),
             }
 
             if ctr == 0 {
@@ -406,9 +408,7 @@ mod cb {
                     Ordering::Less => continue,
                     Ordering::Equal => {
                         lex.bump(len);
-                        return Ok(Literal::Str(unsafe {
-                            core::str::from_utf8_unchecked(j[..len - tk.slice().len()].as_bytes())
-                        }));
+                        return Ok(Literal::Str(&j[..len - tk.slice().len()]));
                     }
                     Ordering::Greater => Err(ErrorKind::UnbalancedLiteralClose)?,
                 }
@@ -462,7 +462,7 @@ mod cb {
                 },
                 TokenNoEscape::NoEscapeUtf8 => Err(ErrorKind::UnexpectedNonAscii)?,
                 TokenNoEscape::NoEscapeAscii => continue,
-                TokenNoEscape::__ => unreachable!(),
+                TokenNoEscape::UNINHABITED => unreachable!(),
             }
         }
 

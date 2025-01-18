@@ -5,74 +5,49 @@ use serde::de::{
     DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor,
 };
 use smol_str::SmolStr;
-use std::{iter::Peekable, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 /// Conveniently get `T` from deserialize a str.
 pub fn from_str<'de, T: serde::Deserialize<'de>>(s: &'de str) -> Result<T> {
     let mut der = Deserializer::from_str(s);
     let val = T::deserialize(&mut der)?;
-    der.end()?;
+    der.finish()?;
     Ok(val)
 }
 
 //==================================================================================================
 
+/// The accessible peekable lexer wrapper.
 struct Kexer<'i> {
     lex: Lexer<'i, Token<'i>>,
+    peeked: Option<Option<LexerResult<Token<'i>>>>,
+    offset: usize,
 }
 
 impl<'i> Kexer<'i> {
     fn from_str(s: &'i str) -> Self {
-        Self { lex: Token::lexer(s) }
+        Self {
+            lex: Token::lexer(s),
+            peeked: None,
+            offset: 0,
+        }
+    }
+
+    fn peek(&mut self) -> Option<&mut LexerResult<Token<'i>>> {
+        let lex = &mut self.lex;
+        self.peeked.get_or_insert_with(|| lex.next()).as_mut()
     }
 }
 
 impl<'i> Iterator for Kexer<'i> {
-    type Item = Result<(Token<'i>, Location)>;
+    type Item = LexerResult<Token<'i>>;
     fn next(&mut self) -> Option<Self::Item> {
-        self.lex.next().map(|res| {
-            let InnerExtras { line, line_start } = *self.lex.extras.borrow();
-            let location = Location {
-                line,
-                line_start,
-                token_start: self.lex.span().start,
-            };
-
-            match res {
-                Ok(t) => Ok((t, location)),
-                Err(e) => Err(location.locate(self.lex.source(), e)),
-            }
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Location {
-    line: u32,
-    line_start: usize,
-    token_start: usize,
-}
-
-impl Location {
-    fn locate(&self, src: &str, kind: ErrorKind) -> Error {
-        let Location {
-            line,
-            line_start,
-            token_start,
-        } = self;
-        let col = match line_start > token_start {
-            true => None, // we meet unexpected newline.
-            false => Some(src[*line_start..*token_start].chars().count() as u32 + 1),
+        let tk = match self.peeked.take() {
+            Some(tk) => tk,
+            None => self.lex.next(),
         };
-        Error {
-            line: Some(NonZeroU32::new(line + 1).unwrap()),
-            col: col.map(|n| NonZeroU32::new(n).unwrap()),
-            kind,
-        }
-    }
-
-    fn raise<T>(&self, src: &str, kind: ErrorKind) -> Result<T> {
-        Err(self.locate(src, kind))
+        self.offset = self.lex.span().end;
+        tk
     }
 }
 
@@ -89,8 +64,7 @@ macro_rules! unwrap_ident {
 ///
 /// Usually convenience function [`from_str`] is enough.
 pub struct Deserializer<'de> {
-    src: &'de str,
-    lex: Peekable<Kexer<'de>>,
+    kex: Kexer<'de>,
     ttl: usize,
 }
 
@@ -98,64 +72,90 @@ impl<'de> Deserializer<'de> {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(src: &'de str) -> Self {
         Self {
-            src,
-            lex: Kexer::from_str(src).peekable(),
+            kex: Kexer::from_str(src),
             ttl: RECURSION_LIMIT,
         }
     }
 
+    /// Returns the offset on `src` (in bytes) since the last deserialization.
+    pub fn offset(&self) -> usize {
+        self.kex.offset
+    }
+
     /// Checks whether the remaining characters are only whitespaces, returns an error if don't.
-    pub fn end(&mut self) -> Result<()> {
-        if let Some((_, loc, src)) = self.next()? {
-            loc.raise(src, ErrorKind::ExpectedEof)?
+    pub fn finish(&mut self) -> Result<()> {
+        if self.next()?.is_some() {
+            self.raise_error(ErrorKind::ExpectedEof)?
         }
 
         Ok(())
     }
 
-    /// To bypass the borrow checker, the extra `&str` is necessary.
-    fn next(&mut self) -> Result<Option<(Token, Location, &str)>> {
-        Ok(self.lex.next().transpose()?.map(|(t, loc)| (t, loc, self.src)))
-    }
+    fn raise_error<T>(&self, kind: ErrorKind) -> Result<T> {
+        let InnerExtras { line, line_start } = *self.kex.lex.extras.borrow();
+        let token_start = self.kex.lex.span().start;
+        let col = (line_start <= token_start) // otherwise we encountered unexpected newline.
+            .then(|| self.kex.lex.source()[line_start..token_start].chars().count() as u32 + 1);
 
-    fn peek(&mut self) -> Result<Option<(TokenKind, Location, &str)>> {
-        Ok(match self.lex.peek() {
-            None => None,
-            Some(res) => match res {
-                Ok((t, loc)) => Some((t.kind(), *loc, self.src)),
-                Err(e) => Err(e.clone())?,
-            },
+        Err(Error {
+            line: Some(NonZeroU32::new(line + 1).unwrap()),
+            col: col.map(|n| NonZeroU32::new(n).unwrap()),
+            kind,
         })
     }
 
-    fn expect_next(&mut self) -> Result<(Token, Location, &str)> {
-        self.next()
-            .and_then(|opt| opt.ok_or(Error::new(ErrorKind::UnexpectedEof)))
+    fn next(&mut self) -> Result<Option<Token>> {
+        match self.kex.next() {
+            None => Ok(None),
+            Some(res) => match res {
+                Ok(t) => Ok(Some(t)),
+                Err(e) => Error::raise(e),
+            },
+        }
     }
 
-    fn expect_peek(&mut self) -> Result<(TokenKind, Location, &str)> {
-        self.peek()
-            .and_then(|opt| opt.ok_or(Error::new(ErrorKind::UnexpectedEof)))
+    fn peek(&mut self) -> Result<Option<TokenKind>> {
+        match self.kex.peek() {
+            None => Ok(None),
+            Some(res) => match res {
+                Ok(t) => Ok(Some(t.kind())),
+                Err(e) => Error::raise(core::mem::take(e)),
+            },
+        }
+    }
+
+    fn expect_next(&mut self) -> Result<Token> {
+        match self.next()? {
+            Some(t) => Ok(t),
+            None => Error::raise(ErrorKind::UnexpectedEof),
+        }
+    }
+
+    fn expect_peek(&mut self) -> Result<TokenKind> {
+        match self.peek()? {
+            Some(t) => Ok(t),
+            None => Error::raise(ErrorKind::UnexpectedEof),
+        }
     }
 
     fn expect_consume_token(&mut self, token_kind: TokenKind, error_kind: ErrorKind) -> Result<Token> {
-        self.next()?
-            .ok_or(Error::new(ErrorKind::UnexpectedEof))
-            .and_then(|(t, loc, src)| {
-                (t.kind() == token_kind)
-                    .then_some(t)
-                    .ok_or_else(|| loc.locate(src, error_kind))
-            })
+        match self.next()? {
+            Some(t) => match t.kind() == token_kind {
+                true => Ok(t),
+                false => Error::raise(error_kind),
+            },
+            None => Error::raise(ErrorKind::UnexpectedEof),
+        }
     }
 
     fn try_consume_token(&mut self, token_kind: TokenKind) -> Result<Option<Token>> {
-        Ok(match self.peek()? {
-            None => None,
-            Some((tk, ..)) => match tk == token_kind {
-                false => None,
-                true => Some(self.next().unwrap().unwrap().0),
+        match self.peek()? {
+            Some(tk) => match tk == token_kind {
+                true => self.next(),
+                false => Ok(None),
             },
-        })
+            None => Ok(None),
+        }
     }
 }
 
@@ -169,29 +169,33 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         let (ttl, overflow) = self.ttl.overflowing_sub(1);
-        self.ttl = ttl;
-
-        let (t, loc, src) = self.expect_next()?;
         if overflow {
-            loc.raise(src, ErrorKind::ExceededRecursionLimit)?
+            self.raise_error(ErrorKind::ExceededRecursionLimit)?
         }
 
-        let val = match t {
-            Token::Literal(literal) => parse_literal(literal, vis),
-            Token::Question => parse_option(self, vis),
-            Token::Paren_ => parse_parenthesis(self, vis),
-            Token::Brack_ => parse_seq(self, vis),
-            Token::Brace_ => parse_map(self, vis),
-            Token::Percent => parse_mayary(self, vis),
-            Token::Ident(ident) => {
-                let name = SmolStr::new(ident);
-                parse_enum(self, vis, name)
+        self.ttl = ttl;
+
+        let val = match self.expect_next() {
+            Ok(tk) => match tk {
+                Token::Literal(literal) => parse_literal(literal, vis),
+                Token::Question => parse_option(self, vis),
+                Token::Paren_ => parse_parenthesis(self, vis),
+                Token::Brack_ => parse_seq(self, vis),
+                Token::Brace_ => parse_map(self, vis),
+                Token::Percent => parse_mayary(self, vis),
+                Token::Ident(ident) => {
+                    let name = SmolStr::new(ident);
+                    parse_enum(self, vis, name)
+                }
+                _ => Error::raise(ErrorKind::UnexpectedToken),
             }
-            _ => loc.raise(src, ErrorKind::UnexpectedToken),
-        }?;
+            .or_else(|e| self.raise_error(e.kind)),
+            Err(e) => self.raise_error(e.kind),
+        };
 
         self.ttl += 1;
-        Ok(val)
+
+        val
     }
 }
 
@@ -216,7 +220,7 @@ fn parse_literal<'de, V: Visitor<'de>>(literal: Literal, vis: V) -> Result<V::Va
 fn parse_option<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
     match der.peek()? {
         None => vis.visit_none(),
-        Some((tk, ..)) => match tk.is_delimiter() {
+        Some(tk) => match tk.is_delimiter() {
             true => vis.visit_none(),
             false => vis.visit_some(der),
         },
@@ -234,7 +238,7 @@ fn parse_option<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V
 fn parse_mayary<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
     match der.peek()? {
         None => parse_nullary(vis),
-        Some((tk, ..)) => match tk.is_delimiter() {
+        Some(tk) => match tk.is_delimiter() {
             true => parse_nullary(vis),
             false => vis.visit_newtype_struct(der),
         },
@@ -257,13 +261,13 @@ fn parse_nullary<'de, V: Visitor<'de>>(vis: V) -> Result<V::Value> {
 /// - Nullary tuple: `(AwfulNullary)()` or simply `()%`.
 /// - Alt unary tuple: `(CommonNewtype)(T)` or equally `()(T)`.
 fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, vis: V) -> Result<V::Value> {
-    match der.expect_peek()?.0 {
+    match der.expect_peek()? {
         TokenKind::_Paren => {
             der.next().ok();
         }
         TokenKind::Ident => {
-            let mut name = unwrap_ident!(der.next().unwrap().unwrap().0);
-            match der.expect_peek()?.0 {
+            let mut name = unwrap_ident!(der.next().unwrap().unwrap());
+            match der.expect_peek()? {
                 TokenKind::_Paren => {
                     der.next().ok();
                 }
@@ -280,7 +284,7 @@ fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, v
 
     match der.peek()? {
         None => vis.visit_unit(),
-        Some((tk, loc, src)) => match tk {
+        Some(tk) => match tk {
             TokenKind::Paren_ => {
                 der.next().ok();
                 parse_tuple::<_, true>(der, vis)
@@ -293,14 +297,14 @@ fn parse_parenthesis<'i, 'de, V: Visitor<'de>>(der: &'i mut Deserializer<'de>, v
                 der.next().ok();
                 match der.peek()? {
                     None => parse_nullary(vis),
-                    Some((tk, ..)) => match tk.is_delimiter() {
+                    Some(tk) => match tk.is_delimiter() {
                         true => parse_nullary(vis),
                         false => vis.visit_newtype_struct(der),
                     },
                 }
             }
             _ if tk.is_delimiter() => vis.visit_unit(),
-            _ => loc.raise(src, ErrorKind::ExpectedNonUnitStruct),
+            _ => Error::raise(ErrorKind::ExpectedNonUnitStruct),
         },
     }
 }
@@ -425,13 +429,13 @@ impl<'de> SeqAccess<'de> for TupleAccessor<'_, 'de> {
         match self.der.try_consume_token(TokenKind::Comma)? {
             Some(_) => self.yielding = self.der.try_consume_token(TokenKind::_Paren)?.is_none(),
             None => {
-                let (tk, loc, src) = self.der.expect_peek()?;
+                let tk = self.der.expect_peek()?;
                 match tk {
                     TokenKind::_Paren if self.ctr != 1 => {
                         self.der.next().ok();
                         self.yielding = false;
                     }
-                    _ => loc.raise(src, ErrorKind::ExpectedComma)?,
+                    _ => Error::raise(ErrorKind::ExpectedComma)?,
                 }
             }
         }
@@ -586,9 +590,9 @@ impl<'de> VariantAccess<'de> for VariantAccessor<'_, 'de> {
 
     /// Note that inputs like `Variant()` is a nullary tuple variant instead.
     fn unit_variant(self) -> Result<()> {
-        if let Some((tk, loc, src)) = self.der.peek()? {
+        if let Some(tk) = self.der.peek()? {
             if !tk.is_delimiter() {
-                loc.raise(src, ErrorKind::ExpectedUnitVariant)?
+                Error::raise(ErrorKind::ExpectedUnitVariant)?
             }
         }
 
@@ -596,8 +600,7 @@ impl<'de> VariantAccess<'de> for VariantAccessor<'_, 'de> {
     }
 
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
-        let (tk, loc, src) = self.der.expect_next()?;
-        match tk {
+        match self.der.expect_next()? {
             Token::Percent => seed.deserialize(&mut *self.der),
             Token::Paren_ => {
                 let val = seed.deserialize(&mut *self.der)?;
@@ -606,16 +609,15 @@ impl<'de> VariantAccess<'de> for VariantAccessor<'_, 'de> {
                     .expect_consume_token(TokenKind::_Paren, ErrorKind::ExpectedNewtypeVariant)?;
                 Ok(val)
             }
-            _ => loc.raise(src, ErrorKind::ExpectedNewtypeVariant),
+            _ => Error::raise(ErrorKind::ExpectedNewtypeVariant),
         }
     }
 
     fn tuple_variant<V: Visitor<'de>>(self, _: usize, vis: V) -> Result<V::Value> {
-        let (tk, loc, src) = self.der.expect_next()?;
-        match tk {
+        match self.der.expect_next()? {
             Token::Percent => parse_nullary(vis),
             Token::Paren_ => parse_tuple::<_, true>(self.der, vis),
-            _ => loc.raise(src, ErrorKind::ExpectedTupleVariant)?,
+            _ => Error::raise(ErrorKind::ExpectedTupleVariant),
         }
     }
 

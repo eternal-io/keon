@@ -14,7 +14,7 @@ fn main() {
 
     let mut der = Deserializer::from_str(&s);
     let time_back = SystemTime::deserialize(&mut der).expect("deserialize");
-    der.end().expect("eof");
+    der.finish().expect("eof");
 
     assert_eq!(time, time_back);
 }
