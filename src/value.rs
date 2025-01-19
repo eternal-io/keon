@@ -30,6 +30,9 @@ pub enum Value {
     Map(Map),
 }
 
+/// A wrapper for a number, can be one of `i64`, `u64` or `f64`.
+///
+/// In the deserialized outputs, the `i64` in `Int` is always negative.
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
     Int(i64),

@@ -70,14 +70,14 @@ pub struct Deserializer<'de> {
 
 impl<'de> Deserializer<'de> {
     #[allow(clippy::should_implement_trait)]
-    pub fn from_str(src: &'de str) -> Self {
+    pub fn from_str(source: &'de str) -> Self {
         Self {
-            kex: Kexer::from_str(src),
+            kex: Kexer::from_str(source),
             ttl: RECURSION_LIMIT,
         }
     }
 
-    /// Returns the offset on `src` (in bytes) since the last deserialization.
+    /// Returns the offset on source (in bytes) since the last deserialization.
     pub fn offset(&self) -> usize {
         self.kex.offset
     }

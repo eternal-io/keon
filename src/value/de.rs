@@ -109,7 +109,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
     }
 
     fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-        formatter.write_str("any value except i128, u128 or variant")
+        formatter.write_str("any value except i128, u128 or enum variant")
     }
 }
 

@@ -112,9 +112,9 @@ impl fmt::Display for ErrorKind {
             ExpectedStructVariant => write!(f, "expected struct variant"),
             ExpectedEof => write!(f, "expected EOF"),
 
-            Io(e) => write!(f, "IO: {}", e),
-            Serialize(e) => write!(f, "serde::Serialize: {}", e),
-            Deserialize(e) => write!(f, "serde::Deserialize: {}", e),
+            Io(e) => write!(f, "(IO) {}", e),
+            Serialize(e) => write!(f, "(serialize) {}", e),
+            Deserialize(e) => write!(f, "(deserialize) {}", e),
 
             ExceededRecursionLimit => write!(f, "exceeded recursion limit"),
         }
