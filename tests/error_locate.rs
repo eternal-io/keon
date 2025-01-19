@@ -36,8 +36,9 @@ fn deserialization() {
         )
     );
 
-    /* variants cannot made into Value via serde */
-    // TODO: Correct locate, unified behind var_names rather than enum_names
-    assert_eq!(":1:7:", err_line_col("failed"));
-    // assert_eq!(":1:13:", err_line_col("this::failed"));
+    // Variants cannot made into Value via serde.
+    // What's more, the located error of these are featured.
+    // This is about peek, but shouldn't have much impact.
+    assert_eq!(":1:11:", err_line_col("after_this"));
+    assert_eq!(":1:17:", err_line_col("after_path_sep::before_this"));
 }
