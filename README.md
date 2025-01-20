@@ -8,7 +8,10 @@
 
 KEON is a human readable object notation / serialization format that syntactic similar to Rust and completely supports [Serde's data model](https://serde.rs/data-model.html).
 
-<details><summary><b>📝 Cheat sheet</b></summary>
+> [!IMPORTANT]
+> This is not ready for production use, more comprehensive tests are needed, and there is no standard yet.
+
+<details><summary><b>Cheat sheet 📝</b></summary>
 
 | Unit     | `()`
 | --------:|:---- |
@@ -62,17 +65,14 @@ And the Paragraphs, leave anything after the *start sign* of each line intact:
 The start signs can be mixed, but the first must be the vertical-bar `|`.
 </details>
 
+<details><summary><i>Breaking changes about v0.2</i></summary>
 
-> [!IMPORTANT]
-> KEON is not ready for production use, more comprehensive tests are needed, and there is no standard yet.
+- Syntax changes: Use `%` to represent "marary tuple" instead, you will never see them in pretty outputs.
+- MSRV: `1.70.0 -> 1.74.0`, and this crate is planned to be migrated to Rust 2024, as soon as it is available.
+- Public API:
+  - Rename `Deserializer::end -> Deserializer::finish`
 
-> [!NOTE]
-> Version 0.2 has some breaking changes:
->
-> - Syntax changes: Use `%` to represent "marary tuple" instead, you will never see them in pretty outputs.
-> - MSRV: `1.70.0 -> 1.74.0`, and this crate is planned to be migrated to Rust 2024, as soon as it is available.
-> - Public API:
->   - Rename `Deserializer::end -> Deserializer::finish`
+</details>
 
 
 ## [Example](https://github.com/eternal-io/keon/blob/master/examples/roundtrip.rs)
