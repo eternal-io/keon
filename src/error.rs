@@ -37,8 +37,8 @@ impl fmt::Display for Error {
         if let Some(n) = line {
             write!(f, ":{}", n)?;
             match col {
-                Some(m) => write!(f, ":{}: ", m)?,
-                None => write!(f, ":-1: ")?,
+                Some(m) => write!(f, ":{} ", m)?,
+                None => write!(f, ":-1 ")?,
             }
         }
         write!(f, "{}", kind)

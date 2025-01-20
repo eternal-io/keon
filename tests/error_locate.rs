@@ -8,17 +8,17 @@ fn err_line_col(s: &str) -> String {
 
 #[test]
 fn deserialization() {
-    assert_eq!(":1:1:", err_line_col(""));
-    assert_eq!(":1:5:", err_line_col("asdf`"));
+    assert_eq!(":1:1", err_line_col(""));
+    assert_eq!(":1:5", err_line_col("asdf`"));
     assert_eq!(
-        ":2:18:",
+        ":2:18",
         err_line_col(
             r#"{
             (foo)}"#
         )
     );
     assert_eq!(
-        ":5:17:",
+        ":5:17",
         err_line_col(
             r#"
             // some comment
@@ -29,7 +29,7 @@ fn deserialization() {
         )
     );
     assert_eq!(
-        ":2:-1:",
+        ":2:-1",
         err_line_col(
             r#""broken!
             ...""#
@@ -39,6 +39,6 @@ fn deserialization() {
     // Variants cannot made into Value via serde.
     // What's more, the located error of these are featured.
     // This is about peek, but shouldn't have much impact.
-    assert_eq!(":1:11:", err_line_col("after_this"));
-    assert_eq!(":1:17:", err_line_col("after_path_sep::before_this"));
+    assert_eq!(":1:11", err_line_col("after_this"));
+    assert_eq!(":1:17", err_line_col("after_path_sep::before_this"));
 }

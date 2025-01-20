@@ -2,21 +2,16 @@
 
 [![](https://img.shields.io/crates/v/keon)](https://crates.io/crates/keon)
 [![](https://img.shields.io/crates/d/keon)](https://crates.io/crates/keon)
-[![](https://img.shields.io/crates/msrv/keon)](https://github.com/eternal-io/keon)
 [![](https://img.shields.io/crates/l/keon)](#)
 [![](https://img.shields.io/docsrs/keon)](https://docs.rs/keon)
 [![](https://img.shields.io/github/stars/eternal-io/keon?style=social)](https://github.com/eternal-io/keon)
-
-
-***🚧 This is the development branch. If you see this message, it means the following contents are still outdated. 🚧***
-
 
 KEON is a human readable object notation / serialization format that syntactic similar to Rust and completely supports [Serde's data model](https://serde.rs/data-model.html).
 
 <details><summary><b>📝 Cheat sheet</b></summary>
 
 | Unit     | `()`
-| --------:|:------ |
+| --------:|:---- |
 | Booleans | `true` , `false`
 | Numbers  | `42` , `0x1123` , `-1` , `3.14` , `inf` , `NaN`
 | Chars    | `'A'` , `'✱'` , `'\n'` , `'\u{3000}'`
@@ -67,8 +62,17 @@ And the Paragraphs, leave anything after the *start sign* of each line intact:
 The start signs can be mixed, but the first must be the vertical-bar `|`.
 </details>
 
+
+> [!IMPORTANT]
+> KEON is not ready for production use, more comprehensive tests are needed, and there is no standard yet.
+
 > [!NOTE]
-> This is not ready for production use, more comprehensive tests are needed, and there is no standard yet.
+> Version 0.2 has some breaking changes:
+>
+> - Syntax changes: Use `%` to represent "marary tuple" instead, you will never see them in pretty outputs.
+> - MSRV: `1.70.0 -> 1.74.0`, and this crate is planned to be migrated to Rust 2024, as soon as it is available.
+> - Public API:
+>   - Rename `Deserializer::end -> Deserializer::finish`
 
 
 ## [Example](https://github.com/eternal-io/keon/blob/master/examples/roundtrip.rs)
@@ -92,7 +96,7 @@ The start signs can be mixed, but the first must be the vertical-bar `|`.
     inventory: [
         Item::Water,
         Item::CannedFood,
-        Item::IdCard > 101,         // <- newtype variant.
+        Item::IdCard(101),          // <- newtype variant / tuple variant.
         Item::RocketLauncher {
             damage: 250,
             explosion_radius: 60.0,
@@ -144,7 +148,6 @@ The start signs can be mixed, but the first must be the vertical-bar `|`.
   - Use braces `{}` to represent maps and structs (RON doesn't).
   - Distinguishable between tuples and lists (though they're all `seq` in Serde).
   - ...
-- Shorthand for newtypes.
 - Supports use Base64, Base32 and Base16 to represent bytes.
 - Provides Paragraph may be helpful when writing something by hand.
 
@@ -183,7 +186,7 @@ This is where the story begins, a project written out of OCD. Eventually, KEON i
   This is why structs and maps can be unified: structs can be regarded as maps with strings as keys.
   `ident: ...` is basically syntactic sugar for `"ident" => ...`.
 
-  However, these two ways are guaranteed NOT to be mixed in serialization output:
+  Fortunately, these two ways are guaranteed NOT to be mixed in serialization output:
   Structs always use colons; Maps always use fat arrows, even though they use strings as keys.
 
 - Since parentheses are saved, we can use `()` to represent tuples and `[]` to represent vectors.
@@ -191,10 +194,12 @@ This is where the story begins, a project written out of OCD. Eventually, KEON i
 
 - Serde allows some weird structures, such as `struct AwfulNullary()`, which must `visit_tuple` rather than `visit_unit`.
   And `enum Foo { AwfulNullary() }`. Even though these never happened, I insisted on getting it sorted out.
+
   - In RON, the former outputs `()` when hiding struct names, while both output `AwfulNullary()` when showing struct names.
     Only backend knows its exact type, that's unsettling to me.
-  - In KEON, pretty outputs `(AwfulNullary)()` and `Foo::AwfulNullary()`,
-    or minimal outputs `()()` and `AwfulNullary()` respectively. You can tell what's going on at a glance.
+
+  - In KEON, pretty outputs `(AwfulNullary)%` and `Foo::AwfulNullary%`, or minimal outputs `%` and `AwfulNullary%` respectively.
+    You can tell what's going on at a glance.
 
 - Variants can be written anywhere as `Enum::Variant` or just `Variant`, exactly as happens in Rust.
   Redundant annotations help to quickly figure out what's there, and jump to the corresponding location without relying too much on LSP?
@@ -211,8 +216,7 @@ This is where the story begins, a project written out of OCD. Eventually, KEON i
 - `Option<T>` doesn't accept `visit_enum`, it only accepts `visit_some`/`none`.
   I didn't want to provide exceptions for `Some(..)` and `None`, so I had to find the question mark `?` from my keyboard for it to use.
 
-- Serde provides `visit_newtype_struct`, I think this *must* have its purpose, so we'd better have the corresponding syntactic sugar, that is `>`.
-  Of course things like `Item::IdCard(101)` are also legal.
+- `%` is also used as the shorthand for newtypes, but you will never see them in pretty outputs.
 
 - Raw strings. KEON uses Backtick-Quote <code>&#96;&#96;&#34;...&#34;&#96;&#96;</code> instead of R-Pound-Quote `r#"..."#`.
   This is because, when I want to turn a string to a raw string, after selecting them, I can't wrap them by simply hitting `#` &mdash; they will be directly overwritten, this annoys me somethings.

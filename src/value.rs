@@ -5,7 +5,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-/// Implementing [`Deserialize`] for Value.
+/// Implementing [`Deserialize`] and [`Deserializer`] for Value.
 mod de;
 /// Implementing [`Serialize`] for Value.
 mod ser;
@@ -14,7 +14,7 @@ pub type ByteBuf = Vec<u8>;
 pub type Seq = Vec<Value>;
 pub type Map = BTreeMap<Value, Value>;
 
-/// Due to the limitation of the [serde], enum variants cannot roundtrip via [`Value`].
+/// Due to the limitation of [serde], enum variants cannot roundtrip via [`Value`].
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value {
     #[default]
@@ -32,7 +32,7 @@ pub enum Value {
 
 /// A wrapper for a number, can be one of `i64`, `u64` or `f64`.
 ///
-/// In the deserialized outputs, the `i64` in `Int` is always negative.
+/// In deserialization outputs, the `i64` in `Int` is always negative.
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
     Int(i64),
@@ -145,7 +145,8 @@ impl PartialEq for Number {
 
 impl Eq for Number {}
 
-/// *`NaN` is greater then any other number, and equal to themselves.*
+/// In order to be able to use [`Number`] as a map key,
+/// `NaN` is greater than any other number and equal to themselves.
 #[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for Number {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
