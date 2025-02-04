@@ -2,7 +2,7 @@ use std::{fmt, io, num::NonZeroU32};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct Error {
     pub line: Option<NonZeroU32>,
     pub col: Option<NonZeroU32>,
@@ -49,9 +49,29 @@ impl From<io::Error> for Error {
         Error::new(ErrorKind::Io(e.to_string()))
     }
 }
+impl From<kaparser::Utf8Error> for Error {
+    fn from(e: kaparser::Utf8Error) -> Self {
+        Error::new(ErrorKind::Utf8(e.position()))
+    }
+}
+impl From<Box<dyn std::error::Error>> for Error {
+    fn from(e: Box<dyn std::error::Error>) -> Self {
+        let e = match e.downcast::<kaparser::Utf8Error>() {
+            Ok(e) => return Self::from(*e),
+            Err(e) => e,
+        };
+
+        let e = match e.downcast::<std::io::Error>() {
+            Ok(e) => return Self::from(*e),
+            Err(e) => e,
+        };
+
+        Self::new(ErrorKind::Custom(e))
+    }
+}
 
 #[non_exhaustive]
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub enum ErrorKind {
     UnexpectedEof,
     #[default]
@@ -79,6 +99,8 @@ pub enum ErrorKind {
     ExpectedEof,
 
     Io(String),
+    Utf8(usize),
+    Custom(Box<dyn std::error::Error>),
     Serialize(String),
     Deserialize(String),
 
@@ -113,6 +135,8 @@ impl fmt::Display for ErrorKind {
             ExpectedEof => write!(f, "expected EOF"),
 
             Io(e) => write!(f, "(IO) {}", e),
+            Utf8(n) => todo!(),
+            Custom(e) => write!(f, "(custom) {}", e),
             Serialize(e) => write!(f, "(serialize) {}", e),
             Deserialize(e) => write!(f, "(deserialize) {}", e),
 

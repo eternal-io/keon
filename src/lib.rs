@@ -37,16 +37,18 @@
 
 #![doc = include_str!("../CRATES.IO-README.md")]
 
-mod lexer;
+// mod lexer;
 
-pub mod de;
+pub mod de2;
+
+// pub mod de;
 pub mod error;
-pub mod ser;
-pub mod value;
+// pub mod ser;
+// pub mod value;
 
-pub use de::{from_str, Deserializer};
+// pub use de::{from_str, Deserializer};
 pub use error::{Error, ErrorKind, Result};
-pub use ser::{to_string, to_string_pretty, to_writer, to_writer_pretty, BytesFlavor, SerializeConfig, Serializer};
-pub use value::{Number, Value};
+// pub use ser::{to_string, to_string_pretty, to_writer, to_writer_pretty, BytesFlavor, SerializeConfig, Serializer};
+// pub use value::{Number, Value};
 
 const RECURSION_LIMIT: usize = 128;
