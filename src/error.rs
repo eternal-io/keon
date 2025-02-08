@@ -1,80 +1,120 @@
-use std::{fmt, io, num::NonZeroU32};
+use core::{fmt, num::NonZeroU16};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
-    pub line: Option<NonZeroU32>,
-    pub col: Option<NonZeroU32>,
+    pub to: Option<(NonZeroU16, NonZeroU16)>,
     pub kind: ErrorKind,
+    pub from: Option<(NonZeroU16, NonZeroU16)>,
+    pub want: Option<OriginallyWant>,
 }
+
 impl Error {
-    pub(crate) fn new(kind: ErrorKind) -> Self {
+    pub(crate) const fn new(kind: ErrorKind) -> Self {
         Self {
-            line: None,
-            col: None,
+            to: None,
             kind,
+            from: None,
+            want: None,
         }
     }
-    pub(crate) fn raise<T>(kind: ErrorKind) -> Result<T> {
+
+    pub(crate) const fn new_detailed(msg: String) -> Self {
+        Self::new(ErrorKind::Detailed(msg))
+    }
+
+    pub(crate) const fn raise<T>(kind: ErrorKind) -> Result<T> {
         Err(Self::new(kind))
     }
-}
-impl std::error::Error for Error {}
-impl serde::ser::Error for Error {
-    fn custom<T: fmt::Display>(msg: T) -> Self {
-        Error::new(ErrorKind::Serialize(msg.to_string()))
+
+    pub(crate) const fn raise_working<T>(kind: ErrorKind, original: OriginallyWant) -> Result<T> {
+        Err(Self::new(kind).want(original))
+    }
+
+    pub(crate) const fn want(mut self, original: OriginallyWant) -> Self {
+        self.want = Some(original);
+        self
     }
 }
-impl serde::de::Error for Error {
-    fn custom<T: fmt::Display>(msg: T) -> Self {
-        Error::new(ErrorKind::Deserialize(msg.to_string()))
+
+impl kaparser::Situate for Error {
+    fn situate(&mut self, to: (NonZeroU16, NonZeroU16), from: Option<(NonZeroU16, NonZeroU16)>) {
+        self.to = Some(to);
+        self.from = from;
     }
 }
+
+impl core::error::Error for Error {}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Error { line, col, kind } = self;
-        if let Some(n) = line {
-            write!(f, ":{}", n)?;
-            match col {
-                Some(m) => write!(f, ":{} ", m)?,
-                None => write!(f, ":-1 ")?,
-            }
-        }
-        write!(f, "{}", kind)
+        // let Error { line, col, kind } = self;
+
+        // if let Some(n) = line {
+        //     write!(f, ":{}", n)?;
+        //     if let Some(m) = col {
+        //         write!(f, ":{} ", m)?
+        //     }
+        // }
+
+        // write!(f, "{}", kind)
+
+        todo!()
     }
 }
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self {
-        Error::new(ErrorKind::Io(e.to_string()))
+
+impl serde::ser::Error for Error {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Self::new_detailed(format!("(serialize) {:#}", msg))
     }
 }
+
+impl serde::de::Error for Error {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Self::new_detailed(format!("(deserialize) {:#}", msg))
+    }
+}
+
 impl From<kaparser::Utf8Error> for Error {
     fn from(e: kaparser::Utf8Error) -> Self {
-        Error::new(ErrorKind::Utf8(e.position()))
+        Self::new_detailed(format!("(decode) {:#}", e))
     }
 }
-impl From<Box<dyn std::error::Error>> for Error {
-    fn from(e: Box<dyn std::error::Error>) -> Self {
+
+impl From<lexical_core::Error> for Error {
+    fn from(e: lexical_core::Error) -> Self {
+        Self::new(ErrorKind::InvalidNumber(e))
+    }
+}
+
+impl From<data_encoding::DecodeError> for Error {
+    fn from(e: data_encoding::DecodeError) -> Self {
+        Self::new(ErrorKind::InvalidBytesEncoding(e))
+    }
+}
+
+impl From<Box<dyn core::error::Error>> for Error {
+    fn from(e: Box<dyn core::error::Error>) -> Self {
         let e = match e.downcast::<kaparser::Utf8Error>() {
             Ok(e) => return Self::from(*e),
             Err(e) => e,
         };
 
+        #[cfg(feature = "std")]
         let e = match e.downcast::<std::io::Error>() {
-            Ok(e) => return Self::from(*e),
+            Ok(e) => return Self::new_detailed(format!("(IO) {:#}", e)),
             Err(e) => e,
         };
 
-        Self::new(ErrorKind::Custom(e))
+        Self::new_detailed(format!("(other) {:#}", e))
     }
 }
 
 #[non_exhaustive]
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
     UnexpectedEof,
-    #[default]
     UnexpectedToken,
     UnexpectedNewline,
     UnexpectedNonAscii,
@@ -83,8 +123,9 @@ pub enum ErrorKind {
     InvalidNumber(lexical_core::Error),
     InvalidCharacterTooLess,
     InvalidCharacterTooMany,
+    InvalidStringEscape,
+    InvalidBytesEscape,
     InvalidBytesEncoding(data_encoding::DecodeError),
-    InvalidEscape,
     InvalidAsciiEscape,
     InvalidUnicodeEscape,
 
@@ -98,14 +139,11 @@ pub enum ErrorKind {
     ExpectedStructVariant,
     ExpectedEof,
 
-    Io(String),
-    Utf8(usize),
-    Custom(Box<dyn std::error::Error>),
-    Serialize(String),
-    Deserialize(String),
-
     ExceededRecursionLimit,
+
+    Detailed(String),
 }
+
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use ErrorKind::*;
@@ -120,10 +158,8 @@ impl fmt::Display for ErrorKind {
             InvalidCharacterTooLess => write!(f, "character literal must contain one codepoint"),
             InvalidCharacterTooMany => write!(f, "character literal may only contain one codepoint"),
             InvalidBytesEncoding(e) => write!(f, "{}", e),
-            InvalidEscape => write!(f, "invalid escape"),
             InvalidAsciiEscape => write!(f, "ASCII hex escape code must be at most 0x7F"),
-            InvalidUnicodeEscape => write!(f, "Unicode escape code muse be at most 10FFFF"),
-
+            InvalidUnicodeEscape => write!(f, "Unicode escape code muse be hexadecimal and at most 10FFFF"),
             ExpectedComma => write!(f, "expected comma"),
             ExpectedFatArrow => write!(f, "expected fat arrow"),
             ExpectedNonUnitStruct => write!(f, "expected non-unit struct (newtype, tuple or map)"),
@@ -134,13 +170,39 @@ impl fmt::Display for ErrorKind {
             ExpectedStructVariant => write!(f, "expected struct variant"),
             ExpectedEof => write!(f, "expected EOF"),
 
-            Io(e) => write!(f, "(IO) {}", e),
-            Utf8(n) => todo!(),
-            Custom(e) => write!(f, "(custom) {}", e),
-            Serialize(e) => write!(f, "(serialize) {}", e),
-            Deserialize(e) => write!(f, "(deserialize) {}", e),
-
             ExceededRecursionLimit => write!(f, "exceeded recursion limit"),
+
+            Detailed(msg) => f.write_str(msg),
+
+            _ => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginallyWant {
+    Identifier,
+
+    LiteralCharacter,
+
+    LiteralSignedInteger,
+    LiteralUnsignedInteger,
+    LiteralFloatNumber,
+
+    LiteralString,
+    LiteralStringRaw,
+
+    LiteralBytes,
+    LiteralBytesRaw,
+    LiteralBytesEncoding,
+}
+
+impl fmt::Display for OriginallyWant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use OriginallyWant::*;
+        match self {
+            LiteralCharacter => write!(f, "character literal"),
+            _ => todo!(),
         }
     }
 }
