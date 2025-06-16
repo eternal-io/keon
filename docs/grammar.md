@@ -8,7 +8,7 @@ TODO.
 
 ## Lexical structure
 
-```
+```go
 KEON -> Value ( `;` Value )* `;`
 
 Value -> LITERAL | Expression
@@ -19,7 +19,7 @@ TODO: whitespace and comments.
 
 ### Keywords
 
-```
+```go
 KW_TRUE  -> `true`
 KW_FALSE -> `false`
 KW_INF   -> `inf`
@@ -29,12 +29,15 @@ KW_NAN   -> `NaN`
 
 ### Identifiers
 
-```
-IDENTIFIER -> NON_KEYWORD_IDENT | RAW_IDENT
+```go
+IDENTIFIER ->
+    NON_KEYWORD_IDENT | RAW_IDENT
 
-NON_KEYWORD_IDENT -> IDENT_OR_KEYWORD _except keywords_
+NON_KEYWORD_IDENT ->
+    IDENT_OR_KEYWORD _except keywords_
 
-RAW_IDENT -> <BACKTICK> IDENT_OR_KEYWORD
+RAW_IDENT ->
+    <BACKTICK> IDENT_OR_KEYWORD
 
 IDENT_OR_KEYWORD ->
       XID_START XID_CONTINUE*
@@ -44,7 +47,7 @@ IDENT_OR_KEYWORD ->
 
 ## Literals
 
-```
+```go
 LITERAL ->
       BOOLEAN_LITERAL
     | INTEGER_LITERAL
@@ -59,7 +62,7 @@ LITERAL ->
 
 ### Boolean literals
 
-```
+```go
 BOOLEAN_LITERAL ->
     KW_TRUE | KW_FALSE
 ```
@@ -69,8 +72,9 @@ BOOLEAN_LITERAL ->
 
 #### Integer literals
 
-```
-INTEGER_LITERAL -> DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL
+```go
+INTEGER_LITERAL ->
+    DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL
 
 DEC_LITERAL -> DEC_DIGIT ( `_` | DEC_DIGIT )*
 BIN_LITERAL -> `0b` `_`* BIN_DIGIT ( `_` | BIN_DIGIT )*
@@ -85,7 +89,7 @@ HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 
 #### Float literals
 
-```
+```go
 FLOAT_LITERAL ->
       KW_INF
     | KW_NAN
@@ -99,7 +103,7 @@ FLOAT_EXPONENT ->
 
 ### Text literals
 
-```
+```go
 COMMON_ESCAPE ->
     `\` [`\` `"` `'` `0` `n` `t` `r`]
 
@@ -115,21 +119,21 @@ STRING_CONTINUE ->
 
 #### Character literals
 
-```
+```go
 CHAR_LITERAL ->
     `'` ( ~[`'` `\` <LF> <CR> <TAB>] | COMMON_ESCAPE | CHAR_ESCAPE ) `'`
 ```
 
 #### String literals
 
-```
+```go
 STRING_LITERAL ->
       COMMON_STRING_LITERAL
     | RAW_STRING_LITERAL
 
 COMMON_STRING_LITERAL ->
     `"` (
-          ~[`"` `\` CR]
+          ~[`"` `\` <CR>]
         | COMMON_ESCAPE
         | CHAR_ESCAPE
         | STRING_CONTINUE
@@ -141,14 +145,14 @@ RAW_STRING_LITERAL ->
 
 #### Byte literals
 
-```
+```go
 BYTE_LITERAL ->
     `b'` ( ~[`'` `\` <LF> <CR> <TAB> <non-ASCII>] | COMMON_ESCAPE | BYTE_ESCAPE ) `'`
 ```
 
 #### Byte string literals
 
-```
+```go
 BYTE_STRING_LITERAL ->
       COMMON_BYTE_STRING_LITERAL
     | RAW_BYTE_STRING_LITERAL
