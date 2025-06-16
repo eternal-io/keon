@@ -2,7 +2,7 @@
 
 > *KEON* : *Value* ( `;` *Value* )<sup>\*</sup> `;`<sup>?</sup>
 >
-> *Value* : [*Atom*](#atoms) | [*Compound*](#compounds)
+> *Value* : [LITERAL](#literals) | [*Expressions*](#expressions)
 
 
 ## Notation
@@ -12,10 +12,8 @@ See [The Rust Reference](https://doc.rust-lang.org/stable/reference/notation.htm
 
 ## Lexical structure
 
-（TODO：空格和注释在哪里加入）
+TODO: whitespace and comments
 
-
-## Tokens
 
 ### Keywords
 
@@ -27,36 +25,38 @@ See [The Rust Reference](https://doc.rust-lang.org/stable/reference/notation.htm
 
 ### Identifiers
 
-> IDENT : NON_KEYWORD_IDENT | RAW_IDENT
+> IDENT :
+> <br/>&#x3000; NON_KEYWORD_IDENT | RAW_IDENT
 >
-> NON_KEYWORD_IDENT : IDENT_OR_KEYWORD <sub>Except [keywords](#keywords)</sub>
+> NON_KEYWORD_IDENT :
+> <br/>&#x3000; IDENT_OR_KEYWORD <sub>*Except [keywords](#keywords)*</sub>
 >
-> RAW_IDENT : `` ` `` IDENT_OR_KEYWORD
+> RAW_IDENT :
+> <br/>&#x3000; `` ` `` IDENT_OR_KEYWORD
 >
 > IDENT_OR_KEYWORD :
 > <br/>&#x3000; XID_START XID_CONTINUE<sup>\*</sup>
 > <br/>&#xFF5C; `_` XID_CONTINUE<sup>\+</sup>
 
 
-## Atoms
+## Literals
 
-> Atom :
+> LITERAL :
 > <br/>&#x3000; [BOOLEAN_LITERAL](#boolean-literals)
 > <br/>&#xFF5C; [INTEGER_LITERAL](#integer-literals)
 > <br/>&#xFF5C; [FLOAT_LITERAL](#float-literals)
-> <br/>&#xFF5C; CHAR_LITERAL
+> <br/>&#xFF5C; [CHAR_LITERAL](#character-literals)
 > <br/>&#xFF5C; [STRING_LITERAL](#string-literals)
-> <br/>&#xFF5C; RAW_STRING_LITERAL
-> <br/>&#xFF5C; BYTES_LITERAL
-> <br/>&#xFF5C; RAW_BYTES_LITERAL
+> <br/>&#xFF5C; [BYTE_LITERAL](#byte-literals)
+> <br/>&#xFF5C; [BYTE_STRING_LITERAL](#byte-string-literals)
 > <br/>&#xFF5C; PARAGRAPH_LITERAL
 
 
 ### Boolean literals
 
 > BOOLEAN_LITERAL :
-> <br/>&#x3000; KW_TRUE
-> <br/>&#xFF5C; KW_FALSE
+> <br/>&#x3000; KW_TRUE | KW_FALSE
+
 
 ### Number literals
 
@@ -84,7 +84,7 @@ See [The Rust Reference](https://doc.rust-lang.org/stable/reference/notation.htm
 >
 > DEC_DIGIT : \[`0`-`9`\]
 >
-> HEX_DIGIT : \[`0`-`9` `a`-`f` `A`-`F`\]
+> HEX_DIGIT : \[`0`-`9` `A`-`F` `a`-`f`\]
 
 #### Float literals
 
@@ -100,31 +100,73 @@ See [The Rust Reference](https://doc.rust-lang.org/stable/reference/notation.htm
 
 ### Text literals
 
-> ESCAPE_BYTE : `\x` HEX_DIGIT<sup>2</sup>
+> COM_ESCAPE :
+> <br/>&#x3000; `\` \[`\` `"` `'` `0` `n` `t` `r`\]
 >
-> ESCAPE_ASCII : `\x` OCT_DIGIT HEX_DIGIT
+> BYTE_ESCAPE :
+> <br/>&#x3000; `\x` HEX_DIGIT<sup>2</sup>
 >
-> ESCAPE_NORMAL : `\` \[`\` `"` `'` `0` `n` `t` `r`\]
->
-> ESCAPE_UNICODE : `\u{` ( HEX_DIGIT `_`<sup>\*</sup> )<sup>1..6</sup> `}`
-
-#### Character literals
-
-#### String literals
-
-> STRING_LITERAL :
-> <br/>&#x3000; `"` (
-> <br/>&#x3000;&#x3000;&#x3000; \~\[`"` `\` \\r \]
-> <br/>&#x3000;&#x3000;&#xFF5C; ESCAPE_ASCII
-> <br/>&#x3000;&#x3000;&#xFF5C; ESCAPE_NORMAL
-> <br/>&#x3000;&#x3000;&#xFF5C; ESCAPE_UNICODE
-> <br/>&#x3000;&#x3000;&#xFF5C; STRING_CONTINUE
-> <br/>&#x3000; )<sup>\*</sup> `"`
+> RICH_ESCAPE :
+> <br/>&#x3000; `\x` OCT_DIGIT HEX_DIGIT | `\u{` ( HEX_DIGIT `_`<sup>\*</sup> )<sup>1..6</sup> `}`
 >
 > STRING_CONTINUE :
 > <br/>&#x3000; `\` *followed by* \n
 
-#### Bytes literals
+#### Character literals
+
+> CHAR_LITERAL :
+> <br/>&#x3000; `'` ( \~\[`'` `\` \\n \\t \\r\] | COM_ESCAPE | RICH_ESCAPE ) `'`
+
+#### String literals
+
+> STRING_LITERAL :
+> <br/>&#x3000; COM_STRING_LITERAL
+> <br/>&#xFF5C; RAW_STRING_LITERAL
+>
+> COM_STRING_LITERAL :
+> <br/>&#x3000; `"` (
+> <br/>&#x3000;&#x3000;&#x3000; \~\[`"` `\` \\r\]
+> <br/>&#x3000;&#x3000;&#xFF5C; COM_ESCAPE
+> <br/>&#x3000;&#x3000;&#xFF5C; RICH_ESCAPE
+> <br/>&#x3000;&#x3000;&#xFF5C; STRING_CONTINUE
+> <br/>&#x3000; )<sup>\*</sup> `"`
+>
+> RAW_STRING_LITERAL :
+> <br/>&#x3000; `` ` ``<sup>k=1..255</sup> `"` ( \~\[\r\] )<sup>*(non-greedy)</sup> `"` `` ` ``<sup>k</sup>
+
+#### Byte literals
+
+> BYTE_LITERAL :
+> <br/>&#x3000; `b'` ( \~\[`'` `\` \\n \\t \\r non-ASCII\] | COM_ESCAPE | BYTE_ESCAPE ) `'`
+
+#### Byte string literals
+
+> BYTE_STRING_LITERAL :
+> <br/>&#x3000; COM_BYTE_STRING_LITERAL
+> <br/>&#xFF5C; RAW_BYTE_STRING_LITERAL
+> <br/>&#xFF5C; BASE16_BYTE_STRING_LITERAL
+> <br/>&#xFF5C; BASE32_BYTE_STRING_LITERAL
+> <br/>&#xFF5C; BASE64_BYTE_STRING_LITERAL
+>
+> COM_BYTE_STRING_LITERAL :
+> <br/>&#x3000; `b"` (
+> <br/>&#x3000;&#x3000;&#x3000; \~\[`"` `\` \\r *non-ASCII*\]
+> <br/>&#x3000;&#x3000;&#xFF5C; COM_ESCAPE
+> <br/>&#x3000;&#x3000;&#xFF5C; BYTE_ESCAPE
+> <br/>&#x3000;&#x3000;&#xFF5C; STRING_CONTINUE
+> <br/>&#x3000; )<sup>\*</sup> `"`
+>
+> RAW_BYTE_STRING_LITERAL :
+> <br/>&#x3000; `b` `` ` ``<sup>k=1..255</sup> `"` ( \~[\r *non-ASCII*] )<sup>*(non-greedy)</sup> `"` `` ` ``<sup>k</sup>
+>
+> BASE16_BYTE_STRING_LITERAL :
+> <br/>&#x3000; `b16"` HEX_DIGIT<sup>\*</sup> `"`
+>
+> BASE32_BYTE_STRING_LITERAL :
+> <br/>&#x3000; `b32"` \[`A`-`Z` `2`-`7` `=`\]<sup>\*</sup> `"`
+>
+> BASE64_BYTE_STRING_LITERAL :
+> <br/>&#x3000; `b64"` \[`A`-`Z` `a`-`z` `0`-`9` `-` `_` `=`\]<sup>\*</sup> `"`
 
 
-## Compounds
+## Expressions
