@@ -1,7 +1,25 @@
 # KEON Grammar
 
+- Definitions named with `SCREAMING_SNAKE_CASE` are *atoms*.
+- Definitions named with `UpperCamelCase` are *compounds*.
+- WHITESPACE and COMMENTs are allowed only **between** *atoms*.
+
+#### Specials
+
+- `<LF>` : `U+000A` (line feed, `'\n'`)
+- `<CR>` : `U+000D` (carriage return, `'\r'`)
+- `<TAB>` : `U+0009` (horizontal tab, `'\t'`)
+- `<SPACE>` : `U+0020` (space, `' '`)
+- `<BACKTICK>` : `U+0060` (grave accent, ``'`'``)
+- `<NEWLINE>` : `<LF>` or `<CR>`
+- `<non-ASCII>` : non-ASCII characters
+
+---
+
 ```go
-KEON -> Value ( `;` Value )* `;`
+/*== Overall ==*/
+
+Keon -> Value ( `;` Value )* `;`?
 
 Value ->
       LITERAL
@@ -12,21 +30,44 @@ Value ->
     | EnumVariantExpression
 
 
+/*== Whitespace ==*/
+
+WHITESPACE -> !!characters that have `White_Space` Unicode property
+
+/* U+0009 (horizontal tab, '\t')
+ * U+000A (line feed, '\n')
+ * U+000B (vertical tab)
+ * U+000C (form feed)
+ * U+000D (carriage return, '\r')
+ * U+0020 (space, ' ')
+ * U+0085 (next line)
+ * U+200E (left-to-right mark)
+ * U+200F (right-to-left mark)
+ * U+2028 (line separator)
+ * U+2029 (paragraph separator)
+ */
+
+/*== Comments ==*/
+
 COMMENT ->
     LINE_COMMENT | BLOCK_COMMENT
 
 LINE_COMMENT ->
-    `//` ( ~[<LF> <CR>] )*
+    `//` ( ~<NEWLINE> )*
 
 BLOCK_COMMENT ->
-    `/*` ( ~`*/` | BLOCK_COMMENT )* `*/`
+    `/*` ( BLOCK_COMMENT | ~`*/` )* `*/`
 
 
-KW_TRUE  -> `true`
+/*== Keywords ==*/
+
+KW_TRUE -> `true`
 KW_FALSE -> `false`
-KW_INF   -> `inf`
-KW_NAN   -> `NaN`
+KW_INFINITY -> `inf`
+KW_NOTANUMBER -> `NaN`
 
+
+/*== Identifiers ==*/
 
 IDENTIFIER ->
     NON_KEYWORD_IDENT | RAW_IDENT
@@ -38,10 +79,11 @@ RAW_IDENT ->
     <BACKTICK> IDENT_OR_KEYWORD
 
 IDENT_OR_KEYWORD ->
-      XID_START XID_CONTINUE*
-    | `_` XID_CONTINUE+
+      XID_Start XID_Continue*
+    | `_` XID_Continue+
 
 
+/*== Literals ==*/
 
 LITERAL ->
       BOOLEAN_LITERAL
@@ -53,11 +95,11 @@ LITERAL ->
     | BYTE_STRING_LITERAL
     | PARAGRAPH_LITERAL
 
-
+// boolean literals
 BOOLEAN_LITERAL ->
     KW_TRUE | KW_FALSE
 
-
+// integer literals
 INTEGER_LITERAL ->
     DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL
 
@@ -71,92 +113,92 @@ OCT_DIGIT -> [`0`-`7`]
 DEC_DIGIT -> [`0`-`9`]
 HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 
-
+// float literals
 FLOAT_LITERAL ->
-      KW_INF
-    | KW_NAN
+      KW_INFINITY
+    | KW_NOTANUMBER
     | DEC_LITERAL `.`
     | DEC_LITERAL ( `.` DEC_LITERAL )? FLOAT_EXPONENT
 
 FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
 
-
-COMMON_ESCAPE ->
+ESCAPE_COMMON ->
     `\` [`\` `"` `'` `0` `n` `t` `r`]
 
-BYTE_ESCAPE ->
+ESCAPE_BYTE ->
     `\x` HEX_DIGIT{2}
 
-CHAR_ESCAPE ->
+ESCAPE_CHAR ->
     `\x` OCT_DIGIT HEX_DIGIT | `\u{` ( HEX_DIGIT `_`* ){1..6} `}`
 
 STRING_CONTINUE ->
     `\` <LF>
 
-
+// character literals
 CHAR_LITERAL ->
-    `'` ( ~[`'` `\` <LF> <CR> <TAB>] | COMMON_ESCAPE | CHAR_ESCAPE ) `'`
+    `'` ( ~[`'` `\` <TAB> <NEWLINE>] | ESCAPE_COMMON | ESCAPE_CHAR ) `'`
 
-
+// string literals
 STRING_LITERAL ->
-      COMMON_STRING_LITERAL
-    | RAW_STRING_LITERAL
+      STRING_LITERAL_NORMAL
+    | STRING_LITERAL_RAW
 
-COMMON_STRING_LITERAL ->
+STRING_LITERAL_NORMAL ->
     `"` (
           ~[`"` `\` <CR>]
-        | COMMON_ESCAPE
-        | CHAR_ESCAPE
+        | ESCAPE_COMMON
+        | ESCAPE_CHAR
         | STRING_CONTINUE
     )* `"`
 
-RAW_STRING_LITERAL ->
-    <BACKTICK>{k<-1..255} `"` ( ~[<CR>] )*? `"` <BACKTICK>{k}
+STRING_LITERAL_RAW ->
+    <BACKTICK>{k<-1..255} `"` ( ~<CR> )*? `"` <BACKTICK>{k}
 
-
+// byte literals
 BYTE_LITERAL ->
-    `b'` ( ~[`'` `\` <LF> <CR> <TAB> <non-ASCII>] | COMMON_ESCAPE | BYTE_ESCAPE ) `'`
+    `b'` ( ~[`'` `\` <TAB> <NEWLINE> <non-ASCII>] | ESCAPE_COMMON | ESCAPE_BYTE ) `'`
 
-
+// byte string literals
 BYTE_STRING_LITERAL ->
-      COMMON_BYTE_STRING_LITERAL
-    | RAW_BYTE_STRING_LITERAL
-    | BASE16_BYTE_STRING_LITERAL
-    | BASE32_BYTE_STRING_LITERAL
-    | BASE64_BYTE_STRING_LITERAL
+      BYTE_STRING_LITERAL_NORMAL
+    | BYTE_STRING_LITERAL_RAW
+    | BYTE_STRING_LITERAL_BASE16
+    | BYTE_STRING_LITERAL_BASE32
+    | BYTE_STRING_LITERAL_BASE64
 
-COMMON_BYTE_STRING_LITERAL ->
+BYTE_STRING_LITERAL_NORMAL ->
     `b"` (
           ~[`"` `\` <CR> <non-ASCII>]
-        | COMMON_ESCAPE
-        | BYTE_ESCAPE
+        | ESCAPE_COMMON
+        | ESCAPE_BYTE
         | STRING_CONTINUE
     )* `"`
 
-RAW_BYTE_STRING_LITERAL ->
+BYTE_STRING_LITERAL_RAW ->
     `b` <BACKTICK>{k<-1..255} `"` ( ~[<CR> <non-ASCII>] )*? `"` <BACKTICK>{k}
 
-BASE16_BYTE_STRING_LITERAL ->
+BYTE_STRING_LITERAL_BASE16 ->
     `b16"` HEX_DIGIT* `"`
 
-BASE32_BYTE_STRING_LITERAL ->
+BYTE_STRING_LITERAL_BASE32 ->
     `b32"` [`A`-`Z` `2`-`7` `=`]* `"`
 
-BASE64_BYTE_STRING_LITERAL ->
+BYTE_STRING_LITERAL_BASE64 ->
     `b64"` [`A`-`Z` `a`-`z` `0`-`9` `-` `_` `=`]* `"`
 
-
+// paragraph literals
 PARAGRAPH_LITERAL ->
-    PARAGRAPH_START ( <LF> ( WHITE_SPACE !!except <LF> <CR> )* PARAGRAPH_CONTINUE )*
+    PARAGRAPH_START ( <LF> ( WHITESPACE !!except <NEWLINE> )* PARAGRAPH_CONTINUE )*
 
 PARAGRAPH_START ->
-    `|` <SPACE>? ( ~[<LF> <CR>] )*
+    `|` <SPACE>? ( ~<NEWLINE> )*
 
 PARAGRAPH_CONTINUE ->
-    [`<` `|` `>`] <SPACE>? ( ~[<LF> <CR>] )*
+    [`<` `|` `>`] <SPACE>? ( ~<NEWLINE> )*
 
 
+/*== Expressions ==*/
 
 TupleExpression ->
     `(` ( ( Value `,` )+ Value? )? `)`
@@ -171,7 +213,7 @@ MayaryExpression ->
       `%` Value?
 
 MapExpression ->
-    `{` ( MapPair ( `,` MapPair )*  `,`? )? `}`
+    `{` ( MapPair ( `,` MapPair )* `,`? )? `}`
 
 MapPair ->
       IDENTIFIER `:` Value
