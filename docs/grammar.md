@@ -11,10 +11,32 @@ TODO.
 ```go
 KEON -> Value ( `;` Value )* `;`
 
-Value -> LITERAL | Expression
+Value ->
+      LITERAL
+    | ArrayExpression
+    | OptionExpression
+    | StructuralExpression
+    | StructLikeExpression
+    | EnumVariantExpression
 ```
 
-TODO: whitespace and comments.
+TODO: whitespace.
+
+
+### Comments
+
+```go
+COMMENT ->
+    LINE_COMMENT | BLOCK_COMMENT
+
+LINE_COMMENT ->
+    `//` ( ~[<LF> <CR>] )*
+
+BLOCK_COMMENT ->
+    `/*` ( ~`*/` | BLOCK_COMMENT )* `*/`
+```
+
+Comments are interpreted as a form of whitespace.
 
 
 ### Keywords
@@ -34,7 +56,7 @@ IDENTIFIER ->
     NON_KEYWORD_IDENT | RAW_IDENT
 
 NON_KEYWORD_IDENT ->
-    IDENT_OR_KEYWORD _except keywords_
+    IDENT_OR_KEYWORD !!except keywords
 
 RAW_IDENT ->
     <BACKTICK> IDENT_OR_KEYWORD
@@ -182,4 +204,50 @@ BASE64_BYTE_STRING_LITERAL ->
 ```
 
 
+### Paragraph literals
+
+```go
+PARAGRAPH_LITERAL ->
+    PARAGRAPH_START ( <LF> ( WHITE_SPACE !!except <LF> <CR> )* PARAGRAPH_CONTINUE )*
+
+PARAGRAPH_START ->
+    `|` <SPACE>? ( ~[<LF> <CR>] )*
+
+PARAGRAPH_CONTINUE ->
+    [`<` `|` `>`] <SPACE>? ( ~[<LF> <CR>] )*
+```
+
+
 ## Expressions
+
+```go
+TupleExpression ->
+    `(` ( ( Value `,` )+ Value? )? `)`
+
+ArrayExpression ->
+    `[` ( Value ( `,` Value )* `,`? )? `]`
+
+OptionExpression ->
+      `?` Value?
+
+MayaryExpression ->
+      `%` Value?
+
+MapExpression ->
+    `{` ( MapPair ( `,` MapPair )*  `,`? )? `}`
+
+MapPair ->
+      IDENTIFIER `:` Value
+    | Value `=>` Value
+
+StructuralExpression ->
+      TupleExpression
+    | MayaryExpression
+    | MapExpression
+
+StructLikeExpression ->
+    `(` IDENTIFIER `)` StructuralExpression?
+
+EnumVariantExpression ->
+    ( IDENTIFIER `::` )? IDENTIFIER StructuralExpression?
+```
