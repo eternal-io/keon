@@ -12,6 +12,7 @@ pub enum Number {
 
 //------------------------------------------------------------------------------
 impl Number {
+    #[inline]
     pub const fn saturating_to_i64(self) -> i64 {
         match self {
             Self::Int(i) => i,
@@ -23,6 +24,7 @@ impl Number {
         }
     }
 
+    #[inline]
     pub const fn saturating_to_u64(self) -> u64 {
         match self {
             Self::Int(i) => match i >= 0 {
@@ -34,24 +36,12 @@ impl Number {
         }
     }
 
-    pub const fn to_f64(self) -> f64 {
+    #[inline]
+    pub const fn to_f64_lossy(self) -> f64 {
         match self {
             Self::Int(i) => i as f64,
             Self::UInt(u) => u as f64,
             Self::Float(f) => f,
-        }
-    }
-
-    pub fn map<T>(
-        self,
-        int_fn: impl FnOnce(i64) -> T,
-        uint_fn: impl FnOnce(u64) -> T,
-        float_fn: impl FnOnce(f64) -> T,
-    ) -> T {
-        match self {
-            Self::Int(i) => int_fn(i),
-            Self::UInt(u) => uint_fn(u),
-            Self::Float(f) => float_fn(f),
         }
     }
 }
