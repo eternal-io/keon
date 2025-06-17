@@ -5,7 +5,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-pub mod der_to_concr;
+pub mod de_to_concr;
 pub mod ser_to_value;
 
 pub type Seq = Vec<Value>;
