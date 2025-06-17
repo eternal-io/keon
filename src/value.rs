@@ -1,27 +1,41 @@
 use super::*;
 use std::{
     cmp::Ordering,
+    collections::BTreeMap,
     hash::{Hash, Hasher},
 };
 
 pub mod der_to_concr;
 pub mod ser_to_value;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Literal<'a> {
+pub type Seq = Vec<Value>;
+pub type Map = BTreeMap<Value, Value>;
+pub type Struct = BTreeMap<EcoString, Value>;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Value {
+    Literal(Literal),
+    Structural(Structural),
+    NamedStructural(EcoString, Structural),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Literal {
     Unit,
     Bool(bool),
     Char(char),
     Number(Number),
-    Number128(Number128),
-    Str(&'a str),
     String(EcoString),
-    Bytes(&'a [u8]),
     ByteBuf(EcoVec<u8>),
 }
 
-pub enum Structural<'a> {
-    Literal(Literal<'a>),
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Structural {
+    Newtype(Box<Value>),
+    Opt(Option<Box<Value>>),
+    Seq(Seq),
+    Map(Map),
+    Struct(Struct),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -31,52 +45,117 @@ pub enum Number {
     Float(f64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Number128 {
-    Int128(i128),
-    UInt128(u128),
-}
-
 //------------------------------------------------------------------------------
 
-macro_rules! impl_into_simple {
-    ( $from:ty => $type:ident::$into:ident ) => {
-        impl From<$from> for $type {
+macro_rules! impl_into {
+    ( $value:ident: $from:ty => $into:ident::$($tt:tt)* ) => {
+        impl From<$from> for $into {
             #[inline]
-            fn from(value: $from) -> Self {
-                Self::$into(value as _)
+            #[allow(unused_variables)]
+            fn from($value: $from) -> Self {
+                $into::$($tt)*
             }
         }
     };
 }
 
-impl_into_simple!(    i8 => Number::Int );
-impl_into_simple!(   i16 => Number::Int );
-impl_into_simple!(   i32 => Number::Int );
-impl_into_simple!(   i64 => Number::Int );
-impl_into_simple!( isize => Number::Int );
-impl_into_simple!(    u8 => Number::UInt );
-impl_into_simple!(   u16 => Number::UInt );
-impl_into_simple!(   u32 => Number::UInt );
-impl_into_simple!(   u64 => Number::UInt );
-impl_into_simple!( usize => Number::UInt );
-impl_into_simple!(   f32 => Number::Float );
-impl_into_simple!(   f64 => Number::Float );
+impl_into!( v: ()    => Literal::Unit );
+impl_into!( v: bool  => Literal::Bool(v) );
+impl_into!( v: char  => Literal::Char(v) );
+impl_into!( v: i8    => Literal::Number(v.into()) );
+impl_into!( v: i16   => Literal::Number(v.into()) );
+impl_into!( v: i32   => Literal::Number(v.into()) );
+impl_into!( v: i64   => Literal::Number(v.into()) );
+impl_into!( v: u8    => Literal::Number(v.into()) );
+impl_into!( v: u16   => Literal::Number(v.into()) );
+impl_into!( v: u32   => Literal::Number(v.into()) );
+impl_into!( v: u64   => Literal::Number(v.into()) );
+impl_into!( v: f32   => Literal::Number(v.into()) );
+impl_into!( v: f64   => Literal::Number(v.into()) );
+impl_into!( v: &str  => Literal::String(v.into()) );
+impl_into!( v: &[u8] => Literal::ByteBuf(v.into()) );
 
-impl_into_simple!(    i8 => Number128::Int128 );
-impl_into_simple!(   i16 => Number128::Int128 );
-impl_into_simple!(   i32 => Number128::Int128 );
-impl_into_simple!(   i64 => Number128::Int128 );
-impl_into_simple!(  i128 => Number128::Int128 );
-impl_into_simple!( isize => Number128::Int128 );
-impl_into_simple!(    u8 => Number128::UInt128 );
-impl_into_simple!(   u16 => Number128::UInt128 );
-impl_into_simple!(   u32 => Number128::UInt128 );
-impl_into_simple!(   u64 => Number128::UInt128 );
-impl_into_simple!(  u128 => Number128::UInt128 );
-impl_into_simple!( usize => Number128::UInt128 );
+impl_into!( v: i8    => Number::Int(v as _) );
+impl_into!( v: i16   => Number::Int(v as _) );
+impl_into!( v: i32   => Number::Int(v as _) );
+impl_into!( v: i64   => Number::Int(v as _) );
+impl_into!( v: isize => Number::Int(v as _) );
+impl_into!( v: u8    => Number::UInt(v as _) );
+impl_into!( v: u16   => Number::UInt(v as _) );
+impl_into!( v: u32   => Number::UInt(v as _) );
+impl_into!( v: u64   => Number::UInt(v as _) );
+impl_into!( v: usize => Number::UInt(v as _) );
+impl_into!( v: f32   => Number::Float(v as _) );
+impl_into!( v: f64   => Number::Float(v as _) );
+
+// TODO: Into Value
 
 //------------------------------------------------------------------------------
+
+impl From<Box<Value>> for Structural {
+    fn from(value: Box<Value>) -> Self {
+        Self::Newtype(value)
+    }
+}
+
+impl<T: Into<Value>> From<T> for Structural {
+    fn from(value: T) -> Self {
+        Self::Newtype(Box::new(value.into()))
+    }
+}
+
+impl From<Option<Box<Value>>> for Structural {
+    fn from(value: Option<Box<Value>>) -> Self {
+        Self::Opt(value)
+    }
+}
+
+impl<T: Into<Value>> From<Option<T>> for Structural {
+    fn from(value: Option<T>) -> Self {
+        Self::Opt(value.map(|v| Box::new(v.into())))
+    }
+}
+
+impl<T> From<&[T]> for Structural
+where
+    T: Into<Value> + Clone,
+{
+    fn from(value: &[T]) -> Self {
+        Self::Seq(Seq::from_iter(value.iter().cloned().map(Into::into)))
+    }
+}
+
+impl<T, const N: usize> From<[T; N]> for Structural
+where
+    T: Into<Value>,
+{
+    fn from(value: [T; N]) -> Self {
+        Self::Seq(Seq::from_iter(value.into_iter().map(Into::into)))
+    }
+}
+
+impl<K, V> From<&[(K, V)]> for Structural
+where
+    K: Into<Value> + Clone,
+    V: Into<Value> + Clone,
+{
+    fn from(value: &[(K, V)]) -> Self {
+        Self::Map(Map::from_iter(value.iter().cloned().map(|(k, v)| (k.into(), v.into()))))
+    }
+}
+
+impl<K, V, const N: usize> From<[(K, V); N]> for Structural
+where
+    K: Into<Value>,
+    V: Into<Value>,
+{
+    fn from(value: [(K, V); N]) -> Self {
+        Self::Map(Map::from_iter(value.into_iter().map(|(k, v)| (k.into(), v.into()))))
+    }
+}
+
+//------------------------------------------------------------------------------
+
 impl Number {
     #[inline]
     pub const fn saturating_to_i64(self) -> i64 {
