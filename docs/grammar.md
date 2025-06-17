@@ -16,7 +16,7 @@
 
 ---
 
-```go
+```GO
 /*== Overall ==*/
 
 Keon -> Value ( `;` Value )* `;`?
@@ -101,7 +101,7 @@ BOOLEAN_LITERAL ->
 
 // integer literals
 INTEGER_LITERAL ->
-    DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL
+    `-`? ( DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL )
 
 DEC_LITERAL -> DEC_DIGIT ( `_` | DEC_DIGIT )*
 BIN_LITERAL -> `0b` `_`* BIN_DIGIT ( `_` | BIN_DIGIT )*
@@ -115,10 +115,12 @@ HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 
 // float literals
 FLOAT_LITERAL ->
-      KW_INFINITY
-    | KW_NOTANUMBER
-    | DEC_LITERAL `.`
-    | DEC_LITERAL ( `.` DEC_LITERAL )? FLOAT_EXPONENT
+    `-`? (
+          KW_INFINITY
+        | KW_NOTANUMBER
+        | DEC_LITERAL `.`
+        | DEC_LITERAL ( `.` DEC_LITERAL )? FLOAT_EXPONENT
+    )
 
 FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
