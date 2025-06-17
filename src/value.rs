@@ -1,7 +1,28 @@
+use super::*;
 use std::{
     cmp::Ordering,
     hash::{Hash, Hasher},
 };
+
+pub mod der_to_concr;
+pub mod ser_to_value;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Literal<'a> {
+    Unit,
+    Bool(bool),
+    Char(char),
+    Number(Number),
+    Number128(Number128),
+    Str(&'a str),
+    String(EcoString),
+    Bytes(&'a [u8]),
+    ByteBuf(EcoVec<u8>),
+}
+
+pub enum Structural<'a> {
+    Literal(Literal<'a>),
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
@@ -9,6 +30,51 @@ pub enum Number {
     UInt(u64),
     Float(f64),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Number128 {
+    Int128(i128),
+    UInt128(u128),
+}
+
+//------------------------------------------------------------------------------
+
+macro_rules! impl_into_simple {
+    ( $from:ty => $type:ident::$into:ident ) => {
+        impl From<$from> for $type {
+            #[inline]
+            fn from(value: $from) -> Self {
+                Self::$into(value as _)
+            }
+        }
+    };
+}
+
+impl_into_simple!(    i8 => Number::Int );
+impl_into_simple!(   i16 => Number::Int );
+impl_into_simple!(   i32 => Number::Int );
+impl_into_simple!(   i64 => Number::Int );
+impl_into_simple!( isize => Number::Int );
+impl_into_simple!(    u8 => Number::UInt );
+impl_into_simple!(   u16 => Number::UInt );
+impl_into_simple!(   u32 => Number::UInt );
+impl_into_simple!(   u64 => Number::UInt );
+impl_into_simple!( usize => Number::UInt );
+impl_into_simple!(   f32 => Number::Float );
+impl_into_simple!(   f64 => Number::Float );
+
+impl_into_simple!(    i8 => Number128::Int128 );
+impl_into_simple!(   i16 => Number128::Int128 );
+impl_into_simple!(   i32 => Number128::Int128 );
+impl_into_simple!(   i64 => Number128::Int128 );
+impl_into_simple!(  i128 => Number128::Int128 );
+impl_into_simple!( isize => Number128::Int128 );
+impl_into_simple!(    u8 => Number128::UInt128 );
+impl_into_simple!(   u16 => Number128::UInt128 );
+impl_into_simple!(   u32 => Number128::UInt128 );
+impl_into_simple!(   u64 => Number128::UInt128 );
+impl_into_simple!(  u128 => Number128::UInt128 );
+impl_into_simple!( usize => Number128::UInt128 );
 
 //------------------------------------------------------------------------------
 impl Number {
@@ -45,30 +111,6 @@ impl Number {
         }
     }
 }
-
-macro_rules! impl_from_T_for_number {
-    ( $from:ty => $into:ident ) => {
-        impl From<$from> for Number {
-            #[inline]
-            fn from(value: $from) -> Self {
-                Self::$into(value as _)
-            }
-        }
-    };
-}
-
-impl_from_T_for_number!(    i8 => Int );
-impl_from_T_for_number!(   i16 => Int );
-impl_from_T_for_number!(   i32 => Int );
-impl_from_T_for_number!(   i64 => Int );
-impl_from_T_for_number!( isize => Int );
-impl_from_T_for_number!(    u8 => UInt );
-impl_from_T_for_number!(   u16 => UInt );
-impl_from_T_for_number!(   u32 => UInt );
-impl_from_T_for_number!(   u64 => UInt );
-impl_from_T_for_number!( usize => UInt );
-impl_from_T_for_number!(   f32 => Float );
-impl_from_T_for_number!(   f64 => Float );
 
 impl PartialEq for Number {
     fn eq(&self, other: &Self) -> bool {
