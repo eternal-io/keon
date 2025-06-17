@@ -158,7 +158,7 @@ where
 
 impl Number {
     #[inline]
-    pub const fn saturating_to_i64(self) -> i64 {
+    pub const fn to_i64_lossy(self) -> i64 {
         match self {
             Self::Int(i) => i,
             Self::UInt(u) => match u >= i64::MAX as u64 {
@@ -170,7 +170,7 @@ impl Number {
     }
 
     #[inline]
-    pub const fn saturating_to_u64(self) -> u64 {
+    pub const fn to_u64_lossy(self) -> u64 {
         match self {
             Self::Int(i) => match i >= 0 {
                 true => i as u64,
