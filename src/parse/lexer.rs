@@ -14,7 +14,7 @@ pub enum Compound {}
 
 pub fn NUMBER_LITERAL<'a>() -> impl Parser<'a, &'a str, Spanned<Number>, Err> {
     end().to((0.into(), 0..0)).map_err(|mut e: Error| {
-        e.kind = ErrorKind::Foo;
+        e.kind = ErrorKind::ExpectedEof;
         e
     })
 }
