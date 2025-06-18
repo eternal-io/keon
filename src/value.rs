@@ -10,13 +10,15 @@ pub mod ser_to_value;
 
 pub type Seq = Vec<Value>;
 pub type Map = BTreeMap<Value, Value>;
+pub type Tuple = Box<[Value]>;
 pub type Struct = BTreeMap<EcoString, Value>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value {
     Literal(Literal),
-    Structural(Structural),
-    NamedStructural(EcoString, Structural),
+    Container(Container),
+    Structure(Structure),
+    NamedStructure(EcoString, Structure),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,11 +32,16 @@ pub enum Literal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Structural {
-    Newtype(Box<Value>),
-    Opt(Option<Box<Value>>),
+pub enum Container {
+    Maybe(Option<Box<Value>>),
     Seq(Seq),
     Map(Map),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Structure {
+    Unit,
+    Tuple(Tuple),
     Struct(Struct),
 }
 
@@ -92,31 +99,19 @@ impl_into!( v: f64   => Number::Float(v as _) );
 
 //------------------------------------------------------------------------------
 
-impl From<Box<Value>> for Structural {
-    fn from(value: Box<Value>) -> Self {
-        Self::Newtype(value)
-    }
-}
-
-impl<T: Into<Value>> From<T> for Structural {
-    fn from(value: T) -> Self {
-        Self::Newtype(Box::new(value.into()))
-    }
-}
-
-impl From<Option<Box<Value>>> for Structural {
+impl From<Option<Box<Value>>> for Container {
     fn from(value: Option<Box<Value>>) -> Self {
-        Self::Opt(value)
+        Self::Maybe(value)
     }
 }
 
-impl<T: Into<Value>> From<Option<T>> for Structural {
+impl<T: Into<Value>> From<Option<T>> for Container {
     fn from(value: Option<T>) -> Self {
-        Self::Opt(value.map(|v| Box::new(v.into())))
+        Self::Maybe(value.map(|v| Box::new(v.into())))
     }
 }
 
-impl<T> From<&[T]> for Structural
+impl<T> From<&[T]> for Container
 where
     T: Into<Value> + Clone,
 {
@@ -125,7 +120,7 @@ where
     }
 }
 
-impl<T, const N: usize> From<[T; N]> for Structural
+impl<T, const N: usize> From<[T; N]> for Container
 where
     T: Into<Value>,
 {
@@ -134,7 +129,7 @@ where
     }
 }
 
-impl<K, V> From<&[(K, V)]> for Structural
+impl<K, V> From<&[(K, V)]> for Container
 where
     K: Into<Value> + Clone,
     V: Into<Value> + Clone,
@@ -144,7 +139,7 @@ where
     }
 }
 
-impl<K, V, const N: usize> From<[(K, V); N]> for Structural
+impl<K, V, const N: usize> From<[(K, V); N]> for Container
 where
     K: Into<Value>,
     V: Into<Value>,

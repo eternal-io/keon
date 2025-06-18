@@ -13,6 +13,7 @@
 - `<BACKTICK>` : `U+0060` (grave accent, ``'`'``)
 - `<NEWLINE>` : `<LF>` or `<CR>`
 - `<non-ASCII>` : non-ASCII characters
+- `XID_Start` and `XID_Continue`: as defined in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/tr31-41.html)
 
 ---
 
@@ -23,11 +24,9 @@ Keon -> Value ( `;` Value )* `;`?
 
 Value ->
       LITERAL
-    | ArrayExpression
-    | OptionExpression
-    | StructuralExpression
-    | StructLikeExpression
-    | EnumVariantExpression
+    | Container
+    | Structure
+    | NamedStructure
 
 
 /*== Whitespace ==*/
@@ -80,7 +79,7 @@ RAW_IDENT ->
 
 IDENT_OR_KEYWORD ->
       XID_Start XID_Continue*
-    | `_` XID_Continue+
+    |       `_` XID_Continue+
 
 
 /*== Literals ==*/
@@ -197,39 +196,46 @@ PARAGRAPH_START ->
     `|` <SPACE>? ( ~<NEWLINE> )*
 
 PARAGRAPH_CONTINUE ->
-    [`<` `|` `>`] <SPACE>? ( ~<NEWLINE> )*
+    [`|` `<` `>`] <SPACE>? ( ~<NEWLINE> )*
 
 
-/*== Expressions ==*/
+/*== Containers ==*/
+
+Container ->
+      MaybeExpression
+    | TupleExpression
+    | SeqExpression
+    | MapExpression
+
+MaybeExpression ->
+    `?` Value?
 
 TupleExpression ->
     `(` ( ( Value `,` )+ Value? )? `)`
 
-ArrayExpression ->
+SeqExpression ->
     `[` ( Value ( `,` Value )* `,`? )? `]`
 
-OptionExpression ->
-      `?` Value?
-
-MayaryExpression ->
-      `%` Value?
-
 MapExpression ->
-    `{` ( MapPair ( `,` MapPair )* `,`? )? `}`
+    `{` (
+              Value `=>` Value
+        ( `,` Value `=>` Value )* `,`?
+    )? `}`
 
-MapPair ->
-      IDENTIFIER `:` Value
-    | Value `=>` Value
 
-StructuralExpression ->
-      TupleExpression
-    | MayaryExpression
-    | MapExpression
+/*== Structures ==*/
 
-StructLikeExpression ->
-    `(` IDENTIFIER `)` StructuralExpression?
+Structure ->
+      `(` IDENTIFIER `)` ( TupleExpression | StructExpression )?
+    | `_`                ( TupleExpression | StructExpression )
 
-EnumVariantExpression ->
-    ( IDENTIFIER `::` )? IDENTIFIER StructuralExpression?
+NamedStructure ->
+    ( IDENTIFIER `::` )? IDENTIFIER
+    ( TupleExpression | StructExpression )?
 
+StructExpression ->
+    `{` (
+              IDENTIFIER `:` Value
+        ( `,` IDENTIFIER `:` Value )* `,`?
+    )? `}`
 ```
