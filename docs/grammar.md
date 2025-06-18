@@ -13,6 +13,7 @@
 - `<BACKTICK>` : `U+0060` (grave accent, ``'`'``)
 - `<NEWLINE>` : `<LF>` or `<CR>`
 - `<non-ASCII>` : non-ASCII characters
+- `<EOF>`: end of input
 - `XID_Start` and `XID_Continue`: as defined in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/tr31-41.html)
 
 ---
@@ -20,7 +21,10 @@
 ```GO
 /*== Overall ==*/
 
-Keon -> Value ( `;` Value )* `;`?
+Keon -> KeonPartial+
+  // == Value ( `;` Value )* `;`? <EOF>
+
+KeonPartial -> Value ( `;` | `;`? <EOF> )
 
 Value ->
       LITERAL
