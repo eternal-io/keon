@@ -314,13 +314,13 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_i64(vis)
+        deserialize_integer!(self, i8, vis, visit_i8)
     }
     fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_i64(vis)
+        deserialize_integer!(self, i16, vis, visit_i16)
     }
     fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_i64(vis)
+        deserialize_integer!(self, i32, vis, visit_i32)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         deserialize_integer!(self, i64, vis, visit_i64)
@@ -331,16 +331,34 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if self.consume("b'") {
-            todo!()
+            'outer: {
+                let byte = match self.escape_byte()? {
+                    Some(byte) => byte,
+                    None => match self.rest().chars().next() {
+                        None => break 'outer,
+                        Some(ch) => match ch.try_into() {
+                            Ok(byte) => byte,
+                            Err(_) => break 'outer,
+                        },
+                    },
+                };
+                if !self.consume("'") {
+                    break 'outer;
+                }
+
+                return vis.visit_u8(byte);
+            }
+
+            Error::raise(ErrorKind::ExpectedByteInteger)
         } else {
-            self.deserialize_u64(vis)
+            deserialize_integer!(self, u8, vis, visit_u8)
         }
     }
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_u64(vis)
+        deserialize_integer!(self, u16, vis, visit_u16)
     }
     fn deserialize_u32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_u64(vis)
+        deserialize_integer!(self, u32, vis, visit_u32)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         deserialize_integer!(self, u64, vis, visit_u64)

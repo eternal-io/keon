@@ -21,6 +21,7 @@ pub enum ErrorKind {
 
     ExpectedEnd,
     ExpectedSemiOrEnd,
+    ExpectedByteInteger,
     ExpectedBoolean,
     ExpectedCharacter,
 }
