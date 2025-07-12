@@ -1,5 +1,9 @@
 use super::*;
 use chumsky::prelude::*;
+use core::num::NonZeroU8;
+use lexical_core::{
+    NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
+};
 use serde::{de::Visitor, Deserialize};
 
 type Err = extra::Err<Error>;
@@ -222,12 +226,66 @@ impl<'a> Deserializer<'a> {
     }
 }
 
-macro_rules! deserialize_num {
+const INTEGER_FORMAT: u128 = lexical_core::format::RUST_LITERAL;
+
+const INTEGER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .base_prefix(Some(NonZeroU8::new(b'x').unwrap()))
+    .mantissa_radix(16)
+    .build();
+const INTEGER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .base_prefix(Some(NonZeroU8::new(b'o').unwrap()))
+    .mantissa_radix(8)
+    .build();
+const INTEGER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .base_prefix(Some(NonZeroU8::new(b'b').unwrap()))
+    .mantissa_radix(2)
+    .build();
+
+const PARSE_INTEGER_OPTS: &ParseIntegerOptions = &ParseIntegerOptionsBuilder::new()
+    .no_multi_digit(false)
+    .build_unchecked();
+
+const FLOAT_FORMAT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .required_fraction_digits(false)
+    .no_special(false)
+    .build();
+
+const PARSE_FLOAT_OPTS: &ParseFloatOptions = &ParseFloatOptionsBuilder::new()
+    .lossy(false)
+    .nan_string(Some(b"NaN"))
+    .inf_string(Some(b"inf"))
+    .infinity_string(None)
+    .build_unchecked();
+
+macro_rules! deserialize_integer {
     ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
-        let (x, o) = lexical_core::parse_partial::<$ty>($self.rest().as_bytes()).map_err(Into::<Error>::into)?;
+        let rest = $self.rest().as_bytes();
+        let off = (rest[0] == b'-') as usize;
+
+        let (x, o) = if rest[off] == b'0' && rest[off + 1] == b'x' {
+            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
+        } else if rest[off] == b'0' && rest[off + 1] == b'o' {
+            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_HEX>(rest, &PARSE_INTEGER_OPTS)
+        } else if rest[off] == b'0' && rest[off + 1] == b'b' {
+            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_OCT>(rest, &PARSE_INTEGER_OPTS)
+        } else {
+            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_BIN>(rest, &PARSE_INTEGER_OPTS)
+        }
+        .map_err(Into::<Error>::into)?;
+
         $self.bump(o);
         $visitor.$method(x)
-    }}; // TODO: radix!!
+    }};
+}
+
+macro_rules! deserialize_float {
+    ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
+        let (x, o) =
+            lexical_core::parse_partial_with_options::<$ty, FLOAT_FORMAT>($self.rest().as_bytes(), &PARSE_FLOAT_OPTS)
+                .map_err(Into::<Error>::into)?;
+        $self.bump(o);
+        $visitor.$method(x)
+    }};
 }
 
 impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
@@ -258,14 +316,18 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.deserialize_i64(vis)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, i64, vis, visit_i64)
+        deserialize_integer!(self, i64, vis, visit_i64)
     }
     fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, i128, vis, visit_i128)
+        deserialize_integer!(self, i128, vis, visit_i128)
     }
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_u64(vis)
+        if self.consume("b'") {
+            todo!()
+        } else {
+            self.deserialize_u64(vis)
+        }
     }
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_u64(vis)
@@ -274,17 +336,17 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.deserialize_u64(vis)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, u64, vis, visit_u64)
+        deserialize_integer!(self, u64, vis, visit_u64)
     }
     fn deserialize_u128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, u128, vis, visit_u128)
+        deserialize_integer!(self, u128, vis, visit_u128)
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, f32, vis, visit_f32)
+        deserialize_float!(self, f32, vis, visit_f32)
     }
     fn deserialize_f64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, f64, vis, visit_f64)
+        deserialize_float!(self, f64, vis, visit_f64)
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
