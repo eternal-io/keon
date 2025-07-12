@@ -14,12 +14,18 @@ pub fn parse<'de, T: Deserialize<'de>>(s: &'de str) -> Result<T> {
     der.finish().and(Ok(value))
 }
 
-// pub fn parse_many<'de, T: Deserialize<'de>>(s: &'de str) -> Result<Vec<T>> {
-//     let mut der = Deserializer::new(s);
-//     let value = T::deserialize(&mut der)?;
-//     der.finish()?;
-//     Ok(value)
-// }
+pub fn parse_many<'de, T: Deserialize<'de>>(s: &'de str) -> Result<Vec<T>> {
+    let mut der = Deserializer::new(s)?;
+    let mut values = Vec::new();
+    loop {
+        values.push(T::deserialize(&mut der)?);
+        if !der.finish_and_maybe_more()? {
+            break;
+        }
+    }
+
+    Ok(values)
+}
 
 pub struct Deserializer<'a> {
     source: &'a str,
@@ -51,11 +57,12 @@ impl<'a> Deserializer<'a> {
     }
 
     #[inline]
-    pub fn finish_one(&mut self) -> Result<bool> {
+    pub fn finish_and_maybe_more(&mut self) -> Result<bool> {
+        // return: more?
         if self.consume_ws_(";")? {
-            Ok(self.has_reached_end())
+            Ok(!self.has_reached_end())
         } else if self.has_reached_end() {
-            Ok(true)
+            Ok(false)
         } else {
             Error::raise(ErrorKind::ExpectedSemiOrEnd)
         }
