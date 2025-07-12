@@ -6,7 +6,7 @@ pub type Result<T> = ::core::result::Result<T, Error>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     pub kind: ErrorKind,
-    pub span: Range<usize>,
+    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +30,7 @@ pub enum ErrorKind {
 
 impl Error {
     pub(crate) fn new(kind: ErrorKind) -> Self {
-        Self { kind, span: 0..0 }
+        Self { kind, index: 0 }
     }
 
     pub(crate) fn raise<T>(kind: ErrorKind) -> Result<T> {
@@ -43,25 +43,25 @@ impl Error {
     }
 }
 
-impl TryFrom<Vec<Error>> for Error {
-    type Error = ();
+// impl TryFrom<Vec<Error>> for Error {
+//     type Error = ();
 
-    fn try_from(value: Vec<Error>) -> ::core::result::Result<Self, Self::Error> {
-        value.into_iter().next().ok_or(())
-    }
-}
+//     fn try_from(value: Vec<Error>) -> ::core::result::Result<Self, Self::Error> {
+//         value.into_iter().next().ok_or(())
+//     }
+// }
 
-impl<'a, I: Input<'a>> chumsky::error::Error<'a, I> for Error {}
+// impl<'a, I: Input<'a>> chumsky::error::Error<'a, I> for Error {}
 
-impl<'a, I: Input<'a>, L> chumsky::error::LabelError<'a, I, L> for Error {
-    fn expected_found<E: IntoIterator<Item = L>>(
-        expected: E,
-        found: Option<chumsky::util::MaybeRef<'a, I::Token>>,
-        span: I::Span,
-    ) -> Self {
-        todo!()
-    }
-}
+// impl<'a, I: Input<'a>, L> chumsky::error::LabelError<'a, I, L> for Error {
+//     fn expected_found<E: IntoIterator<Item = L>>(
+//         expected: E,
+//         found: Option<chumsky::util::MaybeRef<'a, I::Token>>,
+//         span: I::Span,
+//     ) -> Self {
+//         todo!()
+//     }
+// }
 
 impl core::error::Error for Error {}
 

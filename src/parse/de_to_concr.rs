@@ -52,7 +52,7 @@ impl<'a> Deserializer<'a> {
         if self.has_reached_end() {
             Ok(())
         } else {
-            Error::raise(ErrorKind::ExpectedEnd)
+            self.raise(ErrorKind::ExpectedEnd)
         }
     }
 
@@ -64,8 +64,16 @@ impl<'a> Deserializer<'a> {
         } else if self.has_reached_end() {
             Ok(false)
         } else {
-            Error::raise(ErrorKind::ExpectedSemiOrEnd)
+            self.raise(ErrorKind::ExpectedSemiOrEnd)
         }
+    }
+
+    #[inline]
+    const fn raise<T>(&self, kind: ErrorKind) -> Result<T> {
+        Err(Error {
+            kind,
+            index: self.offset,
+        })
     }
 
     #[inline]
@@ -149,12 +157,12 @@ impl<'a> Deserializer<'a> {
                         depth += 1;
 
                         if depth == u8::MAX {
-                            return Error::raise(ErrorKind::DeeplyNestedComment);
+                            return self.raise(ErrorKind::DeeplyNestedComment);
                         }
                     }
 
                     if self.has_reached_end() {
-                        return Error::raise(ErrorKind::UnclosedComment);
+                        return self.raise(ErrorKind::UnclosedComment);
                     }
                 }
             } else {
@@ -183,7 +191,7 @@ impl<'a> Deserializer<'a> {
                 });
             }
         }
-        Error::raise(ErrorKind::InvalidEscape)
+        self.raise(ErrorKind::InvalidEscape)
     }
 
     #[inline]
@@ -195,7 +203,7 @@ impl<'a> Deserializer<'a> {
                 }
             }
         }
-        Error::raise(ErrorKind::InvalidEscape)
+        self.raise(ErrorKind::InvalidEscape)
     }
 
     #[inline]
@@ -215,7 +223,7 @@ impl<'a> Deserializer<'a> {
                 }
             }
         }
-        Error::raise(ErrorKind::InvalidEscape)
+        self.raise(ErrorKind::InvalidEscape)
     }
 
     #[inline]
@@ -300,7 +308,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        Error::raise(ErrorKind::WontImplement)
+        self.raise(ErrorKind::WontImplement)
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
@@ -309,7 +317,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         } else if self.consume_ws_("false")? {
             vis.visit_bool(false)
         } else {
-            Error::raise(ErrorKind::ExpectedBoolean)
+            self.raise(ErrorKind::ExpectedBoolean)
         }
     }
 
@@ -349,7 +357,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 return vis.visit_u8(byte);
             }
 
-            Error::raise(ErrorKind::ExpectedByteInteger)
+            self.raise(ErrorKind::ExpectedByteInteger)
         } else {
             deserialize_integer!(self, u8, vis, visit_u8)
         }
@@ -393,22 +401,20 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             return vis.visit_char(ch);
         }
 
-        Error::raise(ErrorKind::ExpectedCharacter)
+        self.raise(ErrorKind::ExpectedCharacter)
     }
 
+    fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        self.deserialize_str(vis)
+    }
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         todo!()
     }
 
-    fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
-    }
-
-    fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
-    }
-
     fn deserialize_byte_buf<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        self.deserialize_bytes(vis)
+    }
+    fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         todo!()
     }
 
