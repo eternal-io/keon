@@ -2,7 +2,7 @@
 
 - Definitions named with `SCREAMING_SNAKE_CASE` are *atoms*.
 - Definitions named with `UpperCamelCase` are *compounds*.
-- WHITESPACE and COMMENTs are allowed only **between** *atoms*.
+- WHITESPACE and COMMENTs are allowed only **between** definitions in a *compound*.
 
 #### Specials
 
@@ -12,7 +12,7 @@
 - `<SPACE>` : `U+0020` (space, `' '`)
 - `<BACKTICK>` : `U+0060` (grave accent, ``'`'``)
 - `<NEWLINE>` : `<LF>` or `<CR>`
-- `<non-ASCII>` : non-ASCII characters
+- `<Non-ASCII>` : Non-ASCII characters
 - `<EOF>`: end of input
 - `XID_Start` and `XID_Continue`: as defined in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/tr31-41.html)
 
@@ -69,14 +69,13 @@ KW_FALSE -> `false`
 KW_INFINITY -> `inf`
 KW_NOTANUMBER -> `NaN`
 
-
 /*== Identifiers ==*/
 
 IDENTIFIER ->
     NON_KEYWORD_IDENT | RAW_IDENT
 
 NON_KEYWORD_IDENT ->
-    IDENT_OR_KEYWORD !!except keywords
+    IDENT_OR_KEYWORD !!except keyword
 
 RAW_IDENT ->
     <BACKTICK> IDENT_OR_KEYWORD
@@ -100,7 +99,7 @@ LITERAL ->
 
 // boolean literals
 BOOLEAN_LITERAL ->
-    KW_TRUE | KW_FALSE
+    `true` | `false`
 
 // integer literals
 INTEGER_LITERAL ->
@@ -119,8 +118,8 @@ HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 // float literals
 FLOAT_LITERAL ->
     `-`? (
-          KW_INFINITY
-        | KW_NOTANUMBER
+          `inf`
+        | `NaN`
         | DEC_LITERAL `.`
         | DEC_LITERAL ( `.` DEC_LITERAL )? FLOAT_EXPONENT
     )
@@ -162,7 +161,7 @@ STRING_LITERAL_RAW ->
 
 // byte literals
 BYTE_LITERAL ->
-    `b'` ( ~[`'` `\` <TAB> <NEWLINE> <non-ASCII>] | ESCAPE_COMMON | ESCAPE_BYTE ) `'`
+    `b'` ( ~[`'` `\` <TAB> <NEWLINE> <Non-ASCII>] | ESCAPE_COMMON | ESCAPE_BYTE ) `'`
 
 // byte string literals
 BYTE_STRING_LITERAL ->
@@ -174,14 +173,14 @@ BYTE_STRING_LITERAL ->
 
 BYTE_STRING_LITERAL_NORMAL ->
     `b"` (
-          ~[`"` `\` <CR> <non-ASCII>]
+          ~[`"` `\` <CR> <Non-ASCII>]
         | ESCAPE_COMMON
         | ESCAPE_BYTE
         | STRING_CONTINUE
     )* `"`
 
 BYTE_STRING_LITERAL_RAW ->
-    `b` <BACKTICK>{k<-1..255} `"` ( ~[<CR> <non-ASCII>] )*? `"` <BACKTICK>{k}
+    `b` <BACKTICK>{k<-1..255} `"` ( ~[<CR> <Non-ASCII>] )*? `"` <BACKTICK>{k}
 
 BYTE_STRING_LITERAL_BASE16 ->
     `b16"` HEX_DIGIT* `"`
