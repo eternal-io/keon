@@ -16,11 +16,13 @@ pub enum ErrorKind {
     UnclosedComment,
     DeeplyNestedComment,
 
+    InvalidEscape,
     InvalidNumber(lexical_core::Error),
 
     ExpectedEnd,
     ExpectedSemiOrEnd,
     ExpectedBoolean,
+    ExpectedCharacter,
 }
 
 //------------------------------------------------------------------------------
@@ -77,6 +79,12 @@ impl serde::ser::Error for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         todo!()
+    }
+}
+
+impl From<lexical_core::Error> for Error {
+    fn from(e: lexical_core::Error) -> Self {
+        Error::new(ErrorKind::InvalidNumber(e))
     }
 }
 

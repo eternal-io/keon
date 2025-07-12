@@ -58,13 +58,17 @@ impl<'a> Deserializer<'a> {
     }
 
     #[inline]
-    fn bump(&mut self, n: usize) {
+    const fn bump(&mut self, n: usize) -> Option<&[u8]> {
+        let delta = match self.source.split_at(self.offset).1.split_at_checked(n) {
+            Some((_, eps)) => eps,
+            None => return None,
+        };
         self.offset += n;
-        debug_assert!(self.source.is_char_boundary(self.offset));
+        Some(delta.as_bytes())
     }
 
     #[inline]
-    fn rest(&self) -> &str {
+    const fn rest(&self) -> &str {
         self.source.split_at(self.offset).1
     }
 
@@ -92,20 +96,40 @@ impl<'a> Deserializer<'a> {
     }
 
     #[inline]
-    fn consume_while(&mut self, pred: impl FnMut(&char) -> bool) {
-        self.bump(self.rest().chars().take_while(pred).count());
+    fn consume_while(&mut self, mut pred: impl FnMut(&char) -> bool) -> &[u8] {
+        self.bump(
+            self.rest()
+                .char_indices()
+                .take_while(|(_off, ch)| pred(ch))
+                .last()
+                .map(|(off, _ch)| off)
+                .unwrap_or(0),
+        )
+        .unwrap()
     }
 
     #[inline]
     fn consume_whitespace_comment(&mut self) -> Result<()> {
-        loop {
-            self.consume_while(char::is_ascii_whitespace);
+        fn is_whitespace(ch: &char) -> bool {
+            ch.is_whitespace()
+        }
+        fn is_not_newline(ch: &char) -> bool {
+            *ch != '\n'
+        }
+        fn is_not_slash(ch: &char) -> bool {
+            *ch != '/'
+        }
 
-            if self.consume("/*") {
+        loop {
+            self.consume_while(is_whitespace);
+
+            if self.consume("//") {
+                self.consume_while(is_not_newline);
+            } else if self.consume("/*") {
                 let mut depth = 1u8;
 
                 while depth != 0 {
-                    self.consume_while(|ch| *ch != '/');
+                    self.consume_while(is_not_slash);
 
                     if let Some(b'*') = self.source.as_bytes().get(self.offset - 1) {
                         self.bump(1);
@@ -127,20 +151,83 @@ impl<'a> Deserializer<'a> {
             }
         }
 
-        self.consume_while(char::is_ascii_whitespace);
+        self.consume_while(is_whitespace);
 
         Ok(())
+    }
+
+    #[inline]
+    fn __escape_common(&mut self) -> Result<u8> {
+        'outer: {
+            if let Some(eps) = self.bump(1) {
+                return Ok(match eps[0] {
+                    b'\\' => b'\\',
+                    b'\"' => b'\"',
+                    b'\'' => b'\'',
+                    b'0' => b'\0',
+                    b'n' => b'\n',
+                    b't' => b'\t',
+                    b'r' => b'\r',
+                    _ => break 'outer,
+                });
+            }
+        }
+        Error::raise(ErrorKind::InvalidEscape)
+    }
+
+    #[inline]
+    fn __escape_byte(&mut self) -> Result<u8> {
+        if self.consume("x") {
+            if let Some(eps) = self.bump(2) {
+                if eps[0].is_ascii_hexdigit() && eps[1].is_ascii_hexdigit() {
+                    return Ok(lexical_core::parse::<u8>(eps).unwrap());
+                }
+            }
+        }
+        Error::raise(ErrorKind::InvalidEscape)
+    }
+
+    #[inline]
+    fn __escape_char(&mut self) -> Result<char> {
+        if self.consume("x") {
+            if let Some(eps) = self.bump(2) {
+                if matches!(eps[0], b'0'..=b'7') && eps[1].is_ascii_hexdigit() {
+                    return Ok(lexical_core::parse::<u8>(eps).unwrap().into());
+                }
+            }
+        } else if self.consume("u") {
+            let eps = self.consume_while(|ch| *ch != '}');
+            let chr = lexical_core::parse::<u32>(&eps[1..]).map_err(Into::<Error>::into)?;
+            if self.consume("}") {
+                if let Some(chr) = char::from_u32(chr) {
+                    return Ok(chr);
+                }
+            }
+        }
+        Error::raise(ErrorKind::InvalidEscape)
+    }
+
+    #[inline]
+    fn escape_byte(&mut self) -> Result<Option<u8>> {
+        self.consume("\\")
+            .then(|| self.__escape_byte().or_else(|_| self.__escape_common()))
+            .transpose()
+    }
+
+    #[inline]
+    fn escape_char(&mut self) -> Result<Option<char>> {
+        self.consume("\\")
+            .then(|| self.__escape_char().or_else(|_| self.__escape_common().map(Into::into)))
+            .transpose()
     }
 }
 
 macro_rules! deserialize_num {
     ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
-        let (x, o) = lexical_core::parse_partial::<$ty>($self.rest().as_bytes())
-            .map_err(ErrorKind::InvalidNumber)
-            .map_err(Error::new)?;
+        let (x, o) = lexical_core::parse_partial::<$ty>($self.rest().as_bytes()).map_err(Into::<Error>::into)?;
         $self.bump(o);
         $visitor.$method(x)
-    }};
+    }}; // TODO: radix!!
 }
 
 impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
@@ -162,13 +249,13 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, i8, vis, visit_i8)
+        self.deserialize_i64(vis)
     }
     fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, i16, vis, visit_i16)
+        self.deserialize_i64(vis)
     }
     fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, i32, vis, visit_i32)
+        self.deserialize_i64(vis)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         deserialize_num!(self, i64, vis, visit_i64)
@@ -178,13 +265,13 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, u8, vis, visit_u8)
+        self.deserialize_u64(vis)
     }
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, u16, vis, visit_u16)
+        self.deserialize_u64(vis)
     }
     fn deserialize_u32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_num!(self, u32, vis, visit_u32)
+        self.deserialize_u64(vis)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         deserialize_num!(self, u64, vis, visit_u64)
@@ -201,7 +288,25 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        'outer: {
+            if !self.consume("'") {
+                break 'outer;
+            }
+            let ch = match self.escape_char()? {
+                Some(ch) => ch,
+                None => match self.rest().chars().next() {
+                    Some(ch) => ch,
+                    None => break 'outer,
+                },
+            };
+            if !self.consume("'") {
+                break 'outer;
+            }
+
+            return vis.visit_char(ch);
+        }
+
+        Error::raise(ErrorKind::ExpectedCharacter)
     }
 
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
