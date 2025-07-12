@@ -13,7 +13,14 @@ pub struct Error {
 pub enum ErrorKind {
     WontImplement,
 
-    ExpectedEof,
+    UnclosedComment,
+    DeeplyNestedComment,
+
+    InvalidNumber(lexical_core::Error),
+
+    ExpectedEnd,
+    ExpectedSemiOrEnd,
+    ExpectedBoolean,
 }
 
 //------------------------------------------------------------------------------

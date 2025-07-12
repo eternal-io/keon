@@ -5,10 +5,9 @@ use serde::{de::Visitor, Deserialize};
 type Err = extra::Err<Error>;
 
 pub fn parse<'de, T: Deserialize<'de>>(s: &'de str) -> Result<T> {
-    let mut der = Deserializer::new(s);
+    let mut der = Deserializer::new(s)?;
     let value = T::deserialize(&mut der)?;
-
-    der.finish()?.then_some(value).ok_or(Error::new(ErrorKind::ExpectedEof))
+    der.finish().and(Ok(value))
 }
 
 // pub fn parse_many<'de, T: Deserialize<'de>>(s: &'de str) -> Result<Vec<T>> {
@@ -25,8 +24,37 @@ pub struct Deserializer<'a> {
 
 impl<'a> Deserializer<'a> {
     #[inline]
-    fn new(source: &'a str) -> Self {
-        Self { source, offset: 0 }
+    pub fn new(source: &'a str) -> Result<Self> {
+        let mut der = Self { source, offset: 0 };
+        der.consume_whitespace_comment()?;
+        Ok(der)
+    }
+
+    #[inline]
+    pub fn has_reached_end(&self) -> bool {
+        self.rest().is_empty()
+    }
+
+    #[inline]
+    pub fn finish(&mut self) -> Result<()> {
+        self.consume_ws_(";")?;
+
+        if self.has_reached_end() {
+            Ok(())
+        } else {
+            Error::raise(ErrorKind::ExpectedEnd)
+        }
+    }
+
+    #[inline]
+    pub fn finish_one(&mut self) -> Result<bool> {
+        if self.consume_ws_(";")? {
+            Ok(self.has_reached_end())
+        } else if self.has_reached_end() {
+            Ok(true)
+        } else {
+            Error::raise(ErrorKind::ExpectedSemiOrEnd)
+        }
     }
 
     #[inline]
@@ -41,18 +69,78 @@ impl<'a> Deserializer<'a> {
     }
 
     #[inline]
-    pub fn finish(&mut self) -> Result<bool> {
-        // let delim: _ = text::whitespace::<_, extra::Default>();
-
-        // delim.parse(self.rest()).into_result().or()
-        // self.rest()
-        //     .chars()
-        //     .all(char::is_whitespace)
-        //     .then_some(())
-        //     .ok_or(Error::new(ErrorKind::ExpectedEof))
-
-        todo!()
+    fn consume(&mut self, pat: &'static str) -> bool {
+        match self.rest().starts_with(pat) {
+            false => false,
+            true => {
+                self.bump(pat.len());
+                true
+            }
+        }
     }
+
+    #[inline]
+    fn consume_ws_(&mut self, pat: &'static str) -> Result<bool> {
+        Ok(match self.rest().starts_with(pat) {
+            false => false,
+            true => {
+                self.bump(pat.len());
+                self.consume_whitespace_comment()?;
+                true
+            }
+        })
+    }
+
+    #[inline]
+    fn consume_while(&mut self, pred: impl FnMut(&char) -> bool) {
+        self.bump(self.rest().chars().take_while(pred).count());
+    }
+
+    #[inline]
+    fn consume_whitespace_comment(&mut self) -> Result<()> {
+        loop {
+            self.consume_while(char::is_ascii_whitespace);
+
+            if self.consume("/*") {
+                let mut depth = 1u8;
+
+                while depth != 0 {
+                    self.consume_while(|ch| *ch != '/');
+
+                    if let Some(b'*') = self.source.as_bytes().get(self.offset - 1) {
+                        self.bump(1);
+                        depth -= 1;
+                    } else if self.consume("/*") {
+                        depth += 1;
+
+                        if depth == u8::MAX {
+                            return Error::raise(ErrorKind::DeeplyNestedComment);
+                        }
+                    }
+
+                    if self.has_reached_end() {
+                        return Error::raise(ErrorKind::UnclosedComment);
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        self.consume_while(char::is_ascii_whitespace);
+
+        Ok(())
+    }
+}
+
+macro_rules! deserialize_num {
+    ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
+        let (x, o) = lexical_core::parse_partial::<$ty>($self.rest().as_bytes())
+            .map_err(ErrorKind::InvalidNumber)
+            .map_err(Error::new)?;
+        $self.bump(o);
+        $visitor.$method(x)
+    }};
 }
 
 impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
@@ -64,44 +152,52 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        if self.consume_ws_("true")? {
+            vis.visit_bool(true)
+        } else if self.consume_ws_("false")? {
+            vis.visit_bool(false)
+        } else {
+            Error::raise(ErrorKind::ExpectedBoolean)
+        }
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_i64(vis)
+        deserialize_num!(self, i8, vis, visit_i8)
     }
     fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_i64(vis)
+        deserialize_num!(self, i16, vis, visit_i16)
     }
     fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.deserialize_i64(vis)
+        deserialize_num!(self, i32, vis, visit_i32)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        deserialize_num!(self, i64, vis, visit_i64)
+    }
+    fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        deserialize_num!(self, i128, vis, visit_i128)
     }
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        deserialize_num!(self, u8, vis, visit_u8)
     }
-
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        deserialize_num!(self, u16, vis, visit_u16)
     }
-
     fn deserialize_u32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        deserialize_num!(self, u32, vis, visit_u32)
     }
-
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        deserialize_num!(self, u64, vis, visit_u64)
+    }
+    fn deserialize_u128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        deserialize_num!(self, u128, vis, visit_u128)
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        deserialize_num!(self, f32, vis, visit_f32)
     }
-
     fn deserialize_f64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        deserialize_num!(self, f64, vis, visit_f64)
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
