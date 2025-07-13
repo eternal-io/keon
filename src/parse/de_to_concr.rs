@@ -71,12 +71,12 @@ impl<'de> Deserializer<'de> {
     }
 
     #[inline]
-    const fn rest(&self) -> &str {
+    const fn rest(&self) -> &'de str {
         self.source.split_at(self.offset).1
     }
     #[inline]
-    const fn rest_bytes(&self) -> &[u8] {
-        self.rest().as_bytes()
+    const fn rest_bytes(&self) -> &'de [u8] {
+        self.source.as_bytes().split_at(self.offset).1
     }
     #[inline]
     const fn peek_byte(&self) -> Option<u8> {
@@ -84,20 +84,21 @@ impl<'de> Deserializer<'de> {
     }
     #[inline]
     const fn adjacent_to_delim(&self) -> bool {
-        match self.rest_bytes() {
-            [b'=', b'>', ..] | [b')', ..] | [b']', ..] | [b'}', ..] | [b',', ..] | [b';', ..] | [] => true,
-            _ => false,
-        }
+        matches!(
+            self.rest_bytes(),
+            [b'=', b'>', ..] | [b')', ..] | [b']', ..] | [b'}', ..] | [b',', ..] | [b';', ..] | []
+        )
     }
 
     #[inline]
-    const fn bump(&mut self, n: usize) -> Option<&[u8]> {
-        let delta = match self.source.split_at(self.offset).1.split_at_checked(n) {
-            Some((_, eps)) => eps,
-            None => return None,
-        };
-        self.offset += n;
-        Some(delta.as_bytes())
+    const fn bump(&mut self, n: usize) -> Option<&'de [u8]> {
+        if self.source.is_char_boundary(self.offset + n) {
+            let delta = self.rest_bytes().split_at(n).0;
+            self.offset += n;
+            Some(delta)
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -137,7 +138,7 @@ impl<'de> Deserializer<'de> {
     }
 
     #[inline]
-    fn consume_while(&mut self, mut pred: impl FnMut(&char) -> bool) -> &[u8] {
+    fn consume_while(&mut self, mut pred: impl FnMut(&char) -> bool) -> &'de [u8] {
         self.bump(
             self.rest()
                 .char_indices()
@@ -199,21 +200,18 @@ impl<'de> Deserializer<'de> {
 
     #[inline]
     fn __escape_common(&mut self) -> Option<u8> {
-        let byte = self
-            .peek_byte()
-            .map(|byte| {
-                Some(match byte {
-                    b'\\' => b'\\',
-                    b'\"' => b'\"',
-                    b'\'' => b'\'',
-                    b'0' => b'\0',
-                    b'n' => b'\n',
-                    b't' => b'\t',
-                    b'r' => b'\r',
-                    _ => return None,
-                })
+        let byte = self.peek_byte().and_then(|byte| {
+            Some(match byte {
+                b'\\' => b'\\',
+                b'\"' => b'\"',
+                b'\'' => b'\'',
+                b'0' => b'\0',
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'r' => b'\r',
+                _ => return None,
             })
-            .flatten();
+        });
 
         if byte.is_some() {
             self.bump(1);
@@ -226,9 +224,9 @@ impl<'de> Deserializer<'de> {
     fn __escape_byte(&mut self) -> Result<Option<u8>> {
         if self.consume("x") {
             Some({
-                if let Some(eps) = self.bump(2) {
-                    if eps[0].is_ascii_hexdigit() && eps[1].is_ascii_hexdigit() {
-                        return Ok(Some(lexical_core::parse::<u8>(eps).unwrap()));
+                if let Some(delta) = self.bump(2) {
+                    if delta[0].is_ascii_hexdigit() && delta[1].is_ascii_hexdigit() {
+                        return Ok(Some(lexical_core::parse::<u8>(delta).unwrap()));
                     }
                 }
                 self.raise(ErrorKind::InvalidByteEscape)
@@ -243,9 +241,9 @@ impl<'de> Deserializer<'de> {
     fn __escape_char(&mut self) -> Result<Option<char>> {
         if self.consume("x") {
             Some({
-                if let Some(eps) = self.bump(2) {
-                    if matches!(eps[0], b'0'..=b'7') && eps[1].is_ascii_hexdigit() {
-                        return Ok(Some(lexical_core::parse::<u8>(eps).unwrap().into()));
+                if let Some(delta) = self.bump(2) {
+                    if matches!(delta[0], b'0'..=b'7') && delta[1].is_ascii_hexdigit() {
+                        return Ok(Some(lexical_core::parse::<u8>(delta).unwrap().into()));
                     }
                 }
                 self.raise(ErrorKind::InvalidAsciiEscape)
@@ -253,8 +251,8 @@ impl<'de> Deserializer<'de> {
         } else {
             self.consume("u").then(|| {
                 let off = self.offset;
-                let eps = self.consume_while(|ch| *ch != '}');
-                let Some((b"{", eps)) = eps.split_at_checked(1) else {
+                let delta = self.consume_while(|ch| *ch != '}');
+                let Some((b'{', delta)) = delta.split_first() else {
                     return self.raise_at(off, ErrorKind::Expected("`{`"));
                 };
                 let chr = lexical_core::parse_with_options::<
@@ -264,10 +262,10 @@ impl<'de> Deserializer<'de> {
                             .mantissa_radix(16)
                             .build()
                     },
-                >(eps, &PARSE_INTEGER_OPTS)
+                >(delta, &PARSE_INTEGER_OPTS)
                 .or_else(|e| self.raise_at(off + 1, e.into()))?;
 
-                return if self.consume("}") {
+                if self.consume("}") {
                     if let Some(chr) = char::from_u32(chr) {
                         Ok(chr)
                     } else {
@@ -275,7 +273,7 @@ impl<'de> Deserializer<'de> {
                     }
                 } else {
                     self.raise(ErrorKind::Expected("`}`"))
-                };
+                }
             })
         }
         .transpose()
@@ -521,8 +519,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         'outer: {
             let outer_start = self.offset;
             let check_pure_ascii = |s: &str| -> Result<()> {
-                s.chars()
-                    .all(|ch| ch.is_ascii())
+                s.is_ascii()
                     .then_some(())
                     .ok_or_else(|| Error::new_at(outer_start, ErrorKind::NonAsciiByteString))
             };
@@ -761,10 +758,8 @@ impl<'a, 'de, const VECTOR_MODE: bool> SeqAccess<'de> for SeqAccessor<'a, 'de, V
                 if !matches!(self.peek_byte(), Some(b']')) {
                     return self.raise(ErrorKind::Expected("`,` or `]`"));
                 }
-            } else {
-                if !matches!(self.peek_byte(), Some(b')')) {
-                    return self.raise(ErrorKind::Expected("`,` or `)`"));
-                }
+            } else if !matches!(self.peek_byte(), Some(b')')) {
+                return self.raise(ErrorKind::Expected("`,` or `)`"));
             }
         }
 
@@ -805,10 +800,8 @@ impl<'a, 'de, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'a, 'de, S
             if !self.consume_ws_(":")? {
                 return self.raise(ErrorKind::Expected("`:`"));
             }
-        } else {
-            if !self.consume_ws_("=>")? {
-                return self.raise(ErrorKind::Expected("`=>`"));
-            }
+        } else if !self.consume_ws_("=>")? {
+            return self.raise(ErrorKind::Expected("`=>`"));
         }
 
         Ok(Some(val))
