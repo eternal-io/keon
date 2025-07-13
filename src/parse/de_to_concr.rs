@@ -153,15 +153,20 @@ impl<'a> Deserializer<'a> {
         fn is_whitespace(ch: &char) -> bool {
             ch.is_whitespace()
         }
-        fn is_not_newline(ch: &char) -> bool {
-            *ch != '\n'
-        }
 
         loop {
             self.consume_while(is_whitespace);
 
             if self.consume("//") {
-                self.consume_while(is_not_newline);
+                match memchr::memchr(b'\n', self.rest_bytes()) {
+                    Some(off) => {
+                        self.bump(off);
+                    }
+                    None => {
+                        self.offset = self.source.len();
+                        break;
+                    }
+                }
             } else if self.consume("/*") {
                 let mut depth = 1u8;
 
