@@ -17,6 +17,7 @@ pub enum ErrorKind {
     DeeplyNestedComment,
 
     InvalidEscape,
+    InvalidCharacter,
     InvalidNumber(lexical_core::Error),
 
     ExpectedEnd,
@@ -24,6 +25,7 @@ pub enum ErrorKind {
     ExpectedByteInteger,
     ExpectedBoolean,
     ExpectedCharacter,
+    ExpectedSymbol(u8),
 }
 
 //------------------------------------------------------------------------------
@@ -83,16 +85,16 @@ impl fmt::Display for Error {
     }
 }
 
-impl From<lexical_core::Error> for Error {
-    fn from(e: lexical_core::Error) -> Self {
-        Error::new(ErrorKind::InvalidNumber(e))
-    }
-}
-
 //------------------------------------------------------------------------------
 
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         todo!()
+    }
+}
+
+impl From<lexical_core::Error> for ErrorKind {
+    fn from(e: lexical_core::Error) -> Self {
+        ErrorKind::InvalidNumber(e)
     }
 }

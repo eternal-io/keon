@@ -69,11 +69,12 @@ impl<'a> Deserializer<'a> {
     }
 
     #[inline]
-    const fn raise<T>(&self, kind: ErrorKind) -> Result<T> {
-        Err(Error {
-            kind,
-            index: self.offset,
-        })
+    const fn rest(&self) -> &str {
+        self.source.split_at(self.offset).1
+    }
+    #[inline]
+    const fn rest_bytes(&self) -> &[u8] {
+        self.rest().as_bytes()
     }
 
     #[inline]
@@ -87,8 +88,18 @@ impl<'a> Deserializer<'a> {
     }
 
     #[inline]
-    const fn rest(&self) -> &str {
-        self.source.split_at(self.offset).1
+    const fn raise<T>(&self, kind: ErrorKind) -> Result<T> {
+        Err(Error {
+            kind,
+            index: self.offset,
+        })
+    }
+    #[inline]
+    const fn raise_rewind<T>(&self, kind: ErrorKind, dist: usize) -> Result<T> {
+        Err(Error {
+            kind,
+            index: self.offset.checked_sub(dist).unwrap(),
+        })
     }
 
     #[inline]
@@ -178,8 +189,8 @@ impl<'a> Deserializer<'a> {
     #[inline]
     fn __escape_common(&mut self) -> Result<u8> {
         'outer: {
-            if let Some(eps) = self.bump(1) {
-                return Ok(match eps[0] {
+            if let Some(byte) = self.rest_bytes().first() {
+                let byte = match byte {
                     b'\\' => b'\\',
                     b'\"' => b'\"',
                     b'\'' => b'\'',
@@ -188,7 +199,11 @@ impl<'a> Deserializer<'a> {
                     b't' => b'\t',
                     b'r' => b'\r',
                     _ => break 'outer,
-                });
+                };
+
+                self.bump(1);
+
+                return Ok(byte);
             }
         }
         self.raise(ErrorKind::InvalidEscape)
@@ -216,12 +231,31 @@ impl<'a> Deserializer<'a> {
             }
         } else if self.consume("u") {
             let eps = self.consume_while(|ch| *ch != '}');
-            let chr = lexical_core::parse::<u32>(&eps[1..]).map_err(Into::<Error>::into)?;
-            if self.consume("}") {
+            let Some((b"{", eps)) = eps.split_at_checked(1) else {
+                let dist = eps.len();
+                return self.raise_rewind(ErrorKind::ExpectedSymbol(b'{'), dist);
+            };
+
+            let dist = eps.len();
+            let chr = lexical_core::parse_with_options::<
+                u32,
+                {
+                    NumberFormatBuilder::rebuild(lexical_core::format::RUST_LITERAL)
+                        .mantissa_radix(16)
+                        .build()
+                },
+            >(eps, &PARSE_INTEGER_OPTS)
+            .or_else(|e| self.raise_rewind(e.into(), dist))?;
+
+            return if self.consume("}") {
                 if let Some(chr) = char::from_u32(chr) {
-                    return Ok(chr);
+                    Ok(chr)
+                } else {
+                    self.raise_rewind(ErrorKind::InvalidCharacter, dist + 1)
                 }
-            }
+            } else {
+                self.raise(ErrorKind::ExpectedSymbol(b'}'))
+            };
         }
         self.raise(ErrorKind::InvalidEscape)
     }
@@ -274,19 +308,19 @@ const PARSE_FLOAT_OPTS: &ParseFloatOptions = &ParseFloatOptionsBuilder::new()
 
 macro_rules! deserialize_integer {
     ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
-        let rest = $self.rest().as_bytes();
-        let off = (rest[0] == b'-') as usize;
+        let rest = $self.rest_bytes();
+        let off = matches!(rest.first(), Some(b'-')) as usize;
 
-        let (x, o) = if rest[off] == b'0' && rest[off + 1] == b'x' {
+        let (x, o) = if matches!(rest.get(off), Some(b'0')) && matches!(rest.get(off + 1), Some(b'x')) {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
-        } else if rest[off] == b'0' && rest[off + 1] == b'o' {
+        } else if matches!(rest.get(off), Some(b'0')) && matches!(rest.get(off + 1), Some(b'o')) {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_HEX>(rest, &PARSE_INTEGER_OPTS)
-        } else if rest[off] == b'0' && rest[off + 1] == b'b' {
+        } else if matches!(rest.get(off), Some(b'0')) && matches!(rest.get(off + 1), Some(b'b')) {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_OCT>(rest, &PARSE_INTEGER_OPTS)
         } else {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_BIN>(rest, &PARSE_INTEGER_OPTS)
         }
-        .map_err(Into::<Error>::into)?;
+        .or_else(|e| $self.raise(e.into()))?;
 
         $self.bump(o);
         $visitor.$method(x)
@@ -296,8 +330,8 @@ macro_rules! deserialize_integer {
 macro_rules! deserialize_float {
     ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
         let (x, o) =
-            lexical_core::parse_partial_with_options::<$ty, FLOAT_FORMAT>($self.rest().as_bytes(), &PARSE_FLOAT_OPTS)
-                .map_err(Into::<Error>::into)?;
+            lexical_core::parse_partial_with_options::<$ty, FLOAT_FORMAT>($self.rest_bytes(), &PARSE_FLOAT_OPTS)
+                .or_else(|e| $self.raise(e.into()))?;
         $self.bump(o);
         $visitor.$method(x)
     }};
