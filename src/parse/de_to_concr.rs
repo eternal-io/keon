@@ -420,10 +420,10 @@ macro_rules! maybe_deserialize_baseXX {
 impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     type Error = Error;
 
-    fn deserialize_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+    fn deserialize_any<V: Visitor<'de>>(self, _vis: V) -> Result<V::Value> {
         self.raise(ErrorKind::WontImplement)
     }
-    fn deserialize_ignored_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, _vis: V) -> Result<V::Value> {
         self.raise(ErrorKind::WontImplement)
     }
 
@@ -675,7 +675,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.raise_at(start, ErrorKind::ExpectedNewtypeStruct(name))
     }
 
-    fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, len: usize, vis: V) -> Result<V::Value> {
+    fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, _len: usize, vis: V) -> Result<V::Value> {
         let start = self.offset;
         if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("(")?
@@ -694,7 +694,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_struct<V: Visitor<'de>>(
         self,
         name: &'static str,
-        fields: &'static [&'static str],
+        _fields: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
         let start = self.offset;
