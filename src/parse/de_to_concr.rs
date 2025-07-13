@@ -1,5 +1,9 @@
 use super::*;
 use core::num::NonZeroU8;
+use core::{
+    cmp::Ordering,
+    ops::{Deref, DerefMut},
+};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
     NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
@@ -8,7 +12,6 @@ use serde::{
     de::{value::BorrowedStrDeserializer, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
     Deserialize,
 };
-use std::ops::{Deref, DerefMut};
 
 pub fn parse<'de, T: Deserialize<'de>>(s: &'de str) -> Result<T> {
     let mut der = Deserializer::new(s)?;
@@ -83,14 +86,6 @@ impl<'de> Deserializer<'de> {
         self.rest_bytes().first().copied()
     }
     #[inline]
-    const fn prev_byte(&self) -> Option<u8> {
-        if let Some(idx) = self.offset.checked_sub(1) {
-            Some(self.source.as_bytes()[idx])
-        } else {
-            None
-        }
-    }
-    #[inline]
     const fn adjacent_to_delim(&self) -> bool {
         matches!(
             self.rest_bytes(),
@@ -118,7 +113,7 @@ impl<'de> Deserializer<'de> {
         Error::raise_at(offset, kind)
     }
     #[inline]
-    const fn raise_unexp_end<T>(&self) -> Result<T> {
+    const fn raise_unexpected_end<T>(&self) -> Result<T> {
         Error::raise_at(self.source.len(), ErrorKind::UnexpectedEnd)
     }
 
@@ -215,7 +210,7 @@ impl<'de> Deserializer<'de> {
 
                 while depth != 0 {
                     let Some(off) = memchr::memchr(b'/', self.rest_bytes()) else {
-                        return self.raise_at(self.source.len(), ErrorKind::UnclosedComment);
+                        return self.raise_unexpected_end();
                     };
 
                     if let Some(b'*') = self.bump(off).unwrap().last() {
@@ -240,8 +235,8 @@ impl<'de> Deserializer<'de> {
     }
 
     #[inline]
-    fn __escape_common(&mut self) -> Option<u8> {
-        let byte = self.peek_byte().and_then(|byte| {
+    fn __escape_common(&mut self) -> Result<u8> {
+        match self.peek_byte().and_then(|byte| {
             Some(match byte {
                 b'\\' => b'\\',
                 b'\"' => b'\"',
@@ -252,22 +247,22 @@ impl<'de> Deserializer<'de> {
                 b'r' => b'\r',
                 _ => return None,
             })
-        });
-
-        if byte.is_some() {
-            self.bump(1);
+        }) {
+            None => self.raise(ErrorKind::InvalidEscape),
+            Some(byte) => {
+                self.bump(1);
+                Ok(byte)
+            }
         }
-
-        byte
     }
 
     #[inline]
-    fn __escape_byte(&mut self) -> Result<Option<u8>> {
+    fn __escape_byte(&mut self) -> Option<Result<u8>> {
         if self.consume("x") {
             Some({
                 if let Some(delta) = self.bump(2) {
                     if delta[0].is_ascii_hexdigit() && delta[1].is_ascii_hexdigit() {
-                        return Ok(Some(lexical_core::parse::<u8>(delta).unwrap()));
+                        return Some(Ok(lexical_core::parse::<u8>(delta).unwrap()));
                     }
                 }
                 self.raise(ErrorKind::InvalidByteEscape)
@@ -275,16 +270,15 @@ impl<'de> Deserializer<'de> {
         } else {
             None
         }
-        .transpose()
     }
 
     #[inline]
-    fn __escape_char(&mut self) -> Result<Option<char>> {
+    fn __escape_char(&mut self) -> Option<Result<char>> {
         if self.consume("x") {
             Some({
                 if let Some(delta) = self.bump(2) {
                     if matches!(delta[0], b'0'..=b'7') && delta[1].is_ascii_hexdigit() {
-                        return Ok(Some(lexical_core::parse::<u8>(delta).unwrap().into()));
+                        return Some(Ok(lexical_core::parse::<u8>(delta).unwrap().into()));
                     }
                 }
                 self.raise(ErrorKind::InvalidAsciiEscape)
@@ -317,35 +311,41 @@ impl<'de> Deserializer<'de> {
                 }
             })
         }
-        .transpose()
     }
 
     #[inline]
-    fn escape_byte(&mut self) -> Result<Option<u8>> {
+    fn escape_byte(&mut self) -> Option<Result<u8>> {
         if self.consume("\\") {
-            Ok(self.__escape_byte()?.or_else(|| self.__escape_common()))
+            self.__escape_byte().or_else(|| Some(self.__escape_common()))
         } else {
-            self.raise(ErrorKind::InvalidEscape)
+            None
         }
     }
 
     #[inline]
-    fn escape_char(&mut self) -> Result<Option<char>> {
+    fn escape_char(&mut self) -> Option<Result<char>> {
         if self.consume("\\") {
-            Ok(self.__escape_char()?.or_else(|| self.__escape_common().map(Into::into)))
+            self.__escape_char()
+                .or_else(|| Some(self.__escape_common().map(Into::into)))
         } else {
-            self.raise(ErrorKind::InvalidEscape)
+            None
         }
     }
 
     #[inline]
-    fn access_tuple<'a>(&'a mut self) -> SeqAccessor<'a, 'de, false> {
-        SeqAccessor { der: self }
+    fn access_tuple<'a>(&'a mut self, req_trailing_comma: bool) -> SeqAccessor<'a, 'de, false> {
+        SeqAccessor {
+            der: self,
+            req_trailing_comma,
+        }
     }
 
     #[inline]
     fn access_seq<'a>(&'a mut self) -> SeqAccessor<'a, 'de, true> {
-        SeqAccessor { der: self }
+        SeqAccessor {
+            der: self,
+            req_trailing_comma: false,
+        }
     }
 
     #[inline]
@@ -430,7 +430,7 @@ macro_rules! maybe_deserialize_baseXX {
     ( $self:ident, $indicator:literal, $decoder:ident, $visitor:ident ) => {{
         if $self.consume($indicator) {
             let Some(off) = ::memchr::memchr(b'"', $self.rest_bytes()) else {
-                return $self.raise_unexp_end();
+                return $self.raise_unexpected_end();
             };
 
             let buf = $decoder.decode(&$self.rest_bytes()[..off]).map_err(|e| {
@@ -491,8 +491,8 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         if self.consume("b'") {
             let start = self.offset;
             'outer: {
-                let byte = match self.escape_byte()? {
-                    Some(byte) => byte,
+                let byte = match self.escape_byte() {
+                    Some(byte) => byte?,
                     None => match self.rest().chars().next() {
                         None => break 'outer,
                         Some(ch) => match ch.try_into() {
@@ -541,8 +541,8 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 break 'outer;
             }
 
-            let ch = match self.escape_char()? {
-                Some(ch) => ch,
+            let ch = match self.escape_char() {
+                Some(ch) => ch?,
                 None => match self.rest().chars().next() {
                     Some(ch) => ch,
                     None => break 'outer,
@@ -563,7 +563,84 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.deserialize_str(vis)
     }
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        if self.consume("|") {
+            /* paragraph */
+            todo!()
+        }
+
+        let start = self.offset;
+        'outer: {
+            /* string */
+            let enclosure = self.consume_while(|ch| *ch == '`').len();
+            if enclosure >= u8::MAX as _ {
+                return self.raise(ErrorKind::ThickRawEnclosure);
+            }
+
+            if !self.consume("\"") {
+                break 'outer;
+            }
+
+            let inner_start = self.offset;
+            if enclosure > 0 {
+                /* raw string */
+                loop {
+                    let Some(off) = memchr::memchr(b'"', self.rest_bytes()) else {
+                        return self.raise_unexpected_end();
+                    };
+
+                    self.bump(off + 1);
+
+                    let inner_end = self.offset - 1;
+                    return match self.consume_while(|ch| *ch == '`').len().cmp(&enclosure) {
+                        Ordering::Less => continue,
+                        Ordering::Equal => {
+                            self.consume_whitespace_comment()?;
+                            vis.visit_borrowed_str(&self.source[inner_start..inner_end])
+                        }
+                        Ordering::Greater => self.raise_at(inner_end + 2, ErrorKind::ThickRawEnclosure),
+                    };
+                }
+            } else {
+                /* normal string */
+                let mut buf = String::new();
+                let mut cursor = self.offset;
+
+                loop {
+                    let Some(off) = memchr::memchr3(b'\\', b'\"', b'\n', self.rest_bytes()) else {
+                        return self.raise_unexpected_end();
+                    };
+
+                    self.bump(off);
+                    match self.peek_byte().unwrap() {
+                        b'\\' => {
+                            let str = &self.source[cursor..self.offset];
+                            let ch = self.escape_char().unwrap()?;
+                            cursor = self.offset;
+                            buf.push_str(str);
+                            buf.push(ch);
+                        }
+                        b'\"' => {
+                            self.bump(1);
+                            break;
+                        }
+                        b'\n' => return self.raise(ErrorKind::MultilineNormalString),
+
+                        _ => unreachable!(),
+                    }
+                }
+
+                let inner_end = self.offset - 1;
+                self.consume_whitespace_comment()?;
+
+                if buf.is_empty() {
+                    return vis.visit_borrowed_str(&self.source[inner_start..inner_end]);
+                } else {
+                    return vis.visit_string(buf);
+                }
+            }
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedTextual)
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
@@ -600,24 +677,20 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 /* raw bytes */
                 loop {
                     let Some(off) = memchr::memchr(b'"', self.rest_bytes()) else {
-                        return self.raise_unexp_end();
+                        return self.raise_unexpected_end();
                     };
 
                     self.bump(off + 1);
 
-                    if self
-                        .rest_bytes()
-                        .get(..enclosure)
-                        .map(|r| r.iter().all(|byte| *byte == b'`'))
-                        .unwrap_or(false)
-                    {
-                        let bytes = pure_ascii(&self.source[inner_start..self.offset - 1])?;
-
-                        self.bump(enclosure);
-                        self.consume_whitespace_comment()?;
-
-                        return vis.visit_borrowed_bytes(bytes);
-                    }
+                    let inner_end = self.offset - 1;
+                    return match self.consume_while(|ch| *ch == '`').len().cmp(&enclosure) {
+                        Ordering::Less => continue,
+                        Ordering::Equal => {
+                            self.consume_whitespace_comment()?;
+                            vis.visit_borrowed_bytes(pure_ascii(&self.source[inner_start..inner_end])?)
+                        }
+                        Ordering::Greater => self.raise_at(inner_end + 2, ErrorKind::ThickRawEnclosure),
+                    };
                 }
             } else {
                 /* normal bytes */
@@ -626,18 +699,15 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
                 loop {
                     let Some(off) = memchr::memchr3(b'\\', b'\"', b'\n', self.rest_bytes()) else {
-                        return self.raise_unexp_end();
+                        return self.raise_unexpected_end();
                     };
 
                     self.bump(off);
-
                     match self.peek_byte().unwrap() {
                         b'\\' => {
                             let bytes = pure_ascii(&self.source[cursor..self.offset])?;
-
-                            let byte = self.escape_byte()?.unwrap();
+                            let byte = self.escape_byte().unwrap()?;
                             cursor = self.offset;
-
                             buf.extend_from_slice(bytes);
                             buf.push(byte);
                         }
@@ -719,7 +789,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("(")?
         {
-            let val = vis.visit_seq(self.access_tuple())?;
+            let val = vis.visit_seq(self.access_tuple(false))?;
             if !self.consume_ws_(")")? {
                 return self.raise(ErrorKind::Expected("`)`"));
             }
@@ -756,10 +826,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
         let start = self.offset;
         if self.consume_ws_("(")? {
-            let val = vis.visit_seq(self.access_tuple())?;
-            if len == 1 && !matches!(self.prev_byte(), Some(b',')) {
-                return self.raise(ErrorKind::Expected("`,` for a tuple of length 1"));
-            }
+            let val = vis.visit_seq(self.access_tuple(len == 1))?;
             if !self.consume_ws_(")")? {
                 return self.raise(ErrorKind::Expected("`)`"));
             }
@@ -830,6 +897,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
 struct SeqAccessor<'a, 'de, const VECTOR_MODE: bool> {
     der: &'a mut Deserializer<'de>,
+    req_trailing_comma: bool,
 }
 
 impl<'a, 'de, const VECTOR_MODE: bool> Deref for SeqAccessor<'a, 'de, VECTOR_MODE> {
@@ -862,6 +930,8 @@ impl<'a, 'de, const VECTOR_MODE: bool> SeqAccess<'de> for SeqAccessor<'a, 'de, V
                 }
             } else if !matches!(self.peek_byte(), Some(b')')) {
                 return self.raise(ErrorKind::Expected("`,` or `)`"));
+            } else if self.req_trailing_comma {
+                return self.raise(ErrorKind::Expected("`,` for a tuple of length 1"));
             }
         }
 
@@ -973,7 +1043,7 @@ impl<'de> VariantAccess<'de> for &mut Deserializer<'de> {
             return self.raise(ErrorKind::ExpectedNewtypeVariant);
         }
 
-        let val = vis.visit_seq(self.access_tuple())?;
+        let val = vis.visit_seq(self.access_tuple(false))?;
         if !self.consume_ws_(")")? {
             return self.raise(ErrorKind::Expected("`)`"));
         }

@@ -15,7 +15,6 @@ pub enum ErrorKind {
     WontImplement,
 
     UnderscoreIdent,
-    UnclosedComment,
     DeeplyNestedComment,
     ThickRawEnclosure,
     NonAsciiByteString,
@@ -35,6 +34,7 @@ pub enum ErrorKind {
     ExpectedOption,
     ExpectedBoolean,
     ExpectedCharacter,
+    ExpectedTextual,
     ExpectedByteInteger,
     ExpectedByteString,
     ExpectedSequence,
