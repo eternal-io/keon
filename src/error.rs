@@ -9,6 +9,7 @@ pub struct Error {
     pub kind: ErrorKind,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
     WontImplement,
@@ -32,6 +33,10 @@ pub enum ErrorKind {
     ExpectedCharacter,
     ExpectedByteInteger,
     ExpectedByteString,
+    ExpectedUnit,
+    ExpectedUnitStruct(&'static str),
+    ExpectedNewtypeStruct(&'static str),
+    ExpectedTupleStruct(&'static str),
     ExpectedSymbol(u8),
 }
 

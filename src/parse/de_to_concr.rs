@@ -4,7 +4,10 @@ use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
     NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
 };
-use serde::{de::Visitor, Deserialize};
+use serde::{
+    de::{DeserializeSeed, SeqAccess, Visitor},
+    Deserialize,
+};
 
 pub fn parse<'de, T: Deserialize<'de>>(s: &'de str) -> Result<T> {
     let mut der = Deserializer::new(s)?;
@@ -77,6 +80,13 @@ impl<'a> Deserializer<'a> {
     #[inline]
     const fn peek_byte(&self) -> Option<u8> {
         self.rest_bytes().first().copied()
+    }
+    #[inline]
+    const fn adjacent_to_delim(&self) -> bool {
+        match self.rest_bytes() {
+            [b'=', b'>', ..] | [b')', ..] | [b']', ..] | [b'}', ..] | [b',', ..] | [b';', ..] | [] => true,
+            _ => false,
+        }
     }
 
     #[inline]
@@ -357,6 +367,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.raise(ErrorKind::WontImplement)
     }
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        self.raise(ErrorKind::WontImplement)
+    }
 
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if self.consume_ws_("true")? {
@@ -563,35 +576,64 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        self.consume_ws_("?")?;
+        if self.adjacent_to_delim() {
+            vis.visit_none()
+        } else {
+            vis.visit_some(self)
+        }
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        let start = self.offset;
+        if self.consume_ws_("(")? && self.consume_ws_(")")? {
+            return vis.visit_unit();
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedUnit)
     }
 
+    //------------------------------------------------------------------------------
+
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
-        todo!()
+        let start = self.offset;
+        if self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")? {
+            return vis.visit_unit();
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedUnitStruct(name))
     }
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
-        todo!()
-    }
+        let start = self.offset;
+        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
+            && self.consume_ws_("(")?
+        {
+            let val = vis.visit_newtype_struct(&mut *self)?;
+            if !self.consume_ws_(")")? {
+                return self.raise(ErrorKind::ExpectedSymbol(b')'));
+            }
 
-    fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
-    }
+            return Ok(val);
+        }
 
-    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
-        todo!()
+        self.raise_at(start, ErrorKind::ExpectedNewtypeStruct(name))
     }
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, len: usize, vis: V) -> Result<V::Value> {
-        todo!()
-    }
+        let start = self.offset;
+        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
+            && self.consume_ws_("(")?
+        {
+            let val = vis.visit_seq(&mut *self)?;
+            if !self.consume_ws_(")")? {
+                return self.raise(ErrorKind::ExpectedSymbol(b')'));
+            }
 
-    fn deserialize_map<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+            return Ok(val);
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedTupleStruct(name))
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -602,6 +644,22 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     ) -> Result<V::Value> {
         todo!()
     }
+
+    //------------------------------------------------------------------------------
+
+    fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        todo!()
+    }
+
+    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
+        todo!()
+    }
+
+    fn deserialize_map<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        todo!()
+    }
+
+    //------------------------------------------------------------------------------
 
     fn deserialize_enum<V: Visitor<'de>>(
         self,
@@ -615,8 +673,18 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         todo!()
     }
+}
 
-    fn deserialize_ignored_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+impl<'de> SeqAccess<'de> for &mut Deserializer<'de> {
+    type Error = Error;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
+        if self.adjacent_to_delim() {
+            Ok(None)
+        } else {
+            let val = seed.deserialize(&mut **self)?;
+            self.consume_ws_(",")?;
+            Ok(Some(val))
+        }
     }
 }
