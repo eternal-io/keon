@@ -1,12 +1,10 @@
 use super::*;
-use chumsky::prelude::*;
 use core::num::NonZeroU8;
+use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
     NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
 };
 use serde::{de::Visitor, Deserialize};
-
-type Err = extra::Err<Error>;
 
 pub fn parse<'de, T: Deserialize<'de>>(s: &'de str) -> Result<T> {
     let mut der = Deserializer::new(s)?;
@@ -76,6 +74,10 @@ impl<'a> Deserializer<'a> {
     const fn rest_bytes(&self) -> &[u8] {
         self.rest().as_bytes()
     }
+    #[inline]
+    const fn peek_byte(&self) -> Option<u8> {
+        self.rest_bytes().first().copied()
+    }
 
     #[inline]
     const fn bump(&mut self, n: usize) -> Option<&[u8]> {
@@ -93,7 +95,11 @@ impl<'a> Deserializer<'a> {
     }
     #[inline]
     const fn raise_at<T>(&self, offset: usize, kind: ErrorKind) -> Result<T> {
-        Err(Error { index: offset, kind })
+        Error::raise_at(offset, kind)
+    }
+    #[inline]
+    const fn raise_unexp_end<T>(&self) -> Result<T> {
+        Error::raise_at(self.source.len(), ErrorKind::UnexpectedEnd)
     }
 
     #[inline]
@@ -140,9 +146,6 @@ impl<'a> Deserializer<'a> {
         fn is_not_newline(ch: &char) -> bool {
             *ch != '\n'
         }
-        fn is_not_slash(ch: &char) -> bool {
-            *ch != '/'
-        }
 
         loop {
             self.consume_while(is_whitespace);
@@ -153,9 +156,11 @@ impl<'a> Deserializer<'a> {
                 let mut depth = 1u8;
 
                 while depth != 0 {
-                    self.consume_while(is_not_slash);
+                    let Some(off) = memchr::memchr(b'/', self.rest_bytes()) else {
+                        return self.raise_at(self.source.len(), ErrorKind::UnclosedComment);
+                    };
 
-                    if let Some(b'*') = self.source.as_bytes().get(self.offset - 1) {
+                    if let Some(b'*') = self.bump(off).unwrap().last() {
                         self.bump(1);
                         depth -= 1;
                     } else if self.consume("/*") {
@@ -164,10 +169,6 @@ impl<'a> Deserializer<'a> {
                         if depth == u8::MAX {
                             return self.raise(ErrorKind::DeeplyNestedComment);
                         }
-                    }
-
-                    if self.has_reached_end() {
-                        return self.raise(ErrorKind::UnclosedComment);
                     }
                 }
             } else {
@@ -183,7 +184,7 @@ impl<'a> Deserializer<'a> {
     #[inline]
     fn __escape_common(&mut self) -> Result<u8> {
         'outer: {
-            if let Some(byte) = self.rest_bytes().first() {
+            if let Some(byte) = self.peek_byte() {
                 let byte = match byte {
                     b'\\' => b'\\',
                     b'\"' => b'\"',
@@ -329,6 +330,26 @@ macro_rules! deserialize_float {
     }};
 }
 
+macro_rules! maybe_deserialize_baseXX {
+    ( $self:ident, $indicator:literal, $decoder:ident, $visitor:ident ) => {{
+        if $self.consume($indicator) {
+            let Some(off) = ::memchr::memchr(b'"', $self.rest_bytes()) else {
+                return $self.raise_unexp_end();
+            };
+
+            let buf = $decoder.decode(&$self.rest_bytes()[..off]).map_err(|e| {
+                let mut e: Error = e.into();
+                e.pos += $self.offset;
+                e
+            })?;
+
+            $self.bump(off + 1);
+
+            return $visitor.visit_byte_buf(buf);
+        }
+    }};
+}
+
 impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     #![allow(unused_variables)]
     type Error = Error;
@@ -444,7 +465,101 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.deserialize_bytes(vis)
     }
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        'outer: {
+            let outer_start = self.offset;
+            let check_pure_ascii = |s: &str| -> Result<()> {
+                s.chars()
+                    .all(|ch| ch.is_ascii())
+                    .then_some(())
+                    .ok_or_else(|| Error::new_at(outer_start, ErrorKind::NonAsciiByteString))
+            };
+
+            if !self.consume("b") {
+                break 'outer;
+            }
+
+            maybe_deserialize_baseXX!(self, "64\"", BASE64URL_NOPAD, vis);
+            maybe_deserialize_baseXX!(self, "32\"", BASE32_NOPAD, vis);
+            maybe_deserialize_baseXX!(self, "16\"", HEXUPPER_PERMISSIVE, vis);
+
+            let enclosure = self.consume_while(|ch| *ch == '`').len();
+            if enclosure >= u8::MAX as _ {
+                return self.raise(ErrorKind::ThickRawEnclosure);
+            }
+
+            if !self.consume("\"") {
+                break 'outer;
+            }
+
+            let inner_start = self.offset;
+            if enclosure > 0 {
+                /* raw bytes */
+                loop {
+                    let Some(off) = memchr::memchr(b'"', self.rest_bytes()) else {
+                        return self.raise_unexp_end();
+                    };
+
+                    self.bump(off + 1);
+
+                    if self
+                        .rest_bytes()
+                        .get(..enclosure)
+                        .map(|r| r.iter().all(|byte| *byte == b'`'))
+                        .unwrap_or(false)
+                    {
+                        let bytes = &self.source[inner_start..self.offset - 1];
+                        check_pure_ascii(bytes)?;
+
+                        self.bump(enclosure);
+
+                        return vis.visit_borrowed_bytes(bytes.as_bytes());
+                    }
+                }
+            } else {
+                /* normal bytes */
+                let mut buf = Vec::new();
+                let mut cursor = self.offset;
+
+                loop {
+                    let Some(off) = memchr::memchr3(b'\\', b'\"', b'\n', self.rest_bytes()) else {
+                        return self.raise_unexp_end();
+                    };
+
+                    self.bump(off);
+
+                    match self.peek_byte().unwrap() {
+                        b'\\' => {
+                            let bytes = &self.source[cursor..self.offset];
+                            check_pure_ascii(bytes)?;
+
+                            let byte = self.escape_byte()?.unwrap();
+                            cursor = self.offset;
+
+                            buf.extend_from_slice(bytes.as_bytes());
+                            buf.push(byte);
+                        }
+                        b'\"' => {
+                            self.bump(1);
+                            break;
+                        }
+                        b'\n' => return self.raise(ErrorKind::LinebreakNormalString),
+
+                        _ => unreachable!(),
+                    }
+                }
+
+                if buf.is_empty() {
+                    let bytes = &self.source[inner_start..self.offset - 1];
+                    check_pure_ascii(bytes)?;
+
+                    return vis.visit_borrowed_bytes(bytes.as_bytes());
+                }
+
+                return vis.visit_byte_buf(buf);
+            }
+        }
+
+        self.raise(ErrorKind::ExpectedByteString)
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {

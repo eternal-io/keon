@@ -5,8 +5,8 @@ pub type Result<T> = ::core::result::Result<T, Error>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    pub pos: usize,
     pub kind: ErrorKind,
-    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,34 +15,41 @@ pub enum ErrorKind {
 
     UnclosedComment,
     DeeplyNestedComment,
+    ThickRawEnclosure,
+    NonAsciiByteString,
+    LinebreakNormalString,
 
     InvalidEscape,
     InvalidCharacter,
     InvalidNumber(lexical_core::Error),
+    InvalidBytesEncoding(data_encoding::DecodeKind),
+
+    UnexpectedEnd,
 
     ExpectedEnd,
     ExpectedSemiOrEnd,
-    ExpectedByteInteger,
     ExpectedBoolean,
     ExpectedCharacter,
+    ExpectedByteInteger,
+    ExpectedByteString,
     ExpectedSymbol(u8),
 }
 
 //------------------------------------------------------------------------------
 
 impl Error {
-    pub(crate) fn new(kind: ErrorKind) -> Self {
-        Self { kind, index: 0 }
+    pub(crate) const fn new_at(pos: usize, kind: ErrorKind) -> Self {
+        Self { pos, kind }
     }
 
-    pub(crate) fn raise<T>(kind: ErrorKind) -> Result<T> {
-        Err(Self::new(kind))
+    pub(crate) const fn raise_at<T>(pos: usize, kind: ErrorKind) -> Result<T> {
+        Err(Self::new_at(pos, kind))
     }
 
-    pub(crate) fn with_kind(mut self, kind: ErrorKind) -> Self {
-        self.kind = kind;
-        self
-    }
+    // pub(crate) const fn with_kind(mut self, kind: ErrorKind) -> Self {
+    //     self.kind = kind;
+    //     self
+    // }
 }
 
 // impl TryFrom<Vec<Error>> for Error {
@@ -85,6 +92,15 @@ impl fmt::Display for Error {
     }
 }
 
+impl From<data_encoding::DecodeError> for Error {
+    fn from(e: data_encoding::DecodeError) -> Self {
+        Self {
+            pos: e.position,
+            kind: e.kind.into(),
+        }
+    }
+}
+
 //------------------------------------------------------------------------------
 
 impl fmt::Display for ErrorKind {
@@ -96,5 +112,11 @@ impl fmt::Display for ErrorKind {
 impl From<lexical_core::Error> for ErrorKind {
     fn from(e: lexical_core::Error) -> Self {
         ErrorKind::InvalidNumber(e)
+    }
+}
+
+impl From<data_encoding::DecodeKind> for ErrorKind {
+    fn from(e: data_encoding::DecodeKind) -> Self {
+        ErrorKind::InvalidBytesEncoding(e)
     }
 }
