@@ -89,17 +89,11 @@ impl<'a> Deserializer<'a> {
 
     #[inline]
     const fn raise<T>(&self, kind: ErrorKind) -> Result<T> {
-        Err(Error {
-            kind,
-            index: self.offset,
-        })
+        self.raise_at(self.offset, kind)
     }
     #[inline]
-    const fn raise_rewind<T>(&self, kind: ErrorKind, dist: usize) -> Result<T> {
-        Err(Error {
-            kind,
-            index: self.offset.checked_sub(dist).unwrap(),
-        })
+    const fn raise_at<T>(&self, offset: usize, kind: ErrorKind) -> Result<T> {
+        Err(Error { index: offset, kind })
     }
 
     #[inline]
@@ -230,13 +224,11 @@ impl<'a> Deserializer<'a> {
                 }
             }
         } else if self.consume("u") {
+            let off = self.offset;
             let eps = self.consume_while(|ch| *ch != '}');
             let Some((b"{", eps)) = eps.split_at_checked(1) else {
-                let dist = eps.len();
-                return self.raise_rewind(ErrorKind::ExpectedSymbol(b'{'), dist);
+                return self.raise_at(off, ErrorKind::ExpectedSymbol(b'{'));
             };
-
-            let dist = eps.len();
             let chr = lexical_core::parse_with_options::<
                 u32,
                 {
@@ -245,13 +237,13 @@ impl<'a> Deserializer<'a> {
                         .build()
                 },
             >(eps, &PARSE_INTEGER_OPTS)
-            .or_else(|e| self.raise_rewind(e.into(), dist))?;
+            .or_else(|e| self.raise_at(off + 1, e.into()))?;
 
             return if self.consume("}") {
                 if let Some(chr) = char::from_u32(chr) {
                     Ok(chr)
                 } else {
-                    self.raise_rewind(ErrorKind::InvalidCharacter, dist + 1)
+                    self.raise_at(off + 1, ErrorKind::InvalidCharacter)
                 }
             } else {
                 self.raise(ErrorKind::ExpectedSymbol(b'}'))
@@ -384,8 +376,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                         },
                     },
                 };
+
                 if !self.consume("'") {
-                    break 'outer;
+                    return self.raise(ErrorKind::ExpectedSymbol(b'\''));
                 }
 
                 return vis.visit_u8(byte);
@@ -421,6 +414,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             if !self.consume("'") {
                 break 'outer;
             }
+
             let ch = match self.escape_char()? {
                 Some(ch) => ch,
                 None => match self.rest().chars().next() {
@@ -428,8 +422,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     None => break 'outer,
                 },
             };
+
             if !self.consume("'") {
-                break 'outer;
+                return self.raise(ErrorKind::ExpectedSymbol(b'\''));
             }
 
             return vis.visit_char(ch);
