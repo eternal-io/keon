@@ -5,9 +5,10 @@ use lexical_core::{
     NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
 };
 use serde::{
-    de::{DeserializeSeed, SeqAccess, Visitor},
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
     Deserialize,
 };
+use std::ops::{Deref, DerefMut};
 
 pub fn parse<'de, T: Deserialize<'de>>(s: &'de str) -> Result<T> {
     let mut der = Deserializer::new(s)?;
@@ -28,14 +29,14 @@ pub fn parse_many<'de, T: Deserialize<'de>>(s: &'de str) -> Result<Vec<T>> {
     Ok(values)
 }
 
-pub struct Deserializer<'a> {
-    source: &'a str,
+pub struct Deserializer<'de> {
+    source: &'de str,
     offset: usize,
 }
 
-impl<'a> Deserializer<'a> {
+impl<'de> Deserializer<'de> {
     #[inline]
-    pub fn new(source: &'a str) -> Result<Self> {
+    pub fn new(source: &'de str) -> Result<Self> {
         let mut der = Self { source, offset: 0 };
         der.consume_whitespace_comment()?;
         Ok(der)
@@ -254,7 +255,7 @@ impl<'a> Deserializer<'a> {
                 let off = self.offset;
                 let eps = self.consume_while(|ch| *ch != '}');
                 let Some((b"{", eps)) = eps.split_at_checked(1) else {
-                    return self.raise_at(off, ErrorKind::ExpectedSymbol(b'{'));
+                    return self.raise_at(off, ErrorKind::Expected("`{`"));
                 };
                 let chr = lexical_core::parse_with_options::<
                     u32,
@@ -273,7 +274,7 @@ impl<'a> Deserializer<'a> {
                         self.raise_at(off + 1, ErrorKind::InvalidUnicodeEscape)
                     }
                 } else {
-                    self.raise(ErrorKind::ExpectedSymbol(b'}'))
+                    self.raise(ErrorKind::Expected("`}`"))
                 };
             })
         }
@@ -296,6 +297,26 @@ impl<'a> Deserializer<'a> {
         } else {
             self.raise(ErrorKind::InvalidEscape)
         }
+    }
+
+    #[inline]
+    fn access_tuple<'a>(&'a mut self) -> SeqAccessor<'a, 'de, false> {
+        SeqAccessor { der: self }
+    }
+
+    #[inline]
+    fn access_vector<'a>(&'a mut self) -> SeqAccessor<'a, 'de, true> {
+        SeqAccessor { der: self }
+    }
+
+    #[inline]
+    fn access_map<'a>(&'a mut self) -> MapAccessor<'a, 'de, false> {
+        MapAccessor { der: self }
+    }
+
+    #[inline]
+    fn access_struct<'a>(&'a mut self) -> MapAccessor<'a, 'de, true> {
+        MapAccessor { der: self }
     }
 }
 
@@ -433,7 +454,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 };
 
                 if !self.consume("'") {
-                    return self.raise(ErrorKind::ExpectedSymbol(b'\''));
+                    return self.raise(ErrorKind::Expected("`'`"));
                 }
 
                 return vis.visit_u8(byte);
@@ -479,7 +500,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             };
 
             if !self.consume("'") {
-                return self.raise(ErrorKind::ExpectedSymbol(b'\''));
+                return self.raise(ErrorKind::Expected("`'`"));
             }
 
             return vis.visit_char(ch);
@@ -632,7 +653,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         {
             let val = vis.visit_newtype_struct(&mut *self)?;
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::ExpectedSymbol(b')'));
+                return self.raise(ErrorKind::Expected("`)`"));
             }
 
             return Ok(val);
@@ -646,9 +667,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("(")?
         {
-            let val = vis.visit_seq(&mut *self)?;
+            let val = vis.visit_seq(self.access_tuple())?;
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::ExpectedSymbol(b')'));
+                return self.raise(ErrorKind::Expected("`)`"));
             }
 
             return Ok(val);
@@ -663,7 +684,19 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         fields: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
-        todo!()
+        let start = self.offset;
+        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
+            && self.consume_ws_("{")?
+        {
+            let val = vis.visit_map(self.access_struct())?;
+            if !self.consume_ws_("}")? {
+                return self.raise(ErrorKind::Expected("`}`"));
+            }
+
+            return Ok(val);
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedStruct(name))
     }
 
     //------------------------------------------------------------------------------
@@ -696,16 +729,100 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 }
 
-impl<'de> SeqAccess<'de> for &mut Deserializer<'de> {
+//------------------------------------------------------------------------------
+
+struct SeqAccessor<'a, 'de, const VECTOR_MODE: bool> {
+    der: &'a mut Deserializer<'de>,
+}
+
+impl<'a, 'de, const VECTOR_MODE: bool> Deref for SeqAccessor<'a, 'de, VECTOR_MODE> {
+    type Target = Deserializer<'de>;
+    fn deref(&self) -> &Self::Target {
+        self.der
+    }
+}
+
+impl<'a, 'de, const VECTOR_MODE: bool> DerefMut for SeqAccessor<'a, 'de, VECTOR_MODE> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.der
+    }
+}
+
+impl<'a, 'de, const VECTOR_MODE: bool> SeqAccess<'de> for SeqAccessor<'a, 'de, VECTOR_MODE> {
     type Error = Error;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
         if self.adjacent_to_delim() {
-            Ok(None)
-        } else {
-            let val = seed.deserialize(&mut **self)?;
-            self.consume_ws_(",")?;
-            Ok(Some(val))
+            return Ok(None);
         }
+
+        let val = seed.deserialize(&mut **self)?;
+
+        if !self.consume_ws_(",")? {
+            if VECTOR_MODE {
+                if !matches!(self.peek_byte(), Some(b']')) {
+                    return self.raise(ErrorKind::Expected("`,` or `]`"));
+                }
+            } else {
+                if !matches!(self.peek_byte(), Some(b')')) {
+                    return self.raise(ErrorKind::Expected("`,` or `)`"));
+                }
+            }
+        }
+
+        Ok(Some(val))
+    }
+}
+
+//------------------------------------------------------------------------------
+
+struct MapAccessor<'a, 'de, const STRUCT_MODE: bool> {
+    der: &'a mut Deserializer<'de>,
+}
+
+impl<'a, 'de, const STRUCT_MODE: bool> Deref for MapAccessor<'a, 'de, STRUCT_MODE> {
+    type Target = Deserializer<'de>;
+    fn deref(&self) -> &Self::Target {
+        self.der
+    }
+}
+
+impl<'a, 'de, const STRUCT_MODE: bool> DerefMut for MapAccessor<'a, 'de, STRUCT_MODE> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.der
+    }
+}
+
+impl<'a, 'de, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'a, 'de, STRUCT_MODE> {
+    type Error = Error;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
+        if self.adjacent_to_delim() {
+            return Ok(None);
+        }
+
+        let val = seed.deserialize(&mut **self)?;
+
+        if STRUCT_MODE {
+            if !self.consume_ws_(":")? {
+                return self.raise(ErrorKind::Expected("`:`"));
+            }
+        } else {
+            if !self.consume_ws_("=>")? {
+                return self.raise(ErrorKind::Expected("`=>`"));
+            }
+        }
+
+        Ok(Some(val))
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
+        let val = seed.deserialize(&mut **self)?;
+
+        if !self.consume_ws_(",")? && !matches!(self.peek_byte(), Some(b'}')) {
+            return self.raise(ErrorKind::Expected("`,` or `}`"));
+        }
+
+        Ok(val)
     }
 }

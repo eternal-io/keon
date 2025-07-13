@@ -39,7 +39,8 @@ pub enum ErrorKind {
     ExpectedUnitStruct(&'static str),
     ExpectedNewtypeStruct(&'static str),
     ExpectedTupleStruct(&'static str),
-    ExpectedSymbol(u8),
+    ExpectedStruct(&'static str),
+    Expected(&'static str),
 }
 
 //------------------------------------------------------------------------------
