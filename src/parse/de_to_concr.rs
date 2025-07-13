@@ -283,7 +283,7 @@ const INTEGER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
     .mantissa_radix(2)
     .build();
 
-const PARSE_INTEGER_OPTS: &ParseIntegerOptions = &ParseIntegerOptionsBuilder::new()
+const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
     .no_multi_digit(false)
     .build_unchecked();
 
@@ -292,7 +292,7 @@ const FLOAT_FORMAT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
     .no_special(false)
     .build();
 
-const PARSE_FLOAT_OPTS: &ParseFloatOptions = &ParseFloatOptionsBuilder::new()
+const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
     .lossy(false)
     .nan_string(Some(b"NaN"))
     .inf_string(Some(b"inf"))
