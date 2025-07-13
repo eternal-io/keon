@@ -192,10 +192,11 @@ impl<'a> Deserializer<'a> {
     }
 
     #[inline]
-    fn __escape_common(&mut self) -> Result<u8> {
-        'outer: {
-            if let Some(byte) = self.peek_byte() {
-                let byte = match byte {
+    fn __escape_common(&mut self) -> Option<u8> {
+        let byte = self
+            .peek_byte()
+            .map(|byte| {
+                Some(match byte {
                     b'\\' => b'\\',
                     b'\"' => b'\"',
                     b'\'' => b'\'',
@@ -203,78 +204,93 @@ impl<'a> Deserializer<'a> {
                     b'n' => b'\n',
                     b't' => b'\t',
                     b'r' => b'\r',
-                    _ => break 'outer,
+                    _ => return None,
+                })
+            })
+            .flatten();
+
+        if byte.is_some() {
+            self.bump(1);
+        }
+
+        byte
+    }
+
+    #[inline]
+    fn __escape_byte(&mut self) -> Result<Option<u8>> {
+        if self.consume("x") {
+            Some({
+                if let Some(eps) = self.bump(2) {
+                    if eps[0].is_ascii_hexdigit() && eps[1].is_ascii_hexdigit() {
+                        return Ok(Some(lexical_core::parse::<u8>(eps).unwrap()));
+                    }
+                }
+                self.raise(ErrorKind::InvalidByteEscape)
+            })
+        } else {
+            None
+        }
+        .transpose()
+    }
+
+    #[inline]
+    fn __escape_char(&mut self) -> Result<Option<char>> {
+        if self.consume("x") {
+            Some({
+                if let Some(eps) = self.bump(2) {
+                    if matches!(eps[0], b'0'..=b'7') && eps[1].is_ascii_hexdigit() {
+                        return Ok(Some(lexical_core::parse::<u8>(eps).unwrap().into()));
+                    }
+                }
+                self.raise(ErrorKind::InvalidAsciiEscape)
+            })
+        } else {
+            self.consume("u").then(|| {
+                let off = self.offset;
+                let eps = self.consume_while(|ch| *ch != '}');
+                let Some((b"{", eps)) = eps.split_at_checked(1) else {
+                    return self.raise_at(off, ErrorKind::ExpectedSymbol(b'{'));
                 };
+                let chr = lexical_core::parse_with_options::<
+                    u32,
+                    {
+                        NumberFormatBuilder::rebuild(lexical_core::format::RUST_LITERAL)
+                            .mantissa_radix(16)
+                            .build()
+                    },
+                >(eps, &PARSE_INTEGER_OPTS)
+                .or_else(|e| self.raise_at(off + 1, e.into()))?;
 
-                self.bump(1);
-
-                return Ok(byte);
-            }
-        }
-        self.raise(ErrorKind::InvalidEscape)
-    }
-
-    #[inline]
-    fn __escape_byte(&mut self) -> Result<u8> {
-        if self.consume("x") {
-            if let Some(eps) = self.bump(2) {
-                if eps[0].is_ascii_hexdigit() && eps[1].is_ascii_hexdigit() {
-                    return Ok(lexical_core::parse::<u8>(eps).unwrap());
-                }
-            }
-        }
-        self.raise(ErrorKind::InvalidEscape)
-    }
-
-    #[inline]
-    fn __escape_char(&mut self) -> Result<char> {
-        if self.consume("x") {
-            if let Some(eps) = self.bump(2) {
-                if matches!(eps[0], b'0'..=b'7') && eps[1].is_ascii_hexdigit() {
-                    return Ok(lexical_core::parse::<u8>(eps).unwrap().into());
-                }
-            }
-        } else if self.consume("u") {
-            let off = self.offset;
-            let eps = self.consume_while(|ch| *ch != '}');
-            let Some((b"{", eps)) = eps.split_at_checked(1) else {
-                return self.raise_at(off, ErrorKind::ExpectedSymbol(b'{'));
-            };
-            let chr = lexical_core::parse_with_options::<
-                u32,
-                {
-                    NumberFormatBuilder::rebuild(lexical_core::format::RUST_LITERAL)
-                        .mantissa_radix(16)
-                        .build()
-                },
-            >(eps, &PARSE_INTEGER_OPTS)
-            .or_else(|e| self.raise_at(off + 1, e.into()))?;
-
-            return if self.consume("}") {
-                if let Some(chr) = char::from_u32(chr) {
-                    Ok(chr)
+                return if self.consume("}") {
+                    if let Some(chr) = char::from_u32(chr) {
+                        Ok(chr)
+                    } else {
+                        self.raise_at(off + 1, ErrorKind::InvalidUnicodeEscape)
+                    }
                 } else {
-                    self.raise_at(off + 1, ErrorKind::InvalidCharacter)
-                }
-            } else {
-                self.raise(ErrorKind::ExpectedSymbol(b'}'))
-            };
+                    self.raise(ErrorKind::ExpectedSymbol(b'}'))
+                };
+            })
         }
-        self.raise(ErrorKind::InvalidEscape)
+        .transpose()
     }
 
     #[inline]
     fn escape_byte(&mut self) -> Result<Option<u8>> {
-        self.consume("\\")
-            .then(|| self.__escape_byte().or_else(|_| self.__escape_common()))
-            .transpose()
+        if self.consume("\\") {
+            Ok(self.__escape_byte()?.or_else(|| self.__escape_common()))
+        } else {
+            self.raise(ErrorKind::InvalidEscape)
+        }
     }
 
     #[inline]
     fn escape_char(&mut self) -> Result<Option<char>> {
-        self.consume("\\")
-            .then(|| self.__escape_char().or_else(|_| self.__escape_common().map(Into::into)))
-            .transpose()
+        if self.consume("\\") {
+            Ok(self.__escape_char()?.or_else(|| self.__escape_common().map(Into::into)))
+        } else {
+            self.raise(ErrorKind::InvalidEscape)
+        }
     }
 }
 

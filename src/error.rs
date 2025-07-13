@@ -21,9 +21,11 @@ pub enum ErrorKind {
     LinebreakNormalString,
 
     InvalidEscape,
-    InvalidCharacter,
-    InvalidNumber(lexical_core::Error),
+    InvalidByteEscape,
+    InvalidAsciiEscape,
+    InvalidUnicodeEscape,
     InvalidBytesEncoding(data_encoding::DecodeKind),
+    InvalidNumberFound(lexical_core::Error),
 
     UnexpectedEnd,
 
@@ -116,7 +118,7 @@ impl fmt::Display for ErrorKind {
 
 impl From<lexical_core::Error> for ErrorKind {
     fn from(e: lexical_core::Error) -> Self {
-        ErrorKind::InvalidNumber(e)
+        ErrorKind::InvalidNumberFound(e)
     }
 }
 
