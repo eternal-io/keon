@@ -354,16 +354,14 @@ const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
 macro_rules! deserialize_integer {
     ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
         let rest = $self.rest_bytes();
-        let off = matches!(rest.first(), Some(b'-')) as usize;
-
-        let (x, o) = if matches!(rest.get(off), Some(b'0')) && matches!(rest.get(off + 1), Some(b'x')) {
-            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
-        } else if matches!(rest.get(off), Some(b'0')) && matches!(rest.get(off + 1), Some(b'o')) {
+        let (x, o) = if matches!(rest, [b'0', b'x', ..] | [b'-', b'0', b'x', ..]) {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_HEX>(rest, &PARSE_INTEGER_OPTS)
-        } else if matches!(rest.get(off), Some(b'0')) && matches!(rest.get(off + 1), Some(b'b')) {
+        } else if matches!(rest, [b'0', b'o', ..] | [b'-', b'0', b'o', ..]) {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_OCT>(rest, &PARSE_INTEGER_OPTS)
-        } else {
+        } else if matches!(rest, [b'0', b'b', ..] | [b'-', b'0', b'b', ..]) {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_BIN>(rest, &PARSE_INTEGER_OPTS)
+        } else {
+            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
         }
         .or_else(|e| $self.raise(e.into()))?;
 
