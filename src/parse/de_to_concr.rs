@@ -458,6 +458,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if self.consume("b'") {
+            let start = self.offset;
             'outer: {
                 let byte = match self.escape_byte()? {
                     Some(byte) => byte,
@@ -477,7 +478,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 return vis.visit_u8(byte);
             }
 
-            self.raise(ErrorKind::ExpectedByteInteger)
+            self.raise_at(start, ErrorKind::ExpectedByteInteger)
         } else {
             deserialize_integer!(self, u8, vis, visit_u8)
         }
@@ -503,6 +504,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        let start = self.offset;
         'outer: {
             if !self.consume("'") {
                 break 'outer;
@@ -523,7 +525,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             return vis.visit_char(ch);
         }
 
-        self.raise(ErrorKind::ExpectedCharacter)
+        self.raise_at(start, ErrorKind::ExpectedCharacter)
     }
 
     fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
@@ -539,9 +541,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         let start = self.offset;
         'outer: {
-            let check_pure_ascii = |s: &str| -> Result<()> {
+            let pure_ascii = |s: &'de str| -> Result<&'de [u8]> {
                 s.is_ascii()
-                    .then_some(())
+                    .then_some(s.as_bytes())
                     .ok_or_else(|| Error::new_at(start, ErrorKind::NonAsciiByteString))
             };
 
@@ -578,13 +580,12 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                         .map(|r| r.iter().all(|byte| *byte == b'`'))
                         .unwrap_or(false)
                     {
-                        let bytes = &self.source[inner_start..self.offset - 1];
-                        check_pure_ascii(bytes)?;
+                        let bytes = pure_ascii(&self.source[inner_start..self.offset - 1])?;
 
                         self.bump(enclosure);
                         self.consume_whitespace_comment()?;
 
-                        return vis.visit_borrowed_bytes(bytes.as_bytes());
+                        return vis.visit_borrowed_bytes(bytes);
                     }
                 }
             } else {
@@ -601,13 +602,12 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
                     match self.peek_byte().unwrap() {
                         b'\\' => {
-                            let bytes = &self.source[cursor..self.offset];
-                            check_pure_ascii(bytes)?;
+                            let bytes = pure_ascii(&self.source[cursor..self.offset])?;
 
                             let byte = self.escape_byte()?.unwrap();
                             cursor = self.offset;
 
-                            buf.extend_from_slice(bytes.as_bytes());
+                            buf.extend_from_slice(bytes);
                             buf.push(byte);
                         }
                         b'\"' => {
@@ -624,13 +624,10 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 self.consume_whitespace_comment()?;
 
                 if buf.is_empty() {
-                    let bytes = &self.source[inner_start..inner_end];
-                    check_pure_ascii(bytes)?;
-
-                    return vis.visit_borrowed_bytes(bytes.as_bytes());
+                    return vis.visit_borrowed_bytes(pure_ascii(&self.source[inner_start..inner_end])?);
+                } else {
+                    return vis.visit_byte_buf(buf);
                 }
-
-                return vis.visit_byte_buf(buf);
             }
         }
 
