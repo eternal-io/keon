@@ -383,6 +383,7 @@ macro_rules! deserialize_integer {
         .or_else(|e| $self.raise(e.into()))?;
 
         $self.bump(o);
+        $self.consume_whitespace_comment()?;
         $visitor.$method(x)
     }};
 }
@@ -393,6 +394,7 @@ macro_rules! deserialize_float {
             lexical_core::parse_partial_with_options::<$ty, FLOAT_FORMAT>($self.rest_bytes(), &PARSE_FLOAT_OPTS)
                 .or_else(|e| $self.raise(e.into()))?;
         $self.bump(o);
+        $self.consume_whitespace_comment()?;
         $visitor.$method(x)
     }};
 }
@@ -411,6 +413,7 @@ macro_rules! maybe_deserialize_baseXX {
             })?;
 
             $self.bump(off + 1);
+            $self.consume_whitespace_comment()?;
 
             return $visitor.visit_byte_buf(buf);
         }
@@ -467,7 +470,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     },
                 };
 
-                if !self.consume("'") {
+                if !self.consume_ws_("'")? {
                     return self.raise(ErrorKind::Expected("`'`"));
                 }
 
@@ -513,7 +516,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 },
             };
 
-            if !self.consume("'") {
+            if !self.consume_ws_("'")? {
                 return self.raise(ErrorKind::Expected("`'`"));
             }
 
@@ -534,12 +537,12 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.deserialize_bytes(vis)
     }
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        let start = self.offset;
         'outer: {
-            let outer_start = self.offset;
             let check_pure_ascii = |s: &str| -> Result<()> {
                 s.is_ascii()
                     .then_some(())
-                    .ok_or_else(|| Error::new_at(outer_start, ErrorKind::NonAsciiByteString))
+                    .ok_or_else(|| Error::new_at(start, ErrorKind::NonAsciiByteString))
             };
 
             if !self.consume("b") {
@@ -579,6 +582,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                         check_pure_ascii(bytes)?;
 
                         self.bump(enclosure);
+                        self.consume_whitespace_comment()?;
 
                         return vis.visit_borrowed_bytes(bytes.as_bytes());
                     }
@@ -616,8 +620,11 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     }
                 }
 
+                let inner_end = self.offset - 1;
+                self.consume_whitespace_comment()?;
+
                 if buf.is_empty() {
-                    let bytes = &self.source[inner_start..self.offset - 1];
+                    let bytes = &self.source[inner_start..inner_end];
                     check_pure_ascii(bytes)?;
 
                     return vis.visit_borrowed_bytes(bytes.as_bytes());
@@ -627,15 +634,18 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             }
         }
 
-        self.raise(ErrorKind::ExpectedByteString)
+        self.raise_at(start, ErrorKind::ExpectedByteString)
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.consume_ws_("?")?;
-        if self.adjacent_to_delim() {
-            vis.visit_none()
+        if self.consume_ws_("?")? {
+            if self.adjacent_to_delim() {
+                vis.visit_none()
+            } else {
+                vis.visit_some(self)
+            }
         } else {
-            vis.visit_some(self)
+            self.raise(ErrorKind::ExpectedOption)
         }
     }
 
@@ -785,7 +795,10 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             return self.raise_at(start, ErrorKind::UnderscoreIdent);
         }
 
-        vis.visit_borrowed_str(&self.source[start..self.offset])
+        let end = self.offset;
+        self.consume_whitespace_comment()?;
+
+        vis.visit_borrowed_str(&self.source[start..end])
     }
 }
 

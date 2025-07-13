@@ -33,6 +33,7 @@ pub enum ErrorKind {
     ExpectedEnd,
     ExpectedSemiOrEnd,
     ExpectedIdent,
+    ExpectedOption,
     ExpectedBoolean,
     ExpectedCharacter,
     ExpectedByteInteger,
