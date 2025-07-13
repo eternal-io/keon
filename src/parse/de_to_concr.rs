@@ -5,7 +5,7 @@ use lexical_core::{
     NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
 };
 use serde::{
-    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
+    de::{value::BorrowedStrDeserializer, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
     Deserialize,
 };
 use std::ops::{Deref, DerefMut};
@@ -167,6 +167,28 @@ impl<'de> Deserializer<'de> {
                 .unwrap_or(0),
         )
         .unwrap()
+    }
+
+    #[inline]
+    fn consume_ident(&mut self) -> Result<&'de str> {
+        let start = self.offset;
+        let need_more = if self.consume("_") {
+            true
+        } else if self.consume_if(|ch| unicode_ident::is_xid_start(*ch)) {
+            false
+        } else {
+            return self.raise_at(start, ErrorKind::ExpectedIdent);
+        };
+
+        let no_more = self.consume_while(|ch| unicode_ident::is_xid_continue(*ch)).is_empty();
+        if need_more && no_more {
+            return self.raise_at(start, ErrorKind::UnderscoreIdent);
+        }
+
+        let end = self.offset;
+        self.consume_whitespace_comment()?;
+
+        Ok(&self.source[start..end])
     }
 
     #[inline]
@@ -335,6 +357,11 @@ impl<'de> Deserializer<'de> {
     fn access_struct<'a>(&'a mut self) -> MapAccessor<'a, 'de, true> {
         MapAccessor { der: self }
     }
+
+    #[inline]
+    fn access_enum<'a>(&'a mut self, variant: &'de str) -> EnumAccessor<'a, 'de> {
+        EnumAccessor { der: self, variant }
+    }
 }
 
 const INTEGER_FORMAT: u128 = lexical_core::format::RUST_LITERAL;
@@ -428,6 +455,10 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
     fn deserialize_ignored_any<V: Visitor<'de>>(self, _vis: V) -> Result<V::Value> {
         self.raise(ErrorKind::WontImplement)
+    }
+
+    fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        vis.visit_borrowed_str(self.consume_ident()?)
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
@@ -663,7 +694,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             return vis.visit_unit();
         }
 
-        self.raise_at(start, ErrorKind::ExpectedUnitStruct(name))
+        self.raise_at(start, ErrorKind::ExpectedUnitStruct { name })
     }
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
@@ -672,14 +703,15 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             && self.consume_ws_("(")?
         {
             let val = vis.visit_newtype_struct(&mut *self)?;
+            self.consume_ws_(",")?;
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::Expected("`)`"));
+                return self.raise(ErrorKind::Expected("`)` and optional preceding `,`"));
             }
 
             return Ok(val);
         }
 
-        self.raise_at(start, ErrorKind::ExpectedNewtypeStruct(name))
+        self.raise_at(start, ErrorKind::ExpectedNewtypeStruct { name })
     }
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, _len: usize, vis: V) -> Result<V::Value> {
@@ -695,7 +727,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             return Ok(val);
         }
 
-        self.raise_at(start, ErrorKind::ExpectedTupleStruct(name))
+        self.raise_at(start, ErrorKind::ExpectedTupleStruct { name })
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -716,7 +748,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             return Ok(val);
         }
 
-        self.raise_at(start, ErrorKind::ExpectedStruct(name))
+        self.raise_at(start, ErrorKind::ExpectedStruct { name })
     }
 
     //------------------------------------------------------------------------------
@@ -774,28 +806,23 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         variants: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
-        todo!()
-    }
+        let mut start = self.offset;
+        let mut variant = self.consume_ident()?;
 
-    fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.offset;
-        let need_more = if self.consume("_") {
-            true
-        } else if self.consume_if(|ch| unicode_ident::is_xid_start(*ch)) {
-            false
-        } else {
-            return self.raise_at(start, ErrorKind::ExpectedIdent);
-        };
+        if self.consume_ws_("::")? {
+            if variant != name {
+                return self.raise_at(start, ErrorKind::ExpectedEnum { name });
+            }
 
-        let no_more = self.consume_while(|ch| unicode_ident::is_xid_continue(*ch)).is_empty();
-        if need_more && no_more {
-            return self.raise_at(start, ErrorKind::UnderscoreIdent);
+            start = self.offset;
+            variant = self.consume_ident()?;
         }
 
-        let end = self.offset;
-        self.consume_whitespace_comment()?;
+        if !variants.contains(&variant) {
+            return self.raise_at(start, ErrorKind::ExpectedVariant { variants });
+        }
 
-        vis.visit_borrowed_str(&self.source[start..end])
+        vis.visit_enum(self.access_enum(variant))
     }
 }
 
@@ -887,6 +914,81 @@ impl<'a, 'de, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'a, 'de, S
 
         if !self.consume_ws_(",")? && !matches!(self.peek_byte(), Some(b'}')) {
             return self.raise(ErrorKind::Expected("`,` or `}`"));
+        }
+
+        Ok(val)
+    }
+}
+
+//------------------------------------------------------------------------------
+
+struct EnumAccessor<'a, 'de> {
+    der: &'a mut Deserializer<'de>,
+    variant: &'de str,
+}
+
+impl<'a, 'de> EnumAccess<'de> for EnumAccessor<'a, 'de> {
+    type Error = Error;
+
+    type Variant = &'a mut Deserializer<'de>;
+
+    fn variant_seed<V>(self, seed: V) -> std::result::Result<(V::Value, Self::Variant), Self::Error>
+    where
+        V: DeserializeSeed<'de>,
+    {
+        Ok((
+            seed.deserialize(BorrowedStrDeserializer::<Error>::new(self.variant))?,
+            self.der,
+        ))
+    }
+}
+
+impl<'de> VariantAccess<'de> for &mut Deserializer<'de> {
+    type Error = Error;
+
+    fn unit_variant(self) -> Result<()> {
+        if !self.adjacent_to_delim() {
+            return self.raise(ErrorKind::ExpectedUnitVariant);
+        }
+
+        Ok(())
+    }
+
+    fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
+        if !self.consume_ws_("(")? {
+            return self.raise(ErrorKind::ExpectedNewtypeVariant);
+        }
+
+        let val = seed.deserialize(&mut *self)?;
+        self.consume_ws_(",")?;
+        if !self.consume_ws_(")")? {
+            return self.raise(ErrorKind::Expected("`)` and optional preceding `,`"));
+        }
+
+        Ok(val)
+    }
+
+    fn tuple_variant<V: Visitor<'de>>(self, _len: usize, vis: V) -> Result<V::Value> {
+        if !self.consume_ws_("(")? {
+            return self.raise(ErrorKind::ExpectedNewtypeVariant);
+        }
+
+        let val = vis.visit_seq(self.access_tuple())?;
+        if !self.consume_ws_(")")? {
+            return self.raise(ErrorKind::Expected("`)`"));
+        }
+
+        Ok(val)
+    }
+
+    fn struct_variant<V: Visitor<'de>>(self, _fields: &'static [&'static str], vis: V) -> Result<V::Value> {
+        if !self.consume_ws_("{")? {
+            return self.raise(ErrorKind::ExpectedStructVariant);
+        }
+
+        let val = vis.visit_map(self.access_struct())?;
+        if !self.consume_ws_("}")? {
+            return self.raise(ErrorKind::Expected("}"));
         }
 
         Ok(val)
