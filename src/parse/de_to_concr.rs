@@ -83,6 +83,14 @@ impl<'de> Deserializer<'de> {
         self.rest_bytes().first().copied()
     }
     #[inline]
+    const fn prev_byte(&self) -> Option<u8> {
+        if let Some(idx) = self.offset.checked_sub(1) {
+            Some(self.source.as_bytes()[idx])
+        } else {
+            None
+        }
+    }
+    #[inline]
     const fn adjacent_to_delim(&self) -> bool {
         matches!(
             self.rest_bytes(),
@@ -120,6 +128,17 @@ impl<'de> Deserializer<'de> {
             false => false,
             true => {
                 self.bump(pat.len());
+                true
+            }
+        }
+    }
+
+    #[inline]
+    fn consume_if(&mut self, pred: impl FnOnce(&char) -> bool) -> bool {
+        match self.rest().chars().next().filter(pred) {
+            None => false,
+            Some(ch) => {
+                self.bump(ch.len_utf8());
                 true
             }
         }
@@ -303,7 +322,7 @@ impl<'de> Deserializer<'de> {
     }
 
     #[inline]
-    fn access_vector<'a>(&'a mut self) -> SeqAccessor<'a, 'de, true> {
+    fn access_seq<'a>(&'a mut self) -> SeqAccessor<'a, 'de, true> {
         SeqAccessor { der: self }
     }
 
@@ -399,7 +418,6 @@ macro_rules! maybe_deserialize_baseXX {
 }
 
 impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
-    #![allow(unused_variables)]
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
@@ -592,7 +610,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                             self.bump(1);
                             break;
                         }
-                        b'\n' => return self.raise(ErrorKind::LinebreakNormalString),
+                        b'\n' => return self.raise(ErrorKind::MultilineNormalString),
 
                         _ => unreachable!(),
                     }
@@ -696,16 +714,49 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     //------------------------------------------------------------------------------
 
-    fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
+        let start = self.offset;
+        if self.consume_ws_("(")? {
+            let val = vis.visit_seq(self.access_tuple())?;
+            if len == 1 && !matches!(self.prev_byte(), Some(b',')) {
+                return self.raise(ErrorKind::Expected("`,` for a tuple of length 1"));
+            }
+            if !self.consume_ws_(")")? {
+                return self.raise(ErrorKind::Expected("`)`"));
+            }
+
+            return Ok(val);
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedTuple)
     }
 
-    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
-        todo!()
+    fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        let start = self.offset;
+        if self.consume_ws_("[")? {
+            let val = vis.visit_seq(self.access_seq())?;
+            if !self.consume_ws_("]")? {
+                return self.raise(ErrorKind::Expected("`]`"));
+            }
+
+            return Ok(val);
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedSequence)
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        let start = self.offset;
+        if self.consume_ws_("{")? {
+            let val = vis.visit_map(self.access_map())?;
+            if !self.consume_ws_("}")? {
+                return self.raise(ErrorKind::Expected("`}`"));
+            }
+
+            return Ok(val);
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedMap)
     }
 
     //------------------------------------------------------------------------------
@@ -720,7 +771,21 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        todo!()
+        let start = self.offset;
+        let need_more = if self.consume("_") {
+            true
+        } else if self.consume_if(|ch| unicode_ident::is_xid_start(*ch)) {
+            false
+        } else {
+            return self.raise_at(start, ErrorKind::ExpectedIdent);
+        };
+
+        let no_more = self.consume_while(|ch| unicode_ident::is_xid_continue(*ch)).is_empty();
+        if need_more && no_more {
+            return self.raise_at(start, ErrorKind::UnderscoreIdent);
+        }
+
+        vis.visit_borrowed_str(&self.source[start..self.offset])
     }
 }
 

@@ -14,11 +14,12 @@ pub struct Error {
 pub enum ErrorKind {
     WontImplement,
 
+    UnderscoreIdent,
     UnclosedComment,
     DeeplyNestedComment,
     ThickRawEnclosure,
     NonAsciiByteString,
-    LinebreakNormalString,
+    MultilineNormalString,
 
     InvalidEscape,
     InvalidByteEscape,
@@ -31,13 +32,17 @@ pub enum ErrorKind {
 
     ExpectedEnd,
     ExpectedSemiOrEnd,
+    ExpectedIdent,
     ExpectedBoolean,
     ExpectedCharacter,
     ExpectedByteInteger,
     ExpectedByteString,
+    ExpectedSequence,
+    ExpectedMap,
     ExpectedUnit,
     ExpectedUnitStruct(&'static str),
     ExpectedNewtypeStruct(&'static str),
+    ExpectedTuple,
     ExpectedTupleStruct(&'static str),
     ExpectedStruct(&'static str),
     Expected(&'static str),
