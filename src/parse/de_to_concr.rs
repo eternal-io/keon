@@ -565,7 +565,61 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if self.consume("|") {
             /* paragraph */
-            todo!()
+            const fn trim_line(s: &str) -> &str {
+                if let Some((b' ', s)) = s.as_bytes().split_first() {
+                    unsafe { str::from_utf8_unchecked(s) }
+                } else {
+                    s
+                }
+                .trim_ascii_end()
+            }
+
+            let mut buf = String::new();
+            let mut start = self.offset;
+            let end = loop {
+                let end = match memchr::memchr(b'\n', self.rest_bytes()) {
+                    Some(off) => {
+                        self.bump(1);
+                        off
+                    }
+                    None => {
+                        self.offset = self.source.len();
+                        break self.offset;
+                    }
+                };
+
+                self.consume_while(|&ch| ch != '\n' && ch.is_whitespace());
+                match self.peek_byte() {
+                    byte @ (Some(b'|') | Some(b'<') | Some(b'>')) => {
+                        self.bump(1);
+                        buf.push_str(trim_line(&self.source[start..end]));
+                        match byte {
+                            Some(b'|') => buf.push_str("\n"),
+                            Some(b'>') => buf.push_str(" "),
+                            Some(b'<') => buf.push_str(""),
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    Some(b'\n') => {
+                        self.consume_whitespace_comment()?;
+                        if matches!(self.peek_byte(), Some(b'|') | Some(b'<') | Some(b'>')) {
+                            return self.raise_at(end, ErrorKind::BrokenParagraph);
+                        }
+                        break end;
+                    }
+
+                    _ => break end,
+                }
+
+                start = self.offset;
+            };
+
+            if buf.is_empty() {
+                return vis.visit_borrowed_str(trim_line(&self.source[start..end]));
+            } else {
+                return vis.visit_string(buf);
+            }
         }
 
         let start = self.offset;
@@ -640,7 +694,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             }
         }
 
-        self.raise_at(start, ErrorKind::ExpectedTextual)
+        self.raise_at(start, ErrorKind::ExpectedString)
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
