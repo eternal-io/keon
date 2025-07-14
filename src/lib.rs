@@ -1,8 +1,9 @@
-use ecow::{EcoString, EcoVec};
-
 pub mod error;
 pub mod parse;
 pub mod value;
 
-pub use error::{Error, ErrorKind, Result};
-pub use value::Number;
+#[doc(inline)]
+pub use crate::{
+    error::{Error, ErrorKind, Result},
+    value::Value,
+};

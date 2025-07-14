@@ -1,4 +1,3 @@
-use super::*;
 use std::{
     cmp::Ordering,
     collections::BTreeMap,
@@ -8,40 +7,37 @@ use std::{
 pub mod de_to_concr;
 pub mod ser_to_value;
 
-pub type Seq = Vec<Value>;
-pub type Map = BTreeMap<Value, Value>;
-pub type Tuple = Box<[Value]>;
-pub type Struct = BTreeMap<EcoString, Value>;
+type ByteBuf = Vec<u8>;
+type Vector = Vec<Value>;
+type Map = BTreeMap<Value, Value>;
+type Struct = BTreeMap<Box<str>, Value>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value {
-    Literal(Literal),
-    Container(Container),
-    Structure(Structure),
-    NamedStructure(EcoString, Structure),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Literal {
     Unit,
     Bool(bool),
     Char(char),
     Number(Number),
-    String(EcoString),
-    ByteBuf(EcoVec<u8>),
+    String(Box<String>),
+    ByteBuf(Box<ByteBuf>),
+    None,
+    Some(Box<Value>),
+    Seq(Box<Vector>),
+    Map(Box<Map>),
+    Enum(Box<Enum>),
+    Struct(Box<Struct>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Container {
-    Maybe(Option<Box<Value>>),
-    Seq(Seq),
-    Map(Map),
+pub struct Enum {
+    name: Box<str>,
+    variant: Variant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Structure {
+pub enum Variant {
     Unit,
-    Tuple(Tuple),
+    Tuple(Vector),
     Struct(Struct),
 }
 
@@ -66,21 +62,21 @@ macro_rules! impl_into {
     };
 }
 
-impl_into!( v: ()    => Literal::Unit );
-impl_into!( v: bool  => Literal::Bool(v) );
-impl_into!( v: char  => Literal::Char(v) );
-impl_into!( v: i8    => Literal::Number(v.into()) );
-impl_into!( v: i16   => Literal::Number(v.into()) );
-impl_into!( v: i32   => Literal::Number(v.into()) );
-impl_into!( v: i64   => Literal::Number(v.into()) );
-impl_into!( v: u8    => Literal::Number(v.into()) );
-impl_into!( v: u16   => Literal::Number(v.into()) );
-impl_into!( v: u32   => Literal::Number(v.into()) );
-impl_into!( v: u64   => Literal::Number(v.into()) );
-impl_into!( v: f32   => Literal::Number(v.into()) );
-impl_into!( v: f64   => Literal::Number(v.into()) );
-impl_into!( v: &str  => Literal::String(v.into()) );
-impl_into!( v: &[u8] => Literal::ByteBuf(v.into()) );
+impl_into!( v: ()    => Value::Unit );
+impl_into!( v: bool  => Value::Bool(v) );
+impl_into!( v: char  => Value::Char(v) );
+impl_into!( v: i8    => Value::Number(v.into()) );
+impl_into!( v: i16   => Value::Number(v.into()) );
+impl_into!( v: i32   => Value::Number(v.into()) );
+impl_into!( v: i64   => Value::Number(v.into()) );
+impl_into!( v: u8    => Value::Number(v.into()) );
+impl_into!( v: u16   => Value::Number(v.into()) );
+impl_into!( v: u32   => Value::Number(v.into()) );
+impl_into!( v: u64   => Value::Number(v.into()) );
+impl_into!( v: f32   => Value::Number(v.into()) );
+impl_into!( v: f64   => Value::Number(v.into()) );
+impl_into!( v: &str  => Value::String(Box::new(v.into())) );
+impl_into!( v: &[u8] => Value::ByteBuf(Box::new(v.into())) );
 
 impl_into!( v: i8    => Number::Int(v as _) );
 impl_into!( v: i16   => Number::Int(v as _) );
@@ -99,55 +95,59 @@ impl_into!( v: f64   => Number::Float(v as _) );
 
 //------------------------------------------------------------------------------
 
-impl From<Option<Box<Value>>> for Container {
-    fn from(value: Option<Box<Value>>) -> Self {
-        Self::Maybe(value)
-    }
-}
+// impl From<Option<Box<Value>>> for Container {
+//     fn from(value: Option<Box<Value>>) -> Self {
+//         Self::Maybe(value)
+//     }
+// }
 
-impl<T: Into<Value>> From<Option<T>> for Container {
-    fn from(value: Option<T>) -> Self {
-        Self::Maybe(value.map(|v| Box::new(v.into())))
-    }
-}
+// impl<T: Into<Value>> From<Option<T>> for Container {
+//     fn from(value: Option<T>) -> Self {
+//         Self::Maybe(value.map(|v| Box::new(v.into())))
+//     }
+// }
 
-impl<T> From<&[T]> for Container
-where
-    T: Into<Value> + Clone,
-{
-    fn from(value: &[T]) -> Self {
-        Self::Seq(Seq::from_iter(value.iter().cloned().map(Into::into)))
-    }
-}
+// impl<T> From<&[T]> for Container
+// where
+//     T: Into<Value> + Clone,
+// {
+//     fn from(value: &[T]) -> Self {
+//         Self::Seq(Box::new(Vec::from_iter(value.iter().cloned().map(Into::into))))
+//     }
+// }
 
-impl<T, const N: usize> From<[T; N]> for Container
-where
-    T: Into<Value>,
-{
-    fn from(value: [T; N]) -> Self {
-        Self::Seq(Seq::from_iter(value.into_iter().map(Into::into)))
-    }
-}
+// impl<T, const N: usize> From<[T; N]> for Container
+// where
+//     T: Into<Value>,
+// {
+//     fn from(value: [T; N]) -> Self {
+//         Self::Seq(Box::new(Vec::from_iter(value.into_iter().map(Into::into))))
+//     }
+// }
 
-impl<K, V> From<&[(K, V)]> for Container
-where
-    K: Into<Value> + Clone,
-    V: Into<Value> + Clone,
-{
-    fn from(value: &[(K, V)]) -> Self {
-        Self::Map(Map::from_iter(value.iter().cloned().map(|(k, v)| (k.into(), v.into()))))
-    }
-}
+// impl<K, V> From<&[(K, V)]> for Container
+// where
+//     K: Into<Value> + Clone,
+//     V: Into<Value> + Clone,
+// {
+//     fn from(value: &[(K, V)]) -> Self {
+//         Self::Map(Box::new(BTreeMap::from_iter(
+//             value.iter().cloned().map(|(k, v)| (k.into(), v.into())),
+//         )))
+//     }
+// }
 
-impl<K, V, const N: usize> From<[(K, V); N]> for Container
-where
-    K: Into<Value>,
-    V: Into<Value>,
-{
-    fn from(value: [(K, V); N]) -> Self {
-        Self::Map(Map::from_iter(value.into_iter().map(|(k, v)| (k.into(), v.into()))))
-    }
-}
+// impl<K, V, const N: usize> From<[(K, V); N]> for Container
+// where
+//     K: Into<Value>,
+//     V: Into<Value>,
+// {
+//     fn from(value: [(K, V); N]) -> Self {
+//         Self::Map(Box::new(BTreeMap::from_iter(
+//             value.into_iter().map(|(k, v)| (k.into(), v.into())),
+//         )))
+//     }
+// }
 
 //------------------------------------------------------------------------------
 
