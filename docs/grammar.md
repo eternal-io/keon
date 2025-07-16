@@ -30,7 +30,7 @@ Value ->
       LITERAL
     | Container
     | Structure
-    | NamedStructure
+    | Enumerated
 
 
 /*== Whitespace ==*/
@@ -232,7 +232,7 @@ Structure ->
       `(` IDENTIFIER `)` ( TupleExpression | StructExpression )?
     | `_`                ( TupleExpression | StructExpression )
 
-NamedStructure ->
+Enumerated ->
     ( IDENTIFIER `::` )? IDENTIFIER
     ( TupleExpression | StructExpression )?
 
