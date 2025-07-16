@@ -32,6 +32,8 @@ pub fn parse_many<'de, T: Deserialize<'de>>(s: &'de str) -> Result<Vec<T>> {
     Ok(values)
 }
 
+const KEYWORDS: &[&str] = &["true", "false", "inf", "NaN"];
+
 pub struct Deserializer<'de> {
     source: &'de str,
     offset: usize,
@@ -165,7 +167,26 @@ impl<'de> Deserializer<'de> {
     }
 
     #[inline]
-    fn consume_ident(&mut self) -> Result<&'de str> {
+    fn consume_ident(&mut self, ident: &'static str) -> Result<bool> {
+        let start = self.offset;
+        if !self.consume_if(|ch| *ch == '`') {
+            if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
+                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword });
+            }
+        }
+
+        if self.consume_ws_(ident)? {
+            Ok(true)
+        } else {
+            self.offset = start;
+            Ok(false)
+        }
+    }
+
+    #[inline]
+    fn consume_next_ident(&mut self) -> Result<&'de str> {
+        let raw_mode = self.consume_if(|ch| *ch == '`');
+
         let start = self.offset;
         let need_more = if self.consume("_") {
             true
@@ -183,7 +204,14 @@ impl<'de> Deserializer<'de> {
         let end = self.offset;
         self.consume_whitespace_comment()?;
 
-        Ok(&self.source[start..end])
+        let ident = &self.source[start..end];
+        if !raw_mode {
+            if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
+                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword });
+            }
+        }
+
+        Ok(ident)
     }
 
     #[inline]
@@ -455,10 +483,6 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
     fn deserialize_ignored_any<V: Visitor<'de>>(self, _vis: V) -> Result<V::Value> {
         self.raise(ErrorKind::WontImplement)
-    }
-
-    fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        vis.visit_borrowed_str(self.consume_ident()?)
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
@@ -814,8 +838,11 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
         let start = self.offset;
-        if self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")? {
-            return vis.visit_unit();
+        if self.consume_ws_("(")? {
+            self.consume_ident(name)?;
+            if self.consume_ws_(")")? {
+                return vis.visit_unit();
+            }
         }
 
         self.raise_at(start, ErrorKind::ExpectedUnitStruct { name })
@@ -823,7 +850,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
         let start = self.offset;
-        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
+        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ident(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("(")?
         {
             let val = vis.visit_newtype_struct(&mut *self)?;
@@ -840,7 +867,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, _len: usize, vis: V) -> Result<V::Value> {
         let start = self.offset;
-        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
+        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ident(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("(")?
         {
             let val = vis.visit_seq(self.access_tuple(false))?;
@@ -861,7 +888,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         vis: V,
     ) -> Result<V::Value> {
         let start = self.offset;
-        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ws_(name)? && self.consume_ws_(")")?)
+        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ident(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("{")?
         {
             let val = vis.visit_map(self.access_struct())?;
@@ -921,6 +948,10 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     //------------------------------------------------------------------------------
 
+    fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        vis.visit_borrowed_str(self.consume_next_ident()?)
+    }
+
     fn deserialize_enum<V: Visitor<'de>>(
         self,
         name: &'static str,
@@ -928,7 +959,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         vis: V,
     ) -> Result<V::Value> {
         let mut start = self.offset;
-        let mut variant = self.consume_ident()?;
+        let mut variant = self.consume_next_ident()?;
 
         if self.consume_ws_("::")? {
             if variant != name {
@@ -936,7 +967,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             }
 
             start = self.offset;
-            variant = self.consume_ident()?;
+            variant = self.consume_next_ident()?;
         }
 
         if !variants.contains(&variant) {

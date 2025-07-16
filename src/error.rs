@@ -32,6 +32,7 @@ pub enum ErrorKind {
     UnexpectedEnd,
     ExpectedSemiOrEnd,
     ExpectedIdent,
+    UnexpectedKeyword { keyword: &'static str },
     ExpectedOption,
     ExpectedBoolean,
     ExpectedCharacter,
