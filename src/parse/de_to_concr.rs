@@ -160,7 +160,7 @@ impl<'de> Deserializer<'de> {
                 .char_indices()
                 .take_while(|(_off, ch)| pred(ch))
                 .last()
-                .map(|(off, _ch)| off)
+                .map(|(off, ch)| off + ch.len_utf8())
                 .unwrap_or(0),
         )
         .unwrap()
