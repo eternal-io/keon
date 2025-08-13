@@ -34,6 +34,14 @@ pub fn parse_many<'de, T: Deserialize<'de>>(s: &'de str) -> Result<Vec<T>> {
 
 const KEYWORDS: &[&str] = &["true", "false", "inf", "NaN"];
 
+fn is_whitespace(ch: &char) -> bool {
+    ch.is_whitespace()
+}
+
+fn is_backtick(ch: &char) -> bool {
+    *ch == '`'
+}
+
 pub struct Deserializer<'de> {
     source: &'de str,
     offset: usize,
@@ -169,7 +177,7 @@ impl<'de> Deserializer<'de> {
     #[inline]
     fn consume_ident(&mut self, ident: &'static str) -> Result<bool> {
         let start = self.offset;
-        if !self.consume_if(|ch| *ch == '`') {
+        if !self.consume_if(is_backtick) {
             if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
                 return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword });
             }
@@ -185,7 +193,7 @@ impl<'de> Deserializer<'de> {
 
     #[inline]
     fn consume_next_ident(&mut self) -> Result<&'de str> {
-        let raw_mode = self.consume_if(|ch| *ch == '`');
+        let raw_mode = self.consume_if(is_backtick);
 
         let start = self.offset;
         let need_more = if self.consume("_") {
@@ -216,10 +224,6 @@ impl<'de> Deserializer<'de> {
 
     #[inline]
     fn consume_whitespace_comment(&mut self) -> Result<()> {
-        fn is_whitespace(ch: &char) -> bool {
-            ch.is_whitespace()
-        }
-
         loop {
             self.consume_while(is_whitespace);
 
@@ -587,77 +591,16 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.deserialize_str(vis)
     }
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        if self.consume("|") {
-            /* paragraph */
-            const fn trim_line(s: &str) -> &str {
-                if let Some((b' ', s)) = s.as_bytes().split_first() {
-                    unsafe { str::from_utf8_unchecked(s) }
-                } else {
-                    s
-                }
-                .trim_ascii_end()
-            }
+        let start = self.offset;
 
-            let mut buf = String::new();
-            let mut start = self.offset;
-            let end = loop {
-                let end = match memchr::memchr(b'\n', self.rest_bytes()) {
-                    Some(off) => {
-                        self.bump(1);
-                        off
-                    }
-                    None => {
-                        self.offset = self.source.len();
-                        break self.offset;
-                    }
-                };
-
-                self.consume_while(|&ch| ch != '\n' && ch.is_whitespace());
-                match self.peek_byte() {
-                    byte @ (Some(b'|') | Some(b'<') | Some(b'>')) => {
-                        self.bump(1);
-                        buf.push_str(trim_line(&self.source[start..end]));
-                        match byte {
-                            Some(b'|') => buf.push_str("\n"),
-                            Some(b'>') => buf.push_str(" "),
-                            Some(b'<') => buf.push_str(""),
-                            _ => unreachable!(),
-                        }
-                    }
-
-                    Some(b'\n') => {
-                        self.consume_whitespace_comment()?;
-                        if matches!(self.peek_byte(), Some(b'|') | Some(b'<') | Some(b'>')) {
-                            return self.raise_at(end, ErrorKind::BrokenParagraph);
-                        }
-                        break end;
-                    }
-
-                    _ => break end,
-                }
-
-                start = self.offset;
-            };
-
-            if buf.is_empty() {
-                return vis.visit_borrowed_str(trim_line(&self.source[start..end]));
-            } else {
-                return vis.visit_string(buf);
-            }
+        let enclosure = self.consume_while(is_backtick).len();
+        if enclosure > 255 {
+            return self.raise(ErrorKind::ThickRawEnclosure);
         }
 
-        let start = self.offset;
-        'outer: {
+        if self.consume("\"") {
             /* string */
-            let enclosure = self.consume_while(|ch| *ch == '`').len();
-            if enclosure >= u8::MAX as _ {
-                return self.raise(ErrorKind::ThickRawEnclosure);
-            }
-
-            if !self.consume("\"") {
-                break 'outer;
-            }
-
+            // TODO: update implementation.
             let inner_start = self.offset;
             if enclosure > 0 {
                 /* raw string */
@@ -669,7 +612,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     self.bump(off + 1);
 
                     let inner_end = self.offset - 1;
-                    return match self.consume_while(|ch| *ch == '`').len().cmp(&enclosure) {
+                    return match self.consume_while(is_backtick).len().cmp(&enclosure) {
                         Ordering::Less => continue,
                         Ordering::Equal => {
                             self.consume_whitespace_comment()?;
@@ -684,7 +627,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 let mut cursor = self.offset;
 
                 loop {
-                    let Some(off) = memchr::memchr3(b'\\', b'\"', b'\n', self.rest_bytes()) else {
+                    let Some(off) = memchr::memchr3(b'\\', b'\"', b'\r', self.rest_bytes()) else {
                         return self.raise_unexpected_end();
                     };
 
@@ -701,7 +644,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                             self.bump(1);
                             break;
                         }
-                        b'\n' => return self.raise(ErrorKind::MultilineNormalString),
+                        b'\r' => return self.raise(ErrorKind::UnexpectedCarriageReturn),
 
                         _ => unreachable!(),
                     }
@@ -715,6 +658,66 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 } else {
                     return vis.visit_string(buf);
                 }
+            }
+        } else if enclosure > 0 && self.consume("|") {
+            /* paragraph */
+            // TODO: update implementation.
+            const fn trim_line(s: &str) -> &str {
+                if let Some((b' ', s)) = s.as_bytes().split_first() {
+                    unsafe { str::from_utf8_unchecked(s) }
+                } else {
+                    s
+                }
+                .trim_ascii_end()
+            }
+
+            let mut buf = String::new();
+            let mut start = self.offset;
+            let end = loop {
+                let end = match memchr::memchr2(b'\n', b'\r', self.rest_bytes()) {
+                    Some(off) => {
+                        self.bump(1); //??
+                        off
+                    }
+                    None => {
+                        self.offset = self.source.len();
+                        break self.offset;
+                    }
+                };
+
+                self.consume_while(|ch| *ch != '\n' && *ch != '\r' && ch.is_whitespace());
+
+                if self.consume_while(is_backtick).len() != enclosure {
+                    return self.raise_at(start, ErrorKind::BrokenParagraph);
+                }
+
+                match self.peek_byte() {
+                    byte @ (Some(b'|') | Some(b'<') | Some(b'>')) => {
+                        self.bump(1);
+                        buf.push_str(trim_line(&self.source[start..end]));
+                        match byte {
+                            Some(b'|') => buf.push_str("\n"),
+                            Some(b'>') => buf.push_str(" "),
+                            Some(b'<') => buf.push_str(""),
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    Some(b'\n') => {
+                        self.consume_whitespace_comment()?;
+                        break end;
+                    }
+
+                    _ => break end,
+                }
+
+                start = self.offset;
+            };
+
+            if buf.is_empty() {
+                return vis.visit_borrowed_str(trim_line(&self.source[start..end]));
+            } else {
+                return vis.visit_string(buf);
             }
         }
 
@@ -741,8 +744,8 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             maybe_deserialize_baseXX!(self, "32\"", BASE32_NOPAD, vis);
             maybe_deserialize_baseXX!(self, "16\"", HEXUPPER_PERMISSIVE, vis);
 
-            let enclosure = self.consume_while(|ch| *ch == '`').len();
-            if enclosure >= u8::MAX as _ {
+            let enclosure = self.consume_while(is_backtick).len();
+            if enclosure > 255 {
                 return self.raise(ErrorKind::ThickRawEnclosure);
             }
 
@@ -753,6 +756,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             let inner_start = self.offset;
             if enclosure > 0 {
                 /* raw bytes */
+                // TODO: reject non-ascii chars immediately.
                 loop {
                     let Some(off) = memchr::memchr(b'"', self.rest_bytes()) else {
                         return self.raise_unexpected_end();
@@ -761,7 +765,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     self.bump(off + 1);
 
                     let inner_end = self.offset - 1;
-                    return match self.consume_while(|ch| *ch == '`').len().cmp(&enclosure) {
+                    return match self.consume_while(is_backtick).len().cmp(&enclosure) {
                         Ordering::Less => continue,
                         Ordering::Equal => {
                             self.consume_whitespace_comment()?;
@@ -772,6 +776,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                 }
             } else {
                 /* normal bytes */
+                // TODO: update implementation.
                 let mut buf = Vec::new();
                 let mut cursor = self.offset;
 
@@ -801,6 +806,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
                 let inner_end = self.offset - 1;
                 self.consume_whitespace_comment()?;
+                // FIXME: where to bump offset?
 
                 if buf.is_empty() {
                     return vis.visit_borrowed_bytes(pure_ascii(&self.source[inner_start..inner_end])?);

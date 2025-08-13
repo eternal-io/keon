@@ -19,6 +19,7 @@ pub enum ErrorKind {
     ThickRawEnclosure,
     NonAsciiByteString,
     MultilineNormalString,
+    UnexpectedCarriageReturn,
     BrokenParagraph,
 
     InvalidEscape,
