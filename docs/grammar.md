@@ -11,7 +11,6 @@
 - `<TAB>` : `U+0009` (horizontal tab, `'\t'`)
 - `<SPACE>` : `U+0020` (space, `' '`)
 - `<BACKTICK>` : `U+0060` (grave accent, ``'`'``)
-- `<NEWLINE>` : `<LF>` or `<CR>`
 - `<Non-ASCII>` : Non-ASCII characters
 - `<EOF>`: end of input
 - `XID_Start` and `XID_Continue`: as defined in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/tr31-41.html)
@@ -56,7 +55,7 @@ COMMENT ->
     LINE_COMMENT | BLOCK_COMMENT
 
 LINE_COMMENT ->
-    `//` ( ~<NEWLINE> )*
+    `//` ( ~<LF> )*
 
 BLOCK_COMMENT ->
     `/*` ( BLOCK_COMMENT | ~`*/` )* `*/`
@@ -134,14 +133,11 @@ ESCAPE_BYTE ->
     `\x` HEX_DIGIT{2}
 
 ESCAPE_CHAR ->
-    `\x` OCT_DIGIT HEX_DIGIT | `\u{` ( HEX_DIGIT `_`* ){1..6} `}`
-
-STRING_CONTINUE ->
-    `\` <LF>
+    `\x` OCT_DIGIT HEX_DIGIT | `\u{` ( HEX_DIGIT `_`* ){1..=6} `}`
 
 // character literals
 CHAR_LITERAL ->
-    `'` ( ~[`'` `\` <TAB> <NEWLINE>] | ESCAPE_COMMON | ESCAPE_CHAR ) `'`
+    `'` ( ~[`'` `\` <LF> <CR> <TAB>] | ESCAPE_COMMON | ESCAPE_CHAR ) `'`
 
 // string literals
 STRING_LITERAL ->
@@ -149,19 +145,14 @@ STRING_LITERAL ->
     | STRING_LITERAL_RAW
 
 STRING_LITERAL_NORMAL ->
-    `"` (
-          ~[`"` `\` <CR>]
-        | ESCAPE_COMMON
-        | ESCAPE_CHAR
-        | STRING_CONTINUE
-    )* `"`
+    `"` ( ~[`"` `\` <CR>] | ESCAPE_COMMON | ESCAPE_CHAR )* `"`
 
 STRING_LITERAL_RAW ->
-    <BACKTICK>{k<-1..255} `"` ( ~<CR> )*? `"` <BACKTICK>{k}
+    <BACKTICK>{k<-1..=255} `"` ( ~<CR> )*? `"` <BACKTICK>{k}
 
 // byte literals
 BYTE_LITERAL ->
-    `b'` ( ~[`'` `\` <TAB> <NEWLINE> <Non-ASCII>] | ESCAPE_COMMON | ESCAPE_BYTE ) `'`
+    `b'` ( ~[`'` `\` <LF> <CR> <TAB> <Non-ASCII>] | ESCAPE_COMMON | ESCAPE_BYTE ) `'`
 
 // byte string literals
 BYTE_STRING_LITERAL ->
@@ -172,15 +163,10 @@ BYTE_STRING_LITERAL ->
     | BYTE_STRING_LITERAL_BASE64
 
 BYTE_STRING_LITERAL_NORMAL ->
-    `b"` (
-          ~[`"` `\` <CR> <Non-ASCII>]
-        | ESCAPE_COMMON
-        | ESCAPE_BYTE
-        | STRING_CONTINUE
-    )* `"`
+    `b"` ( ~[`"` `\` <CR> <Non-ASCII>] | ESCAPE_COMMON | ESCAPE_BYTE )* `"`
 
 BYTE_STRING_LITERAL_RAW ->
-    `b` <BACKTICK>{k<-1..255} `"` ( ~[<CR> <Non-ASCII>] )*? `"` <BACKTICK>{k}
+    `b` <BACKTICK>{k<-1..=255} `"` ( ~[<CR> <Non-ASCII>] )*? `"` <BACKTICK>{k}
 
 BYTE_STRING_LITERAL_BASE16 ->
     `b16"` HEX_DIGIT* `"`
@@ -193,13 +179,16 @@ BYTE_STRING_LITERAL_BASE64 ->
 
 // paragraph literals
 PARAGRAPH_LITERAL ->
-    PARAGRAPH_START ( <LF> ( WHITESPACE !!except <NEWLINE> )* PARAGRAPH_CONTINUE )*
+    <BACKTICK>{k<-1..=255} PARAGRAPH_START (
+        <CR>* <LF> ( WHITESPACE !!except <LF> <CR> )*
+        <BACKTICK>{k} PARAGRAPH_CONTINUE
+    )*
 
 PARAGRAPH_START ->
-    `|` <SPACE>? ( ~<NEWLINE> )*
+    `|` <SPACE>? ( ~[<LF> <CR>] )*
 
 PARAGRAPH_CONTINUE ->
-    [`|` `<` `>`] <SPACE>? ( ~<NEWLINE> )*
+    [`|` `<` `>`] <SPACE>? ( ~[<LF> <CR>] )*
 
 
 /*== Containers ==*/
