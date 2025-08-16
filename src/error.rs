@@ -14,14 +14,13 @@ pub struct Error {
 pub enum ErrorKind {
     WontImplement,
 
-    UnderscoreIdent,
     DeeplyNestedComment,
-    ThickRawEnclosure,
     NonAsciiByteString,
-    MultilineNormalString,
+    UnderscoreIdent,
+    UnbalancedRawEnclosure,
     UnexpectedCarriageReturn,
-    BrokenParagraph,
 
+    InvalidIndicator,
     InvalidEscape,
     InvalidByteEscape,
     InvalidAsciiEscape,

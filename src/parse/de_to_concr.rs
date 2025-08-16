@@ -38,19 +38,19 @@ fn is_whitespace(ch: &char) -> bool {
     ch.is_whitespace()
 }
 
-fn is_backtick(ch: &char) -> bool {
-    *ch == '`'
+fn is_backtick(byte: &u8) -> bool {
+    *byte == b'`'
 }
 
 pub struct Deserializer<'de> {
     source: &'de str,
-    offset: usize,
+    cursor: usize,
 }
 
 impl<'de> Deserializer<'de> {
     #[inline]
     pub fn new(source: &'de str) -> Result<Self> {
-        let mut der = Self { source, offset: 0 };
+        let mut der = Self { source, cursor: 0 };
         der.consume_whitespace_comment()?;
         Ok(der)
     }
@@ -85,11 +85,15 @@ impl<'de> Deserializer<'de> {
 
     #[inline]
     const fn rest(&self) -> &'de str {
-        self.source.split_at(self.offset).1
+        self.source.split_at(self.cursor).1
     }
     #[inline]
     const fn rest_bytes(&self) -> &'de [u8] {
-        self.source.as_bytes().split_at(self.offset).1
+        self.source_bytes().split_at(self.cursor).1
+    }
+    #[inline]
+    const fn source_bytes(&self) -> &'de [u8] {
+        self.source.as_bytes()
     }
     #[inline]
     const fn peek_byte(&self) -> Option<u8> {
@@ -104,10 +108,22 @@ impl<'de> Deserializer<'de> {
     }
 
     #[inline]
-    const fn bump(&mut self, n: usize) -> Option<&'de [u8]> {
-        if self.source.is_char_boundary(self.offset + n) {
+    const fn bump(&mut self, n: usize) -> &'de str {
+        let delta = self.rest().split_at(n).0;
+        self.cursor += n;
+        delta
+    }
+    #[inline]
+    const fn bump_to_end(&mut self) -> &'de str {
+        let delta = self.rest();
+        self.cursor = self.source.len();
+        delta
+    }
+    #[inline]
+    const fn try_bump(&mut self, n: usize) -> Option<&'de [u8]> {
+        if self.source.is_char_boundary(self.cursor + n) {
             let delta = self.rest_bytes().split_at(n).0;
-            self.offset += n;
+            self.cursor += n;
             Some(delta)
         } else {
             None
@@ -116,11 +132,11 @@ impl<'de> Deserializer<'de> {
 
     #[inline]
     const fn raise<T>(&self, kind: ErrorKind) -> Result<T> {
-        self.raise_at(self.offset, kind)
+        self.raise_at(self.cursor, kind)
     }
     #[inline]
-    const fn raise_at<T>(&self, offset: usize, kind: ErrorKind) -> Result<T> {
-        Error::raise_at(offset, kind)
+    const fn raise_at<T>(&self, pos: usize, kind: ErrorKind) -> Result<T> {
+        Error::raise_at(pos, kind)
     }
     #[inline]
     const fn raise_unexpected_end<T>(&self) -> Result<T> {
@@ -171,31 +187,28 @@ impl<'de> Deserializer<'de> {
                 .map(|(off, ch)| off + ch.len_utf8())
                 .unwrap_or(0),
         )
-        .unwrap()
+        .as_bytes()
     }
 
     #[inline]
-    fn consume_ident(&mut self, ident: &'static str) -> Result<bool> {
-        let start = self.offset;
-        if !self.consume_if(is_backtick) {
-            if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
-                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword });
-            }
-        }
-
-        if self.consume_ws_(ident)? {
-            Ok(true)
-        } else {
-            self.offset = start;
-            Ok(false)
-        }
+    fn consume_while_fast(&mut self, mut pred: impl FnMut(&u8) -> bool) -> &'de [u8] {
+        self.bump(
+            self.rest_bytes()
+                .iter()
+                .enumerate()
+                .take_while(|(_off, byte)| pred(byte))
+                .last()
+                .map(|(off, _byte)| off + 1)
+                .unwrap_or(0),
+        )
+        .as_bytes()
     }
 
     #[inline]
-    fn consume_next_ident(&mut self) -> Result<&'de str> {
-        let raw_mode = self.consume_if(is_backtick);
+    fn consume_ident(&mut self) -> Result<&'de str> {
+        let raw_mode = self.consume("`");
 
-        let start = self.offset;
+        let start = self.cursor;
         let need_more = if self.consume("_") {
             true
         } else if self.consume_if(|ch| unicode_ident::is_xid_start(*ch)) {
@@ -209,7 +222,7 @@ impl<'de> Deserializer<'de> {
             return self.raise_at(start, ErrorKind::UnderscoreIdent);
         }
 
-        let end = self.offset;
+        let end = self.cursor;
         self.consume_whitespace_comment()?;
 
         let ident = &self.source[start..end];
@@ -223,6 +236,34 @@ impl<'de> Deserializer<'de> {
     }
 
     #[inline]
+    fn consume_ident_exact(&mut self, ident: &'static str) -> Result<bool> {
+        let start = self.cursor;
+        if !self.consume("`") {
+            if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
+                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword });
+            }
+        }
+
+        if self.consume_ws_(ident)? {
+            Ok(true)
+        } else {
+            self.cursor = start;
+            Ok(false)
+        }
+    }
+
+    #[inline]
+    fn consume_newline(&mut self) -> Result<()> {
+        let start = self.cursor;
+        self.consume_while_fast(|byte| *byte == b'\r');
+        if !self.consume("\n") {
+            self.raise_at(start, ErrorKind::UnexpectedCarriageReturn)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
     fn consume_whitespace_comment(&mut self) -> Result<()> {
         loop {
             self.consume_while(is_whitespace);
@@ -233,7 +274,7 @@ impl<'de> Deserializer<'de> {
                         self.bump(off);
                     }
                     None => {
-                        self.offset = self.source.len();
+                        self.cursor = self.source.len();
                         break;
                     }
                 }
@@ -245,14 +286,13 @@ impl<'de> Deserializer<'de> {
                         return self.raise_unexpected_end();
                     };
 
-                    if let Some(b'*') = self.bump(off).unwrap().last() {
+                    if let Some(b'*') = self.bump(off).as_bytes().last() {
                         self.bump(1);
                         depth -= 1;
                     } else if self.consume("/*") {
-                        depth += 1;
-
-                        if depth == u8::MAX {
-                            return self.raise(ErrorKind::DeeplyNestedComment);
+                        depth = match depth.checked_add(1) {
+                            Some(n) => n,
+                            None => return self.raise(ErrorKind::DeeplyNestedComment),
                         }
                     }
                 }
@@ -268,7 +308,7 @@ impl<'de> Deserializer<'de> {
 
     #[inline]
     fn __escape_common(&mut self) -> Result<u8> {
-        match self.peek_byte().and_then(|byte| {
+        if let Some(byte) = self.peek_byte().and_then(|byte| {
             Some(match byte {
                 b'\\' => b'\\',
                 b'\"' => b'\"',
@@ -280,11 +320,10 @@ impl<'de> Deserializer<'de> {
                 _ => return None,
             })
         }) {
-            None => self.raise(ErrorKind::InvalidEscape),
-            Some(byte) => {
-                self.bump(1);
-                Ok(byte)
-            }
+            self.bump(1);
+            Ok(byte)
+        } else {
+            self.raise(ErrorKind::InvalidEscape)
         }
     }
 
@@ -292,7 +331,7 @@ impl<'de> Deserializer<'de> {
     fn __escape_byte(&mut self) -> Option<Result<u8>> {
         if self.consume("x") {
             Some({
-                if let Some(delta) = self.bump(2) {
+                if let Some(delta) = self.try_bump(2) {
                     if delta[0].is_ascii_hexdigit() && delta[1].is_ascii_hexdigit() {
                         return Some(Ok(lexical_core::parse::<u8>(delta).unwrap()));
                     }
@@ -308,7 +347,7 @@ impl<'de> Deserializer<'de> {
     fn __escape_char(&mut self) -> Option<Result<char>> {
         if self.consume("x") {
             Some({
-                if let Some(delta) = self.bump(2) {
+                if let Some(delta) = self.try_bump(2) {
                     if matches!(delta[0], b'0'..=b'7') && delta[1].is_ascii_hexdigit() {
                         return Some(Ok(lexical_core::parse::<u8>(delta).unwrap().into()));
                     }
@@ -317,11 +356,12 @@ impl<'de> Deserializer<'de> {
             })
         } else {
             self.consume("u").then(|| {
-                let off = self.offset;
+                let start = self.cursor;
                 let delta = self.consume_while(|ch| *ch != '}');
                 let Some((b'{', delta)) = delta.split_first() else {
-                    return self.raise_at(off, ErrorKind::Expected("`{`"));
+                    return self.raise_at(start, ErrorKind::Expected("`{`"));
                 };
+
                 let chr = lexical_core::parse_with_options::<
                     u32,
                     {
@@ -330,13 +370,13 @@ impl<'de> Deserializer<'de> {
                             .build()
                     },
                 >(delta, &PARSE_INTEGER_OPTS)
-                .or_else(|e| self.raise_at(off + 1, e.into()))?;
+                .or_else(|_| self.raise_at(start + 1, ErrorKind::InvalidUnicodeEscape))?;
 
                 if self.consume("}") {
                     if let Some(chr) = char::from_u32(chr) {
                         Ok(chr)
                     } else {
-                        self.raise_at(off + 1, ErrorKind::InvalidUnicodeEscape)
+                        self.raise_at(start + 1, ErrorKind::InvalidUnicodeEscape)
                     }
                 } else {
                     self.raise(ErrorKind::Expected("`}`"))
@@ -442,8 +482,10 @@ macro_rules! deserialize_integer {
         .or_else(|e| $self.raise(e.into()))?;
 
         $self.bump(o);
+        let val = $visitor.$method::<Error>(x)?;
         $self.consume_whitespace_comment()?;
-        $visitor.$method(x)
+
+        return Ok(val);
     }};
 }
 
@@ -452,9 +494,12 @@ macro_rules! deserialize_float {
         let (x, o) =
             lexical_core::parse_partial_with_options::<$ty, FLOAT_FORMAT>($self.rest_bytes(), &PARSE_FLOAT_OPTS)
                 .or_else(|e| $self.raise(e.into()))?;
+
         $self.bump(o);
+        let val = $visitor.$method::<Error>(x)?;
         $self.consume_whitespace_comment()?;
-        $visitor.$method(x)
+
+        return Ok(val);
     }};
 }
 
@@ -467,14 +512,15 @@ macro_rules! maybe_deserialize_baseXX {
 
             let buf = $decoder.decode(&$self.rest_bytes()[..off]).map_err(|e| {
                 let mut e: Error = e.into();
-                e.pos += $self.offset;
+                e.pos += $self.cursor;
                 e
             })?;
 
             $self.bump(off + 1);
+            let val = $visitor.visit_byte_buf::<Error>(buf)?;
             $self.consume_whitespace_comment()?;
 
-            return $visitor.visit_byte_buf(buf);
+            return Ok(val);
         }
     }};
 }
@@ -517,17 +563,20 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if self.consume("b'") {
-            let start = self.offset;
-            'outer: {
+            let start = self.cursor;
+            'byte: {
                 let byte = match self.escape_byte() {
                     Some(byte) => byte?,
-                    None => match self.rest().chars().next() {
-                        None => break 'outer,
-                        Some(ch) => match ch.try_into() {
-                            Ok(byte) => byte,
-                            Err(_) => break 'outer,
-                        },
-                    },
+                    None => {
+                        let Some(ch) = self.rest().chars().next() else {
+                            break 'byte;
+                        };
+                        let Ok(byte) = ch.try_into() else {
+                            break 'byte;
+                        };
+                        self.bump(1);
+                        byte
+                    }
                 };
 
                 if !self.consume_ws_("'")? {
@@ -563,18 +612,21 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.offset;
-        'outer: {
+        let start = self.cursor;
+        'char: {
             if !self.consume("'") {
-                break 'outer;
+                break 'char;
             }
 
             let ch = match self.escape_char() {
                 Some(ch) => ch?,
-                None => match self.rest().chars().next() {
-                    Some(ch) => ch,
-                    None => break 'outer,
-                },
+                None => {
+                    let Some(ch) = self.rest().chars().next() else {
+                        break 'char;
+                    };
+                    self.bump(ch.len_utf8());
+                    ch
+                }
             };
 
             if !self.consume_ws_("'")? {
@@ -591,229 +643,262 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         self.deserialize_str(vis)
     }
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.offset;
-
-        let enclosure = self.consume_while(is_backtick).len();
-        if enclosure > 255 {
-            return self.raise(ErrorKind::ThickRawEnclosure);
-        }
+        let start = self.cursor;
+        let enclosure = self.consume_while_fast(is_backtick).len();
 
         if self.consume("\"") {
             /* string */
-            // TODO: update implementation.
-            let inner_start = self.offset;
-            if enclosure > 0 {
-                /* raw string */
-                loop {
-                    let Some(off) = memchr::memchr(b'"', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
+            let mut buf = String::new();
+            let mut cursor = self.cursor; // initialized as `inner_start`
+            let mut inner_end;
 
-                    self.bump(off + 1);
-
-                    let inner_end = self.offset - 1;
-                    return match self.consume_while(is_backtick).len().cmp(&enclosure) {
-                        Ordering::Less => continue,
-                        Ordering::Equal => {
-                            self.consume_whitespace_comment()?;
-                            vis.visit_borrowed_str(&self.source[inner_start..inner_end])
-                        }
-                        Ordering::Greater => self.raise_at(inner_end + 2, ErrorKind::ThickRawEnclosure),
-                    };
-                }
-            } else {
-                /* normal string */
-                let mut buf = String::new();
-                let mut cursor = self.offset;
-
-                loop {
-                    let Some(off) = memchr::memchr3(b'\\', b'\"', b'\r', self.rest_bytes()) else {
+            match enclosure > 0 {
+                // raw string
+                true => loop {
+                    let Some(off) = memchr::memchr2(b'\"', b'\r', self.rest_bytes()) else {
                         return self.raise_unexpected_end();
                     };
 
                     self.bump(off);
+
                     match self.peek_byte().unwrap() {
-                        b'\\' => {
-                            let str = &self.source[cursor..self.offset];
-                            let ch = self.escape_char().unwrap()?;
-                            cursor = self.offset;
-                            buf.push_str(str);
-                            buf.push(ch);
+                        b'\r' => {
+                            buf.push_str(&self.source[cursor..self.cursor]);
+                            buf.push_str("\n");
+                            self.consume_newline()?;
                         }
                         b'\"' => {
+                            inner_end = self.cursor;
+                            self.bump(1);
+                            match self.consume_while_fast(is_backtick).len().cmp(&enclosure) {
+                                Ordering::Less => continue,
+                                Ordering::Equal => break,
+                                Ordering::Greater => {
+                                    return self.raise_at(inner_end + 1, ErrorKind::UnbalancedRawEnclosure)
+                                }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+
+                    cursor = self.cursor;
+                },
+
+                // normal string
+                false => loop {
+                    let Some(off) = memchr::memchr3(b'\"', b'\\', b'\r', self.rest_bytes()) else {
+                        return self.raise_unexpected_end();
+                    };
+
+                    self.bump(off);
+
+                    match self.peek_byte().unwrap() {
+                        b'\r' => {
+                            buf.push_str(&self.source[cursor..self.cursor]);
+                            buf.push_str("\n");
+                            self.consume_newline()?;
+                        }
+                        b'\\' => {
+                            buf.push_str(&self.source[cursor..self.cursor]);
+                            buf.push(self.escape_char().unwrap()?);
+                        }
+                        b'\"' => {
+                            inner_end = self.cursor;
                             self.bump(1);
                             break;
                         }
-                        b'\r' => return self.raise(ErrorKind::UnexpectedCarriageReturn),
-
                         _ => unreachable!(),
                     }
-                }
 
-                let inner_end = self.offset - 1;
-                self.consume_whitespace_comment()?;
-
-                if buf.is_empty() {
-                    return vis.visit_borrowed_str(&self.source[inner_start..inner_end]);
-                } else {
-                    return vis.visit_string(buf);
-                }
+                    cursor = self.cursor;
+                },
             }
+
+            let last = &self.source[cursor..inner_end];
+            let val = if buf.is_empty() {
+                vis.visit_borrowed_str::<Error>(last)?
+            } else {
+                buf.push_str(last);
+                vis.visit_string::<Error>(buf)?
+            };
+
+            self.consume_whitespace_comment()?;
+
+            Ok(val)
         } else if enclosure > 0 && self.consume("|") {
             /* paragraph */
-            // TODO: update implementation.
-            const fn trim_line(s: &str) -> &str {
+            fn trim(s: &str) -> &str {
                 if let Some((b' ', s)) = s.as_bytes().split_first() {
                     unsafe { str::from_utf8_unchecked(s) }
                 } else {
                     s
                 }
-                .trim_ascii_end()
+                .trim_end()
             }
 
             let mut buf = String::new();
-            let mut start = self.offset;
-            let end = loop {
-                let end = match memchr::memchr2(b'\n', b'\r', self.rest_bytes()) {
-                    Some(off) => {
-                        self.bump(1); //??
-                        off
-                    }
-                    None => {
-                        self.offset = self.source.len();
-                        break self.offset;
-                    }
-                };
-
-                self.consume_while(|ch| *ch != '\n' && *ch != '\r' && ch.is_whitespace());
-
-                if self.consume_while(is_backtick).len() != enclosure {
-                    return self.raise_at(start, ErrorKind::BrokenParagraph);
+            let mut first;
+            match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
+                None => first = Some(trim(self.bump_to_end())),
+                Some(off) => {
+                    first = Some(trim(self.bump(off)));
+                    self.consume_newline()?;
+                    self.consume_whitespace_comment()?;
                 }
-
-                match self.peek_byte() {
-                    byte @ (Some(b'|') | Some(b'<') | Some(b'>')) => {
-                        self.bump(1);
-                        buf.push_str(trim_line(&self.source[start..end]));
-                        match byte {
-                            Some(b'|') => buf.push_str("\n"),
-                            Some(b'>') => buf.push_str(" "),
-                            Some(b'<') => buf.push_str(""),
-                            _ => unreachable!(),
-                        }
-                    }
-
-                    Some(b'\n') => {
-                        self.consume_whitespace_comment()?;
-                        break end;
-                    }
-
-                    _ => break end,
-                }
-
-                start = self.offset;
-            };
-
-            if buf.is_empty() {
-                return vis.visit_borrowed_str(trim_line(&self.source[start..end]));
-            } else {
-                return vis.visit_string(buf);
             }
-        }
 
-        self.raise_at(start, ErrorKind::ExpectedString)
+            loop {
+                if self.adjacent_to_delim() {
+                    break;
+                }
+                if self.consume_while_fast(is_backtick).len() != enclosure {
+                    return self.raise(ErrorKind::UnbalancedRawEnclosure);
+                }
+                let Some(sym) = self.peek_byte() else {
+                    return self.raise(ErrorKind::InvalidIndicator);
+                };
+                if !matches!(sym, b'|' | b'<' | b'>') {
+                    return self.raise(ErrorKind::InvalidIndicator);
+                }
+
+                self.bump(1);
+
+                let conti;
+                match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
+                    None => conti = trim(self.bump_to_end()),
+                    Some(off) => {
+                        conti = trim(self.bump(off));
+                        self.consume_newline()?;
+                        self.consume_whitespace_comment()?;
+                    }
+                }
+
+                if let Some(first) = first.take() {
+                    buf.push_str(first);
+                }
+                if sym == b'|' {
+                    buf.push_str("\n");
+                }
+                if sym == b'>' && !conti.is_empty() {
+                    buf.push_str(" ");
+                }
+
+                buf.push_str(conti);
+            }
+
+            match first {
+                Some(s) => vis.visit_borrowed_str(s),
+                None => vis.visit_string(buf),
+            }
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedString)
+        }
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_bytes(vis)
     }
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.offset;
-        'outer: {
-            let pure_ascii = |s: &'de str| -> Result<&'de [u8]> {
-                s.is_ascii()
-                    .then_some(s.as_bytes())
-                    .ok_or_else(|| Error::new_at(start, ErrorKind::NonAsciiByteString))
-            };
+        let start = self.cursor;
+        'byte_string: {
+            fn filter_non_ascii(s: &str, de: &Deserializer) -> Result<()> {
+                match s.as_bytes().iter().enumerate().find(|(_off, byte)| **byte >= 0x80) {
+                    Some((off, _byte)) => de.raise_at(de.cursor - s.len() + off, ErrorKind::NonAsciiByteString),
+                    None => Ok(()),
+                }
+            }
 
             if !self.consume("b") {
-                break 'outer;
+                break 'byte_string;
             }
 
             maybe_deserialize_baseXX!(self, "64\"", BASE64URL_NOPAD, vis);
             maybe_deserialize_baseXX!(self, "32\"", BASE32_NOPAD, vis);
             maybe_deserialize_baseXX!(self, "16\"", HEXUPPER_PERMISSIVE, vis);
 
-            let enclosure = self.consume_while(is_backtick).len();
-            if enclosure > 255 {
-                return self.raise(ErrorKind::ThickRawEnclosure);
-            }
+            let enclosure = self.consume_while_fast(is_backtick).len();
 
             if !self.consume("\"") {
-                break 'outer;
+                break 'byte_string;
             }
 
-            let inner_start = self.offset;
-            if enclosure > 0 {
-                /* raw bytes */
-                // TODO: reject non-ascii chars immediately.
-                loop {
-                    let Some(off) = memchr::memchr(b'"', self.rest_bytes()) else {
+            let mut buf = Vec::new();
+            let mut cursor = self.cursor; // initialized as `inner_start`
+            let mut inner_end;
+
+            match enclosure > 0 {
+                // raw bytes
+                true => loop {
+                    let Some(off) = memchr::memchr2(b'\"', b'\r', self.rest_bytes()) else {
                         return self.raise_unexpected_end();
                     };
 
-                    self.bump(off + 1);
+                    filter_non_ascii(self.bump(off), self)?;
 
-                    let inner_end = self.offset - 1;
-                    return match self.consume_while(is_backtick).len().cmp(&enclosure) {
-                        Ordering::Less => continue,
-                        Ordering::Equal => {
-                            self.consume_whitespace_comment()?;
-                            vis.visit_borrowed_bytes(pure_ascii(&self.source[inner_start..inner_end])?)
-                        }
-                        Ordering::Greater => self.raise_at(inner_end + 2, ErrorKind::ThickRawEnclosure),
-                    };
-                }
-            } else {
-                /* normal bytes */
-                // TODO: update implementation.
-                let mut buf = Vec::new();
-                let mut cursor = self.offset;
-
-                loop {
-                    let Some(off) = memchr::memchr3(b'\\', b'\"', b'\n', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
-
-                    self.bump(off);
                     match self.peek_byte().unwrap() {
-                        b'\\' => {
-                            let bytes = pure_ascii(&self.source[cursor..self.offset])?;
-                            let byte = self.escape_byte().unwrap()?;
-                            cursor = self.offset;
-                            buf.extend_from_slice(bytes);
-                            buf.push(byte);
+                        b'\r' => {
+                            buf.extend_from_slice(&self.source_bytes()[cursor..self.cursor]);
+                            buf.push(b'\n');
+                            self.consume_newline()?;
                         }
                         b'\"' => {
+                            inner_end = self.cursor;
+                            self.bump(1);
+                            match self.consume_while_fast(is_backtick).len().cmp(&enclosure) {
+                                Ordering::Less => continue,
+                                Ordering::Equal => break,
+                                Ordering::Greater => {
+                                    return self.raise_at(inner_end + 1, ErrorKind::UnbalancedRawEnclosure)
+                                }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+
+                    cursor = self.cursor;
+                },
+
+                // normal bytes
+                false => loop {
+                    let Some(off) = memchr::memchr3(b'\"', b'\\', b'\r', self.rest_bytes()) else {
+                        return self.raise_unexpected_end();
+                    };
+
+                    filter_non_ascii(self.bump(off), self)?;
+
+                    match self.peek_byte().unwrap() {
+                        b'\r' => {
+                            buf.extend_from_slice(&self.source_bytes()[cursor..self.cursor]);
+                            buf.push(b'\n');
+                            self.consume_newline()?;
+                        }
+                        b'\\' => {
+                            buf.extend_from_slice(&self.source_bytes()[cursor..self.cursor]);
+                            buf.push(self.escape_byte().unwrap()?);
+                        }
+                        b'\"' => {
+                            inner_end = self.cursor;
                             self.bump(1);
                             break;
                         }
-                        b'\n' => return self.raise(ErrorKind::MultilineNormalString),
-
                         _ => unreachable!(),
                     }
-                }
 
-                let inner_end = self.offset - 1;
-                self.consume_whitespace_comment()?;
-                // FIXME: where to bump offset?
-
-                if buf.is_empty() {
-                    return vis.visit_borrowed_bytes(pure_ascii(&self.source[inner_start..inner_end])?);
-                } else {
-                    return vis.visit_byte_buf(buf);
-                }
+                    cursor = self.cursor;
+                },
             }
+
+            let last = &self.source_bytes()[cursor..inner_end];
+            let val = if buf.is_empty() {
+                vis.visit_borrowed_bytes::<Error>(last)?
+            } else {
+                buf.extend_from_slice(last);
+                vis.visit_byte_buf::<Error>(buf)?
+            };
+
+            self.consume_whitespace_comment()?;
+
+            return Ok(val);
         }
 
         self.raise_at(start, ErrorKind::ExpectedByteString)
@@ -832,7 +917,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.offset;
+        let start = self.cursor;
         if self.consume_ws_("(")? && self.consume_ws_(")")? {
             return vis.visit_unit();
         }
@@ -843,9 +928,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     //------------------------------------------------------------------------------
 
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
-        let start = self.offset;
+        let start = self.cursor;
         if self.consume_ws_("(")? {
-            self.consume_ident(name)?;
+            self.consume_ident_exact(name)?;
             if self.consume_ws_(")")? {
                 return vis.visit_unit();
             }
@@ -855,8 +940,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
-        let start = self.offset;
-        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ident(name)? && self.consume_ws_(")")?)
+        let start = self.cursor;
+        if (self.consume_ws_("_")?
+            || self.consume_ws_("(")? && self.consume_ident_exact(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("(")?
         {
             let val = vis.visit_newtype_struct(&mut *self)?;
@@ -872,8 +958,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, _len: usize, vis: V) -> Result<V::Value> {
-        let start = self.offset;
-        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ident(name)? && self.consume_ws_(")")?)
+        let start = self.cursor;
+        if (self.consume_ws_("_")?
+            || self.consume_ws_("(")? && self.consume_ident_exact(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("(")?
         {
             let val = vis.visit_seq(self.access_tuple(false))?;
@@ -893,8 +980,9 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         _fields: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
-        let start = self.offset;
-        if (self.consume_ws_("_")? || self.consume_ws_("(")? && self.consume_ident(name)? && self.consume_ws_(")")?)
+        let start = self.cursor;
+        if (self.consume_ws_("_")?
+            || self.consume_ws_("(")? && self.consume_ident_exact(name)? && self.consume_ws_(")")?)
             && self.consume_ws_("{")?
         {
             let val = vis.visit_map(self.access_struct())?;
@@ -911,7 +999,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     //------------------------------------------------------------------------------
 
     fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
-        let start = self.offset;
+        let start = self.cursor;
         if self.consume_ws_("(")? {
             let val = vis.visit_seq(self.access_tuple(len == 1))?;
             if !self.consume_ws_(")")? {
@@ -925,7 +1013,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.offset;
+        let start = self.cursor;
         if self.consume_ws_("[")? {
             let val = vis.visit_seq(self.access_seq())?;
             if !self.consume_ws_("]")? {
@@ -939,7 +1027,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.offset;
+        let start = self.cursor;
         if self.consume_ws_("{")? {
             let val = vis.visit_map(self.access_map())?;
             if !self.consume_ws_("}")? {
@@ -955,7 +1043,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
     //------------------------------------------------------------------------------
 
     fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        vis.visit_borrowed_str(self.consume_next_ident()?)
+        vis.visit_borrowed_str(self.consume_ident()?)
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
@@ -964,16 +1052,16 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
         variants: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
-        let mut start = self.offset;
-        let mut variant = self.consume_next_ident()?;
+        let mut start = self.cursor;
+        let mut variant = self.consume_ident()?;
 
         if self.consume_ws_("::")? {
             if variant != name {
                 return self.raise_at(start, ErrorKind::ExpectedEnum { name });
             }
 
-            start = self.offset;
-            variant = self.consume_next_ident()?;
+            start = self.cursor;
+            variant = self.consume_ident()?;
         }
 
         if !variants.contains(&variant) {
