@@ -6,13 +6,13 @@
 
 #### Specials
 
-- `<LF>` : `U+000A` (line feed, `'\n'`)
-- `<CR>` : `U+000D` (carriage return, `'\r'`)
-- `<TAB>` : `U+0009` (horizontal tab, `'\t'`)
-- `<SPACE>` : `U+0020` (space, `' '`)
-- `<BACKTICK>` : `U+0060` (grave accent, ``'`'``)
-- `<Non-ASCII>` : Non-ASCII characters
-- `<EOF>`: end of input
+- `<LF>`: `U+000A` (line feed `'\n'`)
+- `<CR>`: `U+000D` (carriage return `'\r'`)
+- `<TAB>`: `U+0009` (horizontal tab `'\t'`)
+- `<SPACE>`: `U+0020` (space `' '`)
+- `<BACKTICK>`: `U+0060` (grave accent ``'`'``)
+- `<Non-ASCII>`: Non-ASCII characters
+- `<EOF>` : end of input
 - `XID_Start` and `XID_Continue`: as defined in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/tr31-41.html)
 
 ---
@@ -33,6 +33,8 @@ Value ->
 
 
 /*== Whitespace ==*/
+
+WS -> ( WHITESPACE* COMMENT )* WHITESPACE*
 
 WHITESPACE -> !!characters that have `White_Space` Unicode property
 
@@ -126,6 +128,9 @@ FLOAT_LITERAL ->
 FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
 
+NEWLINE ->
+    *<CR> <LF>
+
 ESCAPE_COMMON ->
     `\` [`\` `"` `'` `0` `n` `t` `r`]
 
@@ -145,10 +150,10 @@ STRING_LITERAL ->
     | STRING_LITERAL_RAW
 
 STRING_LITERAL_NORMAL ->
-    `"` ( ~[`"` `\` <CR>] | ESCAPE_COMMON | ESCAPE_CHAR )* `"`
+    `"` ( ~[`"` `\` <CR>] | NEWLINE | ESCAPE_COMMON | ESCAPE_CHAR )* `"`
 
 STRING_LITERAL_RAW ->
-    <BACKTICK>{k<-1..=255} `"` ( ~<CR> )*? `"` <BACKTICK>{k}
+    <BACKTICK>{k<-1..} `"` ( ~<CR> | NEWLINE )*? `"` <BACKTICK>{k}
 
 // byte literals
 BYTE_LITERAL ->
@@ -163,10 +168,10 @@ BYTE_STRING_LITERAL ->
     | BYTE_STRING_LITERAL_BASE64
 
 BYTE_STRING_LITERAL_NORMAL ->
-    `b"` ( ~[`"` `\` <CR> <Non-ASCII>] | ESCAPE_COMMON | ESCAPE_BYTE )* `"`
+    `b"` ( ~[`"` `\` <CR> <Non-ASCII>] | NEWLINE | ESCAPE_COMMON | ESCAPE_BYTE )* `"`
 
 BYTE_STRING_LITERAL_RAW ->
-    `b` <BACKTICK>{k<-1..=255} `"` ( ~[<CR> <Non-ASCII>] )*? `"` <BACKTICK>{k}
+    `b` <BACKTICK>{k<-1..} `"` ( ~[<CR> <Non-ASCII>] | NEWLINE )*? `"` <BACKTICK>{k}
 
 BYTE_STRING_LITERAL_BASE16 ->
     `b16"` HEX_DIGIT* `"`
@@ -179,16 +184,10 @@ BYTE_STRING_LITERAL_BASE64 ->
 
 // paragraph literals
 PARAGRAPH_LITERAL ->
-    <BACKTICK>{k<-1..=255} PARAGRAPH_START (
-        <CR>* <LF> ( WHITESPACE !!except <LF> <CR> )*
-        <BACKTICK>{k} PARAGRAPH_CONTINUE
+    <BACKTICK>{k<-1..} `|` <SPACE>? ( ~[<LF> <CR>] )* (
+        NEWLINE WS
+        <BACKTICK>{K} [`|` `<` `>`] <SPACE>? ( ~[<LF> <CR>] )*
     )*
-
-PARAGRAPH_START ->
-    `|` <SPACE>? ( ~[<LF> <CR>] )*
-
-PARAGRAPH_CONTINUE ->
-    [`|` `<` `>`] <SPACE>? ( ~[<LF> <CR>] )*
 
 
 /*== Containers ==*/
