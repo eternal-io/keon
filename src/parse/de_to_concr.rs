@@ -1,7 +1,7 @@
 use super::*;
-use core::num::NonZeroU8;
 use core::{
     cmp::Ordering,
+    num::NonZeroU8,
     ops::{Deref, DerefMut},
 };
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
@@ -506,7 +506,7 @@ macro_rules! deserialize_float {
 macro_rules! maybe_deserialize_baseXX {
     ( $self:ident, $indicator:literal, $decoder:ident, $visitor:ident ) => {{
         if $self.consume($indicator) {
-            let Some(off) = ::memchr::memchr(b'"', $self.rest_bytes()) else {
+            let Some(off) = memchr::memchr(b'"', $self.rest_bytes()) else {
                 return $self.raise_unexpected_end();
             };
 
@@ -664,7 +664,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     match self.peek_byte().unwrap() {
                         b'\r' => {
                             buf.push_str(&self.source[cursor..self.cursor]);
-                            buf.push_str("\n");
+                            buf.push('\n');
                             self.consume_newline()?;
                         }
                         b'\"' => {
@@ -695,7 +695,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     match self.peek_byte().unwrap() {
                         b'\r' => {
                             buf.push_str(&self.source[cursor..self.cursor]);
-                            buf.push_str("\n");
+                            buf.push('\n');
                             self.consume_newline()?;
                         }
                         b'\\' => {
@@ -729,7 +729,7 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
             /* paragraph */
             fn trim(s: &str) -> &str {
                 if let Some((b' ', s)) = s.as_bytes().split_first() {
-                    unsafe { str::from_utf8_unchecked(s) }
+                    unsafe { core::str::from_utf8_unchecked(s) }
                 } else {
                     s
                 }
@@ -777,10 +777,10 @@ impl<'de> serde::Deserializer<'de> for &mut Deserializer<'de> {
                     buf.push_str(first);
                 }
                 if sym == b'|' {
-                    buf.push_str("\n");
+                    buf.push('\n');
                 }
                 if sym == b'>' && !conti.is_empty() {
-                    buf.push_str(" ");
+                    buf.push(' ');
                 }
 
                 buf.push_str(conti);
