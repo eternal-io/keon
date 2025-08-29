@@ -29,7 +29,7 @@ Value ->
       LITERAL
     | Container
     | Structure
-    | Enumerated
+    | Enumerate
 
 
 /*== Whitespace ==*/
@@ -193,21 +193,21 @@ PARAGRAPH_LITERAL ->
 /*== Containers ==*/
 
 Container ->
-      MaybeExpression
-    | TupleExpression
-    | SeqExpression
-    | MapExpression
+      MaybeValue
+    | TupleValue
+    | SeqValue
+    | MapValue
 
-MaybeExpression ->
+MaybeValue ->
     `?` Value?
 
-TupleExpression ->
+TupleValue ->
     `(` ( ( Value `,` )+ Value? )? `)`
 
-SeqExpression ->
+SeqValue ->
     `[` ( Value ( `,` Value )* `,`? )? `]`
 
-MapExpression ->
+MapValue ->
     `{` (
               Value `=>` Value
         ( `,` Value `=>` Value )* `,`?
@@ -217,14 +217,14 @@ MapExpression ->
 /*== Structures ==*/
 
 Structure ->
-      `(` IDENTIFIER `)` ( TupleExpression | StructExpression )?
-    | `_`                ( TupleExpression | StructExpression )
+      `(` IDENTIFIER `)` ( TupleValue | StructValue )?
+    | `_`                ( TupleValue | StructValue )
 
-Enumerated ->
+Enumerate ->
     ( IDENTIFIER `::` )? IDENTIFIER
-    ( TupleExpression | StructExpression )?
+    ( TupleValue | StructValue )?
 
-StructExpression ->
+StructValue ->
     `{` (
               IDENTIFIER `:` Value
         ( `,` IDENTIFIER `:` Value )* `,`?
