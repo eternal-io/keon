@@ -7,45 +7,73 @@ use std::{
 pub mod de_to_concr;
 pub mod ser_to_value;
 
-type ByteBuf = Vec<u8>;
-type Vector = Vec<Value>;
-type Map = BTreeMap<Value, Value>;
-type Struct = BTreeMap<Box<str>, Value>;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Value {
-    Unit,
-    Bool(bool),
-    Char(char),
-    Number(Number),
-    String(Box<String>),
-    ByteBuf(Box<ByteBuf>),
-    None,
-    Some(Box<Value>),
-    Seq(Box<Vector>),
-    Map(Box<Map>),
-    Enum(Box<Enum>),
-    Struct(Box<Struct>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Enum {
-    name: Box<str>,
-    variant: Variant,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Variant {
-    Unit,
-    Tuple(Vector),
-    Struct(Struct),
-}
+pub type Str = Box<str>;
+pub type ByteBuf = Vec<u8>;
+pub type Values = Vec<Value>;
+pub type ValueMap = BTreeMap<Value, Value>;
+pub type Record = BTreeMap<Str, Value>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
+    Nat(u64),
     Int(i64),
-    UInt(u64),
     Float(f64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Value {
+    /// Literal bool.
+    Bool(bool),
+
+    /// Literal char.
+    Char(char),
+
+    /// Literal number.
+    Number(Number),
+
+    /// Literal string.
+    String(Box<String>),
+
+    /// Literal byte string.
+    ByteBuf(Box<ByteBuf>),
+
+    /// Structural maybe, either `Some(Value)` or `None`.
+    ///
+    /// This is non-nominal due to [serde]'s design.
+    Maybe(Option<Box<Value>>),
+
+    /// Structural tuple, also used to represent 'unit'.
+    ///
+    /// Guaranteed that the [`Values`] inside is non-empty, if it's provided by KEON.
+    Tuple(Option<Box<Values>>),
+
+    /// Structural seq.
+    Seq(Box<Values>),
+
+    /// Structural map.
+    Map(Box<ValueMap>),
+
+    /// Nominal value.
+    Nominal(Box<Nominal>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Nominal {
+    Unnamed { stru: Struct },
+    StemOnly { stru: Struct, stem: Str },
+    FullNamed { stru: Struct, stem: Str, parent: Str },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Struct {
+    /// Aka 'unit'.
+    Tuple0,
+    /// Aka 'newtype', specialized due to [serde]'s design.
+    Tuple1(Value),
+    /// Just 'tuple', guaranteed that it has at least two values, if it's provided by KEON.
+    TupleN(Values),
+    /// Aka 'struct'.
+    Record(Record),
 }
 
 //------------------------------------------------------------------------------
@@ -62,7 +90,6 @@ macro_rules! impl_into {
     };
 }
 
-impl_into!( v: ()    => Value::Unit );
 impl_into!( v: bool  => Value::Bool(v) );
 impl_into!( v: char  => Value::Char(v) );
 impl_into!( v: i8    => Value::Number(v.into()) );
@@ -77,21 +104,20 @@ impl_into!( v: f32   => Value::Number(v.into()) );
 impl_into!( v: f64   => Value::Number(v.into()) );
 impl_into!( v: &str  => Value::String(Box::new(v.into())) );
 impl_into!( v: &[u8] => Value::ByteBuf(Box::new(v.into())) );
+impl_into!( v: ()    => Value::Tuple(None) );
 
+impl_into!( v: u8    => Number::Nat(v as _) );
+impl_into!( v: u16   => Number::Nat(v as _) );
+impl_into!( v: u32   => Number::Nat(v as _) );
+impl_into!( v: u64   => Number::Nat(v as _) );
+impl_into!( v: usize => Number::Nat(v as _) );
 impl_into!( v: i8    => Number::Int(v as _) );
 impl_into!( v: i16   => Number::Int(v as _) );
 impl_into!( v: i32   => Number::Int(v as _) );
 impl_into!( v: i64   => Number::Int(v as _) );
 impl_into!( v: isize => Number::Int(v as _) );
-impl_into!( v: u8    => Number::UInt(v as _) );
-impl_into!( v: u16   => Number::UInt(v as _) );
-impl_into!( v: u32   => Number::UInt(v as _) );
-impl_into!( v: u64   => Number::UInt(v as _) );
-impl_into!( v: usize => Number::UInt(v as _) );
 impl_into!( v: f32   => Number::Float(v as _) );
 impl_into!( v: f64   => Number::Float(v as _) );
-
-// TODO: Into Value
 
 //------------------------------------------------------------------------------
 
@@ -155,11 +181,11 @@ impl Number {
     #[inline]
     pub const fn to_i64_lossy(self) -> i64 {
         match self {
-            Self::Int(i) => i,
-            Self::UInt(u) => match u >= i64::MAX as u64 {
+            Self::Nat(n) => match n >= i64::MAX as u64 {
                 true => i64::MAX,
-                false => u as i64,
+                false => n as i64,
             },
+            Self::Int(i) => i,
             Self::Float(f) => f.clamp(i64::MIN as f64, i64::MAX as f64) as i64,
         }
     }
@@ -167,11 +193,11 @@ impl Number {
     #[inline]
     pub const fn to_u64_lossy(self) -> u64 {
         match self {
+            Self::Nat(n) => n,
             Self::Int(i) => match i >= 0 {
                 true => i as u64,
                 false => 0,
             },
-            Self::UInt(u) => u,
             Self::Float(f) => f.clamp(u64::MIN as f64, u64::MAX as f64) as u64,
         }
     }
@@ -179,8 +205,8 @@ impl Number {
     #[inline]
     pub const fn to_f64_lossy(self) -> f64 {
         match self {
+            Self::Nat(n) => n as f64,
             Self::Int(i) => i as f64,
-            Self::UInt(u) => u as f64,
             Self::Float(f) => f,
         }
     }
@@ -189,8 +215,8 @@ impl Number {
 impl PartialEq for Number {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Nat(a), Self::Nat(b)) => a == b,
             (Self::Int(a), Self::Int(b)) => a == b,
-            (Self::UInt(a), Self::UInt(b)) => a == b,
             (Self::Float(a), Self::Float(b)) => a.is_nan() && b.is_nan() || a == b,
             _ => false,
         }
@@ -205,19 +231,19 @@ impl Eq for Number {}
 impl PartialOrd for Number {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(match self {
-            Number::Int(i) => match other {
-                Number::Int(j) => i.cmp(j),
-                Number::UInt(_) => Ordering::Less,
+            Number::Nat(n) => match other {
+                Number::Nat(m) => n.cmp(m),
+                Number::Int(_) => Ordering::Greater,
                 Number::Float(_) => Ordering::Less,
             },
-            Number::UInt(u) => match other {
-                Number::Int(_) => Ordering::Greater,
-                Number::UInt(v) => u.cmp(v),
+            Number::Int(i) => match other {
+                Number::Nat(_) => Ordering::Less,
+                Number::Int(j) => i.cmp(j),
                 Number::Float(_) => Ordering::Less,
             },
             Number::Float(f) => match other {
+                Number::Nat(_) => Ordering::Greater,
                 Number::Int(_) => Ordering::Greater,
-                Number::UInt(_) => Ordering::Greater,
                 Number::Float(g) => match (f.is_nan(), g.is_nan()) {
                     (false, false) => f.partial_cmp(g).unwrap(),
                     (false, true) => Ordering::Less,
@@ -239,8 +265,8 @@ impl Hash for Number {
     fn hash<H: Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
         match self {
+            Number::Nat(n) => state.write_u64(*n),
             Number::Int(i) => state.write_i64(*i),
-            Number::UInt(u) => state.write_u64(*u),
             Number::Float(f) => state.write_u64(f.to_bits()),
         }
     }
