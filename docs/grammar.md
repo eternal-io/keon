@@ -27,9 +27,8 @@ KeonPartial -> Value ( `;` | `;`? <EOF> )
 
 Value ->
       LITERAL
-    | Container
-    | Structure
-    | Enumerate
+    | Structural
+    | Nominal
 
 
 /*== Whitespace ==*/
@@ -190,9 +189,9 @@ PARAGRAPH_LITERAL ->
     )*
 
 
-/*== Containers ==*/
+/*== Structurals ==*/
 
-Container ->
+Structural ->
       MaybeValue
     | TupleValue
     | SeqValue
@@ -202,7 +201,7 @@ MaybeValue ->
     `?` Value?
 
 TupleValue ->
-    `(` ( ( Value `,` )+ Value? )? `)`
+    `(` ( Value ( `,` Value )* `,`? )? `)`
 
 SeqValue ->
     `[` ( Value ( `,` Value )* `,`? )? `]`
@@ -214,15 +213,14 @@ MapValue ->
     )? `}`
 
 
-/*== Structures ==*/
+/*== Nominals ==*/
 
-Structure ->
-      `(` IDENTIFIER `)` ( TupleValue | StructValue )?
-    | `_`                ( TupleValue | StructValue )
+Nominal ->
+      ( NominalPath | `_` )
+      ( StructValue | TupleValue )?
 
-Enumerate ->
-    ( IDENTIFIER `::` )? IDENTIFIER
-    ( TupleValue | StructValue )?
+NominalPath ->
+    ( IDENTIFIER `::` )* IDENTIFIER
 
 StructValue ->
     `{` (
