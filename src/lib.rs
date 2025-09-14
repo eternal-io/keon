@@ -1,10 +1,11 @@
+pub mod de;
 pub mod error;
-pub mod parse;
+pub mod ser;
 pub mod value;
 
 #[doc(inline)]
 pub use crate::{
+    de::{parse, parse_many},
     error::{Error, ErrorKind, Result},
-    parse::de_to_concr::parse,
     value::Value,
 };
