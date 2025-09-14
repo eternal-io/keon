@@ -64,6 +64,7 @@ BLOCK_COMMENT ->
 
 /*== Keywords ==*/
 
+KW_LONG -> `long`
 KW_TRUE -> `true`
 KW_FALSE -> `false`
 KW_INFINITY -> `inf`
@@ -103,7 +104,7 @@ BOOLEAN_LITERAL ->
 
 // integer literals
 INTEGER_LITERAL ->
-    `-`? ( DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL )
+    `long`? `-`? ( DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL )
 
 DEC_LITERAL -> DEC_DIGIT ( `_` | DEC_DIGIT )*
 BIN_LITERAL -> `0b` `_`* BIN_DIGIT ( `_` | BIN_DIGIT )*
@@ -185,8 +186,10 @@ BYTE_STRING_LITERAL_BASE64 ->
 PARAGRAPH_LITERAL ->
     <BACKTICK>{k<-1..} `|` <SPACE>? ( ~[<LF> <CR>] )* (
         NEWLINE WS
-        <BACKTICK>{K} [`|` `<` `>`] <SPACE>? ( ~[<LF> <CR>] )*
-    )*
+        <BACKTICK>{k} [`|` `<` `>`] <SPACE>? ( ~[<LF> <CR>] )*
+    )*          // ^ If there is an opportunity to do something "wrong", someone will do it.
+                //   So I chose to simply limit the length of subsequent delimiter sequences
+                //   to the same length as the first line, to keep it "correct".
 
 
 /*== Structurals ==*/
