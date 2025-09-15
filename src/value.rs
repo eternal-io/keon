@@ -100,7 +100,7 @@ impl_into!( Value | v: u16    => Value::Unsigned64(v as _) );
 impl_into!( Value | v: u32    => Value::Unsigned64(v as _) );
 impl_into!( Value | v: u64    => Value::Unsigned64(v as _) );
 impl_into!( Value | v: u128   => Value::Unsigned128(Box::new(v)) );
-impl_into!( Value | v: i8     => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } );
+impl_into!( Value | v: i8     => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } ); // FIXME: how about `-128`??
 impl_into!( Value | v: i16    => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } );
 impl_into!( Value | v: i32    => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } );
 impl_into!( Value | v: i64    => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } );

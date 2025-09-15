@@ -1,4 +1,4 @@
-use super::*;
+use super::{value::*, *};
 use core::{marker::PhantomData, num::NonZeroU8};
 use lexical_core::{
     NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
@@ -86,6 +86,88 @@ where
 
 //------------------------------------------------------------------------------
 
+#[doc(alias = "Deserializer")]
+pub struct Parser<'de> {
+    src: &'de str,
+    pos: usize,
+
+    /// To avoid possible failures when creating a parser,
+    /// whitespace handling is moved to the first value being parsed.
+    /// However, only the first value requires additional whitespace handling,
+    /// as [`consume_ws_(";")`](Self::consume_ws_) handles all leading whitespace after the first value.
+    /// Therefore, this flag exists to allow for some simple optimizations.
+    ///
+    /// Implementations can simply call [`Self::consume_whitespace_comment_first`] before parsing each value to simplify the work.
+    leading_ws_handled: bool,
+
+    /// If a parser has previously failed, then calling its fallible method again,
+    /// or using it as a deserializer, will always return an `Err(_)` with [`ErrorKind::Poisoned`].
+    ///
+    /// This flag is primarily maintained by `raise_` methods. Implementations should not
+    /// forget to set this flag if they need manually constructing and returning `Err(_)`.
+    poisoned: bool,
+}
+
+impl<'de> Parser<'de> {
+    #[inline]
+    pub const fn new(src: &'de str) -> Self {
+        Self {
+            src,
+            pos: 0,
+            leading_ws_handled: false,
+            poisoned: false,
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::should_implement_trait)]
+    pub fn into_iter<T: Deserialize<'de>>(self) -> IterParser<'de, T> {
+        IterParser {
+            der: self,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Returns `Ok(_)` if the current value is finished correctly and no more values.
+    #[inline]
+    pub fn finish(&mut self) -> Result<()> {
+        self.poison_guard()?;
+        self.consume_ws_(";")?;
+        if self.has_reached_end() {
+            Ok(())
+        } else {
+            self.raise(ErrorKind::ExpectedEnd)
+        }
+    }
+
+    /// Returns `Ok(_)` if the current value is finished correctly.
+    /// The `bool` inside indicates whether there are more values.
+    #[inline]
+    pub fn finish_one(&mut self) -> Result<bool> {
+        self.poison_guard()?;
+        if self.consume_ws_(";")? {
+            Ok(!self.has_reached_end())
+        } else if self.has_reached_end() {
+            Ok(false)
+        } else {
+            self.raise(ErrorKind::ExpectedSemiOrEnd)
+        }
+    }
+
+    #[inline]
+    pub fn has_reached_end(&self) -> bool {
+        self.rest().is_empty()
+    }
+
+    #[inline]
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+}
+
+//------------------------------------------------------------------------------
+
+/// The keyword list is sorted and must be sorted.
 const KEYWORDS: &[&str] = &["NaN", "false", "inf", "long", "true"];
 
 const INTEGER_FORMAT: u128 = lexical_core::format::RUST_LITERAL;
@@ -127,76 +209,7 @@ fn is_backtick(byte: &u8) -> bool {
     *byte == b'`'
 }
 
-#[doc(alias = "Deserializer")]
-pub struct Parser<'de> {
-    src: &'de str,
-    pos: usize,
-
-    leading_ws_consumed: bool,
-
-    /// If a parser has previously failed, then calling its fallible method again,
-    /// or using it as a deserializer, will always return an `Err(_)` with `ErrorKind::Poisoned`.
-    ///
-    /// This flag is primarily maintained by `raise_` methods. Implementations should not
-    /// forget to set this flag if they need manually constructing and returning `Err(_)`.
-    poisoned: bool,
-}
-
 impl<'de> Parser<'de> {
-    #[inline]
-    pub const fn new(src: &'de str) -> Self {
-        Self {
-            src,
-            pos: 0,
-            leading_ws_consumed: false,
-            poisoned: false,
-        }
-    }
-
-    #[inline]
-    #[allow(clippy::should_implement_trait)]
-    pub fn into_iter<T: Deserialize<'de>>(self) -> IterParser<'de, T> {
-        IterParser {
-            der: self,
-            phantom: PhantomData,
-        }
-    }
-
-    /// Returns `Ok(_)` if the current value is finished correctly and no more values.
-    #[inline]
-    pub fn finish(&mut self) -> Result<()> {
-        self.consume_ws_(";")?;
-
-        if self.has_reached_end() {
-            Ok(())
-        } else {
-            self.raise(ErrorKind::ExpectedEnd)
-        }
-    }
-
-    /// Returns `Ok(_)` if the current value is finished correctly.
-    /// The `bool` inside indicates whether there are more values.
-    #[inline]
-    pub fn finish_one(&mut self) -> Result<bool> {
-        if self.consume_ws_(";")? {
-            Ok(!self.has_reached_end())
-        } else if self.has_reached_end() {
-            Ok(false)
-        } else {
-            self.raise(ErrorKind::ExpectedSemiOrEnd)
-        }
-    }
-
-    #[inline]
-    pub fn has_reached_end(&self) -> bool {
-        self.rest().is_empty()
-    }
-
-    #[inline]
-    pub fn is_poisoned(&self) -> bool {
-        self.poisoned
-    }
-
     #[inline]
     fn poison_guard(&mut self) -> Result<()> {
         match self.poisoned {
@@ -331,9 +344,8 @@ impl<'de> Parser<'de> {
     }
 
     #[inline]
-    fn consume_ident(&mut self) -> Result<&'de str> {
+    fn consume_keyword_or_ident(&mut self) -> Result<(bool, &'de str)> {
         let raw_mode = self.consume("`");
-
         let start = self.pos;
         let need_more = if self.consume("_") {
             true
@@ -351,13 +363,18 @@ impl<'de> Parser<'de> {
         let end = self.pos;
         self.consume_whitespace_comment()?;
 
-        let ident = &self.src[start..end];
+        Ok((raw_mode, &self.src[start..end]))
+    }
+
+    #[inline]
+    fn consume_ident(&mut self) -> Result<&'de str> {
+        let start = self.pos;
+        let (raw_mode, ident) = self.consume_keyword_or_ident()?;
         if !raw_mode {
-            if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
-                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword });
+            if let Ok(i) = KEYWORDS.binary_search(&ident) {
+                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword: KEYWORDS[i] });
             }
         }
-
         Ok(ident)
     }
 
@@ -434,9 +451,9 @@ impl<'de> Parser<'de> {
 
     #[inline]
     fn consume_whitespace_comment_first(&mut self) -> Result<()> {
-        if !self.leading_ws_consumed {
+        if !self.leading_ws_handled {
             self.consume_whitespace_comment()?;
-            self.leading_ws_consumed = true;
+            self.leading_ws_handled = true;
         }
 
         Ok(())
@@ -538,5 +555,152 @@ impl<'de> Parser<'de> {
         } else {
             None
         }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+enum Kind {
+    Bool(bool),
+    Byte,
+    Char,
+    Float,
+    FloatSpecial(f64),
+    UnsInt,
+    NegInt,
+    LongUnsInt,
+    LongNegInt,
+    StringOrParagraph,
+    Bytes,
+    Base16,
+    Base32,
+    Base64,
+    Maybe,
+    Tuple,
+    Seq,
+    Map,
+    NominalUnnamed,
+    NominalStemOnly { stem: Str },
+    NominalFullNamed { stem: Str, parent: Str },
+}
+
+enum NumberKind {
+    Unsigned,
+    Negative,
+    Long,
+}
+
+impl<'de> Parser<'de> {
+    #[inline]
+    fn lookahead(&mut self) -> Result<Kind> {
+        if self.consume_ws_("_")? {
+            return Ok(Kind::NominalUnnamed);
+        } else if self.consume_ws_("?")? {
+            return Ok(Kind::Maybe);
+        } else if self.consume_ws_("(")? {
+            return Ok(Kind::Tuple);
+        } else if self.consume_ws_("[")? {
+            return Ok(Kind::Seq);
+        } else if self.consume_ws_("{")? {
+            return Ok(Kind::Map);
+        }
+
+        let number_kind = 'non_number: {
+            let kind = match self.rest_bytes() {
+                [b'b', b'\'', ..] => Kind::Byte,
+                [b'b', b'\"' | b'`', ..] => Kind::Bytes,
+                [b'b', b'1', b'6', b'"', ..] => Kind::Base16,
+                [b'b', b'3', b'2', b'"', ..] => Kind::Base32,
+                [b'b', b'6', b'4', b'"', ..] => Kind::Base64,
+                [b'"', ..] | [b'`', b'`' | b'"' | b'|', ..] => Kind::StringOrParagraph,
+                [b'-', ..] => break 'non_number NumberKind::Negative,
+                [b'0'..=b'9', ..] => break 'non_number NumberKind::Unsigned,
+                [_, ..] => {
+                    /* special or nominal */
+                    let (raw_mode, word) = self.consume_keyword_or_ident()?;
+
+                    'keyword: {
+                        if !raw_mode {
+                            let kind = match word {
+                                "long" => break 'non_number NumberKind::Long,
+                                "NaN" => Kind::FloatSpecial(f64::NAN),
+                                "inf" => Kind::FloatSpecial(f64::INFINITY),
+                                "true" => Kind::Bool(true),
+                                "false" => Kind::Bool(false),
+                                _ => break 'keyword,
+                            };
+
+                            return Ok(kind);
+                        }
+                    }
+
+                    let mut stem = word;
+                    if self.consume_ws_("::")? {
+                        let mut parent = vec![stem];
+                        loop {
+                            stem = self.consume_ident()?;
+                            if !self.consume_ws_("::")? {
+                                break;
+                            }
+                            parent.push(stem);
+                        }
+                        Kind::NominalFullNamed {
+                            stem: stem.into(),
+                            parent: parent.join("::").into(),
+                        }
+                    } else {
+                        Kind::NominalStemOnly { stem: stem.into() }
+                    }
+                }
+                [] => return self.raise_unexpected_end(),
+            };
+
+            return Ok(kind);
+        };
+
+        if let NumberKind::Long = number_kind {
+            if self.consume_ws_("-")? {
+                return Ok(Kind::LongNegInt);
+            } else {
+                return Ok(Kind::LongUnsInt);
+            }
+        }
+
+        if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().skip_while(|byte| byte.is_ascii_digit()).next() {
+            return Ok(Kind::Float);
+        }
+
+        if let NumberKind::Negative = number_kind {
+            self.consume_ws_("-")?;
+        }
+
+        todo!()
+    }
+
+    #[inline]
+    fn parse_char(&mut self) -> Result<char> {
+        let start = self.pos;
+
+        'char: {
+            if !self.consume("'") {
+                break 'char;
+            }
+            let ch = match self.escape_char() {
+                Some(ch) => ch?,
+                None => {
+                    let Some(ch) = self.rest().chars().next() else {
+                        break 'char;
+                    };
+                    self.bump(ch.len_utf8());
+                    ch
+                }
+            };
+            if !self.consume_ws_("'")? {
+                return self.raise(ErrorKind::Expected("`'`"));
+            }
+            return Ok(ch);
+        }
+
+        self.raise_at(start, ErrorKind::ExpectedCharacter)
     }
 }

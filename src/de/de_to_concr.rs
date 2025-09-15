@@ -187,31 +187,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        'char: {
-            if !self.consume("'") {
-                break 'char;
-            }
-
-            let ch = match self.escape_char() {
-                Some(ch) => ch?,
-                None => {
-                    let Some(ch) = self.rest().chars().next() else {
-                        break 'char;
-                    };
-                    self.bump(ch.len_utf8());
-                    ch
-                }
-            };
-
-            if !self.consume_ws_("'")? {
-                return self.raise(ErrorKind::Expected("`'`"));
-            }
-
-            return vis.visit_char(ch);
-        }
-
-        self.raise_at(start, ErrorKind::ExpectedCharacter)
+        vis.visit_char(self.parse_char()?)
     }
 
     fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
