@@ -1,9 +1,5 @@
 use super::*;
-use core::{
-    cmp::Ordering,
-    ops::{Deref, DerefMut},
-};
-use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
+use core::ops::{Deref, DerefMut};
 use serde::{
     de::{value::BorrowedStrDeserializer, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
     Deserializer,
@@ -76,28 +72,6 @@ macro_rules! deserialize_float {
     }};
 }
 
-macro_rules! maybe_deserialize_baseXX {
-    ( $self:ident, $indicator:literal, $decoder:ident, $visitor:ident ) => {{
-        if $self.consume($indicator) {
-            let Some(off) = memchr::memchr(b'"', $self.rest_bytes()) else {
-                return $self.raise_unexpected_end();
-            };
-
-            let buf = $decoder.decode(&$self.rest_bytes()[..off]).map_err(|e| {
-                let mut e: Error = e.into();
-                e.pos += $self.pos;
-                e
-            })?;
-
-            $self.bump(off + 1);
-            let val = $visitor.visit_byte_buf::<Error>(buf)?;
-            $self.consume_whitespace_comment()?;
-
-            return Ok(val);
-        }
-    }};
-}
-
 //------------------------------------------------------------------------------
 
 impl<'de> Deserializer<'de> for &mut Parser<'de> {
@@ -120,48 +94,13 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         }
     }
 
-    fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i8, vis, visit_i8)
-    }
-    fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i16, vis, visit_i16)
-    }
-    fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i32, vis, visit_i32)
-    }
-    fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i64, vis, visit_i64)
-    }
-    fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i128, vis, visit_i128)
+    fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        vis.visit_char(self.parse_char()?)
     }
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        if self.consume("b'") {
-            let start = self.pos;
-            'byte: {
-                let byte = match self.escape_byte() {
-                    Some(byte) => byte?,
-                    None => {
-                        let Some(ch) = self.rest().chars().next() else {
-                            break 'byte;
-                        };
-                        let Ok(byte) = ch.try_into() else {
-                            break 'byte;
-                        };
-                        self.bump(1);
-                        byte
-                    }
-                };
-
-                if !self.consume_ws_("'")? {
-                    return self.raise(ErrorKind::Expected("`'`"));
-                }
-
-                return vis.visit_u8(byte);
-            }
-
-            self.raise_at(start, ErrorKind::ExpectedByteInteger)
+        if let Some(b'b') = self.peek_byte() {
+            vis.visit_u8(self.parse_byte()?)
         } else {
             deserialize_integer!(self, u8, vis, visit_u8)
         }
@@ -179,6 +118,22 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         deserialize_integer!(self, u128, vis, visit_u128)
     }
 
+    fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        deserialize_integer!(self, i8, vis, visit_i8)
+    }
+    fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        deserialize_integer!(self, i16, vis, visit_i16)
+    }
+    fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        deserialize_integer!(self, i32, vis, visit_i32)
+    }
+    fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        deserialize_integer!(self, i64, vis, visit_i64)
+    }
+    fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        deserialize_integer!(self, i128, vis, visit_i128)
+    }
+
     fn deserialize_f32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         deserialize_float!(self, f32, vis, visit_f32)
     }
@@ -186,163 +141,13 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         deserialize_float!(self, f64, vis, visit_f64)
     }
 
-    fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        vis.visit_char(self.parse_char()?)
-    }
-
     fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_str(vis)
     }
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        let enclosure = self.consume_while_fast(is_backtick).len();
-
-        if self.consume("\"") {
-            /* string */
-            let mut buf = String::new();
-            let mut cursor = self.pos; // initialized as `inner_start`
-            let mut inner_end;
-
-            match enclosure > 0 {
-                // raw string
-                true => loop {
-                    let Some(off) = memchr::memchr2(b'\"', b'\r', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
-
-                    self.bump(off);
-
-                    match self.peek_byte().unwrap() {
-                        b'\r' => {
-                            buf.push_str(&self.src[cursor..self.pos]);
-                            buf.push('\n');
-                            self.consume_newline()?;
-                        }
-                        b'\"' => {
-                            inner_end = self.pos;
-                            self.bump(1);
-                            match self.consume_while_fast(is_backtick).len().cmp(&enclosure) {
-                                Ordering::Less => continue,
-                                Ordering::Equal => break,
-                                Ordering::Greater => {
-                                    return self.raise_at(inner_end + 1, ErrorKind::UnbalancedRawEnclosure)
-                                }
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-
-                    cursor = self.pos;
-                },
-
-                // normal string
-                false => loop {
-                    let Some(off) = memchr::memchr3(b'\"', b'\\', b'\r', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
-
-                    self.bump(off);
-
-                    match self.peek_byte().unwrap() {
-                        b'\r' => {
-                            buf.push_str(&self.src[cursor..self.pos]);
-                            buf.push('\n');
-                            self.consume_newline()?;
-                        }
-                        b'\\' => {
-                            buf.push_str(&self.src[cursor..self.pos]);
-                            buf.push(self.escape_char().unwrap()?);
-                        }
-                        b'\"' => {
-                            inner_end = self.pos;
-                            self.bump(1);
-                            break;
-                        }
-                        _ => unreachable!(),
-                    }
-
-                    cursor = self.pos;
-                },
-            }
-
-            let last = &self.src[cursor..inner_end];
-            let val = if buf.is_empty() {
-                vis.visit_borrowed_str::<Error>(last)?
-            } else {
-                buf.push_str(last);
-                vis.visit_string::<Error>(buf)?
-            };
-
-            self.consume_whitespace_comment()?;
-
-            Ok(val)
-        } else if enclosure > 0 && self.consume("|") {
-            /* paragraph */
-            fn trim(s: &str) -> &str {
-                if let Some((b' ', s)) = s.as_bytes().split_first() {
-                    unsafe { core::str::from_utf8_unchecked(s) }
-                } else {
-                    s
-                }
-                .trim_end()
-            }
-
-            let mut buf = String::new();
-            let mut first;
-            match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
-                None => first = Some(trim(self.bump_to_end())),
-                Some(off) => {
-                    first = Some(trim(self.bump(off)));
-                    self.consume_newline()?;
-                    self.consume_whitespace_comment()?;
-                }
-            }
-
-            loop {
-                if self.adjacent_to_delim() {
-                    break;
-                }
-                if self.consume_while_fast(is_backtick).len() != enclosure {
-                    return self.raise(ErrorKind::UnbalancedRawEnclosure);
-                }
-                let Some(sym) = self.peek_byte() else {
-                    return self.raise(ErrorKind::InvalidIndicator);
-                };
-                if !matches!(sym, b'|' | b'<' | b'>') {
-                    return self.raise(ErrorKind::InvalidIndicator);
-                }
-
-                self.bump(1);
-
-                let conti;
-                match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
-                    None => conti = trim(self.bump_to_end()),
-                    Some(off) => {
-                        conti = trim(self.bump(off));
-                        self.consume_newline()?;
-                        self.consume_whitespace_comment()?;
-                    }
-                }
-
-                if let Some(first) = first.take() {
-                    buf.push_str(first);
-                }
-                if sym == b'|' {
-                    buf.push('\n');
-                }
-                if sym == b'>' && !conti.is_empty() {
-                    buf.push(' ');
-                }
-
-                buf.push_str(conti);
-            }
-
-            match first {
-                Some(s) => vis.visit_borrowed_str(s),
-                None => vis.visit_string(buf),
-            }
-        } else {
-            self.raise_at(start, ErrorKind::ExpectedString)
+        match self.parse_string_or_paragraph()? {
+            Either::Left(s) => vis.visit_borrowed_str(s),
+            Either::Right(buf) => vis.visit_string(buf),
         }
     }
 
@@ -350,109 +155,10 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_bytes(vis)
     }
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        'byte_string: {
-            fn filter_non_ascii(s: &str, de: &mut Parser) -> Result<()> {
-                match s.as_bytes().iter().enumerate().find(|(_off, byte)| **byte >= 0x80) {
-                    Some((off, _byte)) => de.raise_at(de.pos - s.len() + off, ErrorKind::NonAsciiByteString),
-                    None => Ok(()),
-                }
-            }
-
-            if !self.consume("b") {
-                break 'byte_string;
-            }
-
-            maybe_deserialize_baseXX!(self, "64\"", BASE64URL_NOPAD, vis);
-            maybe_deserialize_baseXX!(self, "32\"", BASE32_NOPAD, vis);
-            maybe_deserialize_baseXX!(self, "16\"", HEXUPPER_PERMISSIVE, vis);
-
-            let enclosure = self.consume_while_fast(is_backtick).len();
-
-            if !self.consume("\"") {
-                break 'byte_string;
-            }
-
-            let mut buf = Vec::new();
-            let mut cursor = self.pos; // initialized as `inner_start`
-            let mut inner_end;
-
-            match enclosure > 0 {
-                // raw bytes
-                true => loop {
-                    let Some(off) = memchr::memchr2(b'\"', b'\r', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
-
-                    filter_non_ascii(self.bump(off), self)?;
-
-                    match self.peek_byte().unwrap() {
-                        b'\r' => {
-                            buf.extend_from_slice(&self.source_bytes()[cursor..self.pos]);
-                            buf.push(b'\n');
-                            self.consume_newline()?;
-                        }
-                        b'\"' => {
-                            inner_end = self.pos;
-                            self.bump(1);
-                            match self.consume_while_fast(is_backtick).len().cmp(&enclosure) {
-                                Ordering::Less => continue,
-                                Ordering::Equal => break,
-                                Ordering::Greater => {
-                                    return self.raise_at(inner_end + 1, ErrorKind::UnbalancedRawEnclosure)
-                                }
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-
-                    cursor = self.pos;
-                },
-
-                // normal bytes
-                false => loop {
-                    let Some(off) = memchr::memchr3(b'\"', b'\\', b'\r', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
-
-                    filter_non_ascii(self.bump(off), self)?;
-
-                    match self.peek_byte().unwrap() {
-                        b'\r' => {
-                            buf.extend_from_slice(&self.source_bytes()[cursor..self.pos]);
-                            buf.push(b'\n');
-                            self.consume_newline()?;
-                        }
-                        b'\\' => {
-                            buf.extend_from_slice(&self.source_bytes()[cursor..self.pos]);
-                            buf.push(self.escape_byte().unwrap()?);
-                        }
-                        b'\"' => {
-                            inner_end = self.pos;
-                            self.bump(1);
-                            break;
-                        }
-                        _ => unreachable!(),
-                    }
-
-                    cursor = self.pos;
-                },
-            }
-
-            let last = &self.source_bytes()[cursor..inner_end];
-            let val = if buf.is_empty() {
-                vis.visit_borrowed_bytes::<Error>(last)?
-            } else {
-                buf.extend_from_slice(last);
-                vis.visit_byte_buf::<Error>(buf)?
-            };
-
-            self.consume_whitespace_comment()?;
-
-            return Ok(val);
+        match self.parse_byte_string()? {
+            Either::Left(bytes) => vis.visit_borrowed_bytes(bytes),
+            Either::Right(buf) => vis.visit_byte_buf(buf),
         }
-
-        self.raise_at(start, ErrorKind::ExpectedByteString)
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
