@@ -129,7 +129,7 @@ FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
 
 NEWLINE ->
-    *<CR> <LF>
+    <CR>? <LF>
 
 ESCAPE_COMMON ->
     `\` [`\` `"` `'` `0` `n` `t` `r`]
