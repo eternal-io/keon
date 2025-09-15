@@ -19,7 +19,6 @@ categories = ["encoding"]
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 memchr = "2.7.5"
-chumsky = "0.10.1"
 lexical-core = { version = "1.0.5", features = ["format", "power-of-two"] }
 data-encoding = "2.9.0"
 unicode-ident = "1.0.18"

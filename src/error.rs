@@ -1,4 +1,3 @@
-use chumsky::prelude::*;
 use core::{fmt, ops::Range};
 
 pub type Result<T> = ::core::result::Result<T, Error>;
@@ -79,18 +78,6 @@ impl Error {
 
 //     fn try_from(value: Vec<Error>) -> ::core::result::Result<Self, Self::Error> {
 //         value.into_iter().next().ok_or(())
-//     }
-// }
-
-// impl<'a, I: Input<'a>> chumsky::error::Error<'a, I> for Error {}
-
-// impl<'a, I: Input<'a>, L> chumsky::error::LabelError<'a, I, L> for Error {
-//     fn expected_found<E: IntoIterator<Item = L>>(
-//         expected: E,
-//         found: Option<chumsky::util::MaybeRef<'a, I::Token>>,
-//         span: I::Span,
-//     ) -> Self {
-//         todo!()
 //     }
 // }
 
