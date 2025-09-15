@@ -12,71 +12,74 @@ pub fn parse<'de, T>(s: &'de str) -> Result<T>
 where
     T: Deserialize<'de>,
 {
-    let mut der = Parser::new(s)?;
+    let mut der = Parser::new(s);
     let value = T::deserialize(&mut der)?;
     der.finish().and(Ok(value))
 }
 
-pub fn parse_many<'de, T>(s: &'de str) -> ParseMany<'de, T>
+pub fn parse_many<'de, T>(s: &'de str) -> IterParser<'de, T>
 where
     T: Deserialize<'de>,
 {
-    ParseMany(ParseManyInner::New { src: s })
+    Parser::new(s).into_iter()
 }
 
-pub struct ParseMany<'de, T>(ParseManyInner<'de, T>);
+//------------------------------------------------------------------------------
 
-enum ParseManyInner<'de, T> {
-    New { src: &'de str },
-    Run { der: Parser<'de>, phantom: PhantomData<T> },
-    Exhausted,
+pub struct IterParser<'de, T> {
+    der: Parser<'de>,
+    phantom: PhantomData<T>,
 }
 
-impl<'de, T> Iterator for ParseMany<'de, T>
+impl<'de, T> IterParser<'de, T>
+where
+    T: Deserialize<'de>,
+{
+    #[inline]
+    pub fn into_inner(self) -> Parser<'de> {
+        self.der
+    }
+
+    #[inline]
+    pub fn is_exhausted(&self) -> bool {
+        self.der.has_reached_end()
+    }
+
+    #[inline]
+    pub fn is_poisoned(&self) -> bool {
+        self.der.poisoned
+    }
+}
+
+impl<'de, T> Iterator for IterParser<'de, T>
 where
     T: Deserialize<'de>,
 {
     type Item = Result<T>;
 
-    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
+        if self.der.has_reached_end() {
+            return None;
+        }
+        if self.der.poisoned {
+            return Some(self.der.raise(ErrorKind::Poisoned));
+        }
+
         let e = 'fail: {
-            if let Self(ParseManyInner::Exhausted) = self {
-                return None;
+            if let Err(e) = self.der.consume_whitespace_comment_first() {
+                break 'fail e;
             }
-
-            if let Self(ParseManyInner::New { src }) = self {
-                match Parser::new(src) {
-                    Err(e) => break 'fail e,
-                    Ok(der) => {
-                        *self = Self(ParseManyInner::Run {
-                            der,
-                            phantom: PhantomData,
-                        })
-                    }
-                }
-            }
-
-            let Self(ParseManyInner::Run { der, .. }) = self else {
-                unreachable!()
-            };
-
-            let v = match T::deserialize(&mut *der) {
+            let v = match T::deserialize(&mut self.der) {
                 Err(e) => break 'fail e,
                 Ok(v) => v,
             };
-
-            match der.finish_one() {
-                Err(e) => break 'fail e,
-                Ok(false) => *self = Self(ParseManyInner::Exhausted),
-                Ok(true) => (),
+            if let Err(e) = self.der.finish_one() {
+                break 'fail e;
             }
-
             return Some(Ok(v));
         };
 
-        *self = Self(ParseManyInner::Exhausted);
-
+        self.der.poisoned = true;
         Some(Err(e))
     }
 }
@@ -128,19 +131,35 @@ fn is_backtick(byte: &u8) -> bool {
 pub struct Parser<'de> {
     src: &'de str,
     pos: usize,
+
+    leading_ws_consumed: bool,
+
+    /// If a parser has previously failed, then calling its fallible method again,
+    /// or using it as a deserializer, will always return an `Err(_)` with `ErrorKind::Poisoned`.
+    ///
+    /// This flag is primarily maintained by `raise_` methods. Implementations should not
+    /// forget to set this flag if they need manually constructing and returning `Err(_)`.
+    poisoned: bool,
 }
 
 impl<'de> Parser<'de> {
     #[inline]
-    pub fn new(src: &'de str) -> Result<Self> {
-        let mut der = Self { src, pos: 0 };
-        der.consume_whitespace_comment()?;
-        Ok(der)
+    pub const fn new(src: &'de str) -> Self {
+        Self {
+            src,
+            pos: 0,
+            leading_ws_consumed: false,
+            poisoned: false,
+        }
     }
 
     #[inline]
-    pub fn has_reached_end(&self) -> bool {
-        self.rest().is_empty()
+    #[allow(clippy::should_implement_trait)]
+    pub fn into_iter<T: Deserialize<'de>>(self) -> IterParser<'de, T> {
+        IterParser {
+            der: self,
+            phantom: PhantomData,
+        }
     }
 
     /// Returns `Ok(_)` if the current value is finished correctly and no more values.
@@ -165,6 +184,24 @@ impl<'de> Parser<'de> {
             Ok(false)
         } else {
             self.raise(ErrorKind::ExpectedSemiOrEnd)
+        }
+    }
+
+    #[inline]
+    pub fn has_reached_end(&self) -> bool {
+        self.rest().is_empty()
+    }
+
+    #[inline]
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    #[inline]
+    fn poison_guard(&mut self) -> Result<()> {
+        match self.poisoned {
+            true => self.raise(ErrorKind::Poisoned),
+            false => Ok(()),
         }
     }
 
@@ -216,15 +253,19 @@ impl<'de> Parser<'de> {
     }
 
     #[inline]
-    const fn raise<T>(&self, kind: ErrorKind) -> Result<T> {
+    fn raise<T>(&mut self, kind: ErrorKind) -> Result<T> {
         self.raise_at(self.pos, kind)
     }
     #[inline]
-    const fn raise_at<T>(&self, pos: usize, kind: ErrorKind) -> Result<T> {
+    fn raise_at<T>(&mut self, pos: usize, kind: ErrorKind) -> Result<T> {
+        self.poison_guard()?;
+        self.poisoned = true;
         Error::raise_at(pos, kind)
     }
     #[inline]
-    const fn raise_unexpected_end<T>(&self) -> Result<T> {
+    fn raise_unexpected_end<T>(&mut self) -> Result<T> {
+        self.poison_guard()?;
+        self.poisoned = true;
         Error::raise_at(self.src.len(), ErrorKind::UnexpectedEnd)
     }
 
@@ -387,6 +428,16 @@ impl<'de> Parser<'de> {
         }
 
         self.consume_while(is_whitespace);
+
+        Ok(())
+    }
+
+    #[inline]
+    fn consume_whitespace_comment_first(&mut self) -> Result<()> {
+        if !self.leading_ws_consumed {
+            self.consume_whitespace_comment()?;
+            self.leading_ws_consumed = true;
+        }
 
         Ok(())
     }

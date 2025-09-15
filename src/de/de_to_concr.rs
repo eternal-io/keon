@@ -376,7 +376,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         let start = self.pos;
         'byte_string: {
-            fn filter_non_ascii(s: &str, de: &Parser) -> Result<()> {
+            fn filter_non_ascii(s: &str, de: &mut Parser) -> Result<()> {
                 match s.as_bytes().iter().enumerate().find(|(_off, byte)| **byte >= 0x80) {
                     Some((off, _byte)) => de.raise_at(de.pos - s.len() + off, ErrorKind::NonAsciiByteString),
                     None => Ok(()),
