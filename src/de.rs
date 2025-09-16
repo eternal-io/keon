@@ -560,14 +560,16 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
+#[derive(Debug, PartialEq, Eq)]
 enum Kind {
     __Char,
     __Byte,
     __Bytes,
     __StringOrParagraph,
     Bool(bool),
-    Float,
-    FloatSpecial(f64),
+    UnsFloat,
+    NegFloat,
+    SpecialFloat(f64),
     UnsInt,
     NegInt,
     LongUnsInt,
@@ -617,8 +619,8 @@ impl<'de> Parser<'de> {
                         if !raw_mode {
                             let kind = match word {
                                 "long" => break 'non_number true,
-                                "NaN" => Kind::FloatSpecial(f64::NAN),
-                                "inf" => Kind::FloatSpecial(f64::INFINITY),
+                                "NaN" => Kind::SpecialFloat(f64::NAN),
+                                "inf" => Kind::SpecialFloat(f64::INFINITY),
                                 "true" => Kind::Bool(true),
                                 "false" => Kind::Bool(false),
                                 _ => break 'keyword,
@@ -660,10 +662,14 @@ impl<'de> Parser<'de> {
             } else {
                 Kind::LongUnsInt
             }
-        } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
-            Kind::Float // lexical-core can handle negative `inf` and `NaN`.
         } else if self.consume_ws_("-")? {
-            Kind::NegInt
+            if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
+                Kind::NegFloat
+            } else {
+                Kind::NegInt
+            }
+        } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
+            Kind::UnsFloat // lexical-core can handle `inf` and `NaN`.
         } else {
             Kind::UnsInt
         };

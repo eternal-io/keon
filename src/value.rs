@@ -29,13 +29,15 @@ pub enum Value {
 
     /// Literal 64-bit unsigned integer.
     Unsigned64(u64),
-    /// Literal 64-bit negative integer.
-    Negative64(u64),
+    /// Literal 64-bit signed integer.
+    /// Guaranteed to be a negative number if the value is parsed by KEON.
+    Negative64(i64),
 
     /// Literal 128-bit unsigned integer.
     Unsigned128(Box<u128>),
-    /// Literal 128-bit negative integer.
-    Negative128(Box<u128>),
+    /// Literal 128-bit signed integer.
+    /// Guaranteed to be a negative number if the value is parsed by KEON.
+    Negative128(Box<i128>),
 
     /// Literal string.
     String(Box<String>),
@@ -100,13 +102,13 @@ impl_into!( Value | v: u16    => Value::Unsigned64(v as _) );
 impl_into!( Value | v: u32    => Value::Unsigned64(v as _) );
 impl_into!( Value | v: u64    => Value::Unsigned64(v as _) );
 impl_into!( Value | v: u128   => Value::Unsigned128(Box::new(v)) );
-impl_into!( Value | v: i8     => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } ); // FIXME: how about `-128`??
-impl_into!( Value | v: i16    => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } );
-impl_into!( Value | v: i32    => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } );
-impl_into!( Value | v: i64    => if v >= 0 { Value::Unsigned64 (         v as _ ) } else { Value::Negative64(          -v as _ ) } );
-impl_into!( Value | v: i128   => if v >= 0 { Value::Unsigned128(Box::new(v as _)) } else { Value::Negative128(Box::new(-v as _)) } );
+impl_into!( Value | v: i8     => Value::Negative64(v as _) );
+impl_into!( Value | v: i16    => Value::Negative64(v as _) );
+impl_into!( Value | v: i32    => Value::Negative64(v as _) );
+impl_into!( Value | v: i64    => Value::Negative64(v as _) );
+impl_into!( Value | v: i128   => Value::Negative128(Box::new(v)) );
+impl_into!( Value | v: String => Value::String(Box::new(v)) );
 impl_into!( Value | v: &str   => Value::String(Box::new(v.into())) );
-impl_into!( Value | v: String => Value::String(Box::new(v.into())) );
 impl_into!( Value | v: &[u8]  => Value::ByteBuf(Box::new(v.into())) );
 impl_into!( Value | v: ()     => Value::Tuple(None) );
 
@@ -128,14 +130,14 @@ impl PartialEq for Float {
 impl Ord for Float {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        self.0.total_cmp(&other.0)
     }
 }
 
 impl PartialOrd for Float {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.0.total_cmp(&other.0))
+        Some(self.cmp(other))
     }
 }
 
