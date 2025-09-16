@@ -48,7 +48,7 @@ where
 
     #[inline]
     pub fn is_poisoned(&self) -> bool {
-        self.der.poisoned
+        self.der.is_poisoned()
     }
 }
 
@@ -59,11 +59,11 @@ where
     type Item = Result<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.der.is_poisoned() {
+            return Some(self.der.raise(ErrorKind::Poisoned));
+        }
         if self.der.has_reached_end() {
             return None;
-        }
-        if self.der.poisoned {
-            return Some(self.der.raise(ErrorKind::Poisoned));
         }
 
         let e = 'fail: {
@@ -77,10 +77,10 @@ where
             if let Err(e) = self.der.finish_one() {
                 break 'fail e;
             }
+
             return Some(Ok(v));
         };
 
-        self.der.poisoned = true;
         Some(Err(e))
     }
 }
@@ -101,11 +101,14 @@ pub struct Parser<'de> {
     /// Implementations can simply call [`Self::consume_whitespace_comment_first`] before parsing each value to simplify the work.
     leading_ws_handled: bool,
 
-    /// If a parser has previously failed, then calling its fallible method again,
-    /// or using it as a deserializer, will always return an `Err(_)` with [`ErrorKind::Poisoned`].
+    /// If a parser has previously failed, to prevent it from being used again,
+    /// all subsequent uses of failable methods will fail with [`ErrorKind::Poisoned`].
     ///
     /// This flag is primarily maintained by `raise_` methods. Implementations should not
-    /// forget to set this flag if they need manually constructing and returning `Err(_)`.
+    /// forget to set this flag if the [`Result`] is not constructed via a parser (e.g.
+    /// via [`serde::de::Visitor`]). The convenience method [`Self::watch`] can be useful.
+    ///
+    /// All non-trait methods on this parser are guaranteed to handle this flag correctly.
     poisoned: bool,
 }
 
@@ -211,6 +214,14 @@ fn is_backtick(byte: &u8) -> bool {
 }
 
 impl<'de> Parser<'de> {
+    #[inline]
+    fn watch<T>(&mut self, res: Result<T>) -> Result<T> {
+        if res.is_err() {
+            self.poisoned = true;
+        }
+        res
+    }
+
     #[inline]
     fn poison_guard(&mut self) -> Result<()> {
         match self.poisoned {
@@ -560,12 +571,14 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-#[derive(Debug, PartialEq, Eq)]
+/// NOTE: A name starting with an underscore indicates that
+/// the parser does not consume any characters during the lookahead.
+#[derive(Debug, PartialEq)]
 enum Kind {
-    __Char,
-    __Byte,
-    __Bytes,
-    __StringOrParagraph,
+    _Char,
+    _Byte,
+    _Bytes,
+    _StringOrParagraph,
     Bool(bool),
     UnsFloat,
     NegFloat,
@@ -581,6 +594,13 @@ enum Kind {
     NominalUnnamed,
     NominalStemOnly { stem: Str },
     NominalFullNamed { stem: Str, parent: Str },
+}
+
+#[derive(Debug, PartialEq)]
+enum NominalKind {
+    Unit,
+    Tuple,
+    Record,
 }
 
 impl<'de> Parser<'de> {
@@ -600,16 +620,16 @@ impl<'de> Parser<'de> {
 
         let long_number = 'non_number: {
             let kind = match self.rest_bytes() {
-                [b'\'', ..] => Kind::__Char,
+                [b'\'', ..] => Kind::_Char,
 
-                [b'b', b'\'', ..] => Kind::__Byte,
+                [b'b', b'\'', ..] => Kind::_Byte,
 
                 [b'b', b'"' | b'`', ..]
                 | [b'b', b'1', b'6', b'"', ..]
                 | [b'b', b'3', b'2', b'"', ..]
-                | [b'b', b'6', b'4', b'"', ..] => Kind::__Bytes,
+                | [b'b', b'6', b'4', b'"', ..] => Kind::_Bytes,
 
-                [b'"', ..] | [b'`', b'`' | b'"' | b'|', ..] => Kind::__StringOrParagraph,
+                [b'"', ..] | [b'`', b'`' | b'"' | b'|', ..] => Kind::_StringOrParagraph,
 
                 [b'-' | b'0'..=b'9', ..] => break 'non_number false,
 
@@ -675,6 +695,19 @@ impl<'de> Parser<'de> {
         };
 
         Ok(kind)
+    }
+
+    #[inline]
+    fn lookahead_nominal(&mut self) -> Result<NominalKind> {
+        if self.adjacent_to_delim() {
+            Ok(NominalKind::Unit)
+        } else if self.consume_ws_("(")? {
+            Ok(NominalKind::Tuple)
+        } else if self.consume_ws_("{")? {
+            Ok(NominalKind::Record)
+        } else {
+            self.raise(ErrorKind::ExpectedStructure)
+        }
     }
 }
 
@@ -875,149 +908,158 @@ impl<'de> Parser<'de> {
         let delim_len = self.consume_while_fast(is_backtick).len();
 
         if self.consume("\"") {
-            /* string */
-            let mut buf = String::new();
-            let mut cursor = self.pos; // initialized as `inner_start`.
-            let mut inner_end;
+            self._parse_string(delim_len)
+        } else if delim_len > 0 && self.consume("|") {
+            self._parse_paragraph(delim_len)
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedStringOrParagraph)
+        }
+    }
 
-            match delim_len {
-                0 => loop {
-                    /* normal string */
-                    let Some(off) = memchr::memchr3(b'\"', b'\\', b'\r', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
+    #[inline]
+    fn _parse_string(&mut self, delim_len: usize) -> Result<Either<&'de str, String>> {
+        let mut buf = String::new();
+        let mut cursor = self.pos; // initialized as `inner_start`.
+        let mut inner_end;
 
-                    self.bump(off);
+        match delim_len {
+            0 => loop {
+                /* normal string */
+                let Some(off) = memchr::memchr3(b'\"', b'\\', b'\r', self.rest_bytes()) else {
+                    return self.raise_unexpected_end();
+                };
 
-                    match self.peek_byte().unwrap() {
-                        b'\r' => {
-                            self.consume_newline()?;
-                            buf.push_str(&self.src[cursor..self.pos]);
-                            buf.push('\n');
-                        }
-                        b'\\' => {
-                            buf.push_str(&self.src[cursor..self.pos]);
-                            buf.push(self.escape_char().unwrap()?);
-                        }
-                        b'\"' => {
-                            inner_end = self.pos;
-                            self.bump(1);
-                            break;
-                        }
-                        _ => unreachable!(),
+                self.bump(off);
+
+                match self.peek_byte().unwrap() {
+                    b'\r' => {
+                        self.consume_newline()?;
+                        buf.push_str(&self.src[cursor..self.pos]);
+                        buf.push('\n');
                     }
+                    b'\\' => {
+                        buf.push_str(&self.src[cursor..self.pos]);
+                        buf.push(self.escape_char().unwrap()?);
+                    }
+                    b'\"' => {
+                        inner_end = self.pos;
+                        self.bump(1);
+                        break;
+                    }
+                    _ => unreachable!(),
+                }
 
-                    cursor = self.pos;
-                },
+                cursor = self.pos;
+            },
 
-                _ => loop {
-                    /* raw string */
-                    let Some(off) = memchr::memchr2(b'\"', b'\r', self.rest_bytes()) else {
-                        return self.raise_unexpected_end();
-                    };
+            _ => loop {
+                /* raw string */
+                let Some(off) = memchr::memchr2(b'\"', b'\r', self.rest_bytes()) else {
+                    return self.raise_unexpected_end();
+                };
 
-                    self.bump(off);
+                self.bump(off);
 
-                    match self.peek_byte().unwrap() {
-                        b'\r' => {
-                            self.consume_newline()?;
-                            buf.push_str(&self.src[cursor..self.pos]);
-                            buf.push('\n');
-                        }
-                        b'\"' => {
-                            inner_end = self.pos;
-                            self.bump(1);
-                            match self.consume_while_fast(is_backtick).len().cmp(&delim_len) {
-                                Ordering::Less => (),
-                                Ordering::Equal => break,
-                                Ordering::Greater => {
-                                    return self.raise_at(inner_end + 1, ErrorKind::UnbalancedRawDelimiters)
-                                }
+                match self.peek_byte().unwrap() {
+                    b'\r' => {
+                        self.consume_newline()?;
+                        buf.push_str(&self.src[cursor..self.pos]);
+                        buf.push('\n');
+                    }
+                    b'\"' => {
+                        inner_end = self.pos;
+                        self.bump(1);
+                        match self.consume_while_fast(is_backtick).len().cmp(&delim_len) {
+                            Ordering::Less => (),
+                            Ordering::Equal => break,
+                            Ordering::Greater => {
+                                return self.raise_at(inner_end + 1, ErrorKind::UnbalancedRawDelimiters)
                             }
                         }
-                        _ => unreachable!(),
                     }
-
-                    cursor = self.pos;
-                },
-            }
-
-            self.consume_whitespace_comment()?;
-
-            if buf.is_empty() {
-                Ok(Either::Left(&self.src[cursor..inner_end]))
-            } else {
-                buf.push_str(&self.src[cursor..inner_end]);
-                Ok(Either::Right(buf))
-            }
-        } else if delim_len > 0 && self.consume("|") {
-            /* paragraph */
-            fn trim(s: &str) -> &str {
-                if let Some((b' ', s)) = s.as_bytes().split_first() {
-                    unsafe { core::str::from_utf8_unchecked(s) }
-                } else {
-                    s
+                    _ => unreachable!(),
                 }
-                .trim_end()
+
+                cursor = self.pos;
+            },
+        }
+
+        self.consume_whitespace_comment()?;
+
+        if buf.is_empty() {
+            Ok(Either::Left(&self.src[cursor..inner_end]))
+        } else {
+            buf.push_str(&self.src[cursor..inner_end]);
+            Ok(Either::Right(buf))
+        }
+    }
+
+    #[inline]
+    fn _parse_paragraph(&mut self, delim_len: usize) -> Result<Either<&'de str, String>> {
+        #[inline]
+        fn trim(s: &str) -> &str {
+            if let Some((b' ', s)) = s.as_bytes().split_first() {
+                unsafe { core::str::from_utf8_unchecked(s) }
+            } else {
+                s
+            }
+            .trim_end()
+        }
+
+        let mut buf = String::new();
+        let mut first;
+        match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
+            None => first = Some(trim(self.bump_to_end())),
+            Some(off) => {
+                first = Some(trim(self.bump(off)));
+                self.consume_newline()?;
+                self.consume_whitespace_comment()?;
+            }
+        }
+
+        loop {
+            if self.adjacent_to_delim() {
+                break;
+            }
+            if self.consume_while_fast(is_backtick).len() != delim_len {
+                return self.raise(ErrorKind::UnbalancedRawDelimiters);
+            }
+            let Some(sym) = self.peek_byte() else {
+                return self.raise(ErrorKind::InvalidParagraphLine);
+            };
+            if !matches!(sym, b'|' | b'<' | b'>') {
+                return self.raise(ErrorKind::InvalidParagraphLine);
             }
 
-            let mut buf = String::new();
-            let mut first;
+            self.bump(1);
+
+            let conti;
             match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
-                None => first = Some(trim(self.bump_to_end())),
+                None => conti = trim(self.bump_to_end()),
                 Some(off) => {
-                    first = Some(trim(self.bump(off)));
+                    conti = trim(self.bump(off));
                     self.consume_newline()?;
                     self.consume_whitespace_comment()?;
                 }
             }
 
-            loop {
-                if self.adjacent_to_delim() {
-                    break;
-                }
-                if self.consume_while_fast(is_backtick).len() != delim_len {
-                    return self.raise(ErrorKind::UnbalancedRawDelimiters);
-                }
-                let Some(sym) = self.peek_byte() else {
-                    return self.raise(ErrorKind::InvalidParagraphLine);
-                };
-                if !matches!(sym, b'|' | b'<' | b'>') {
-                    return self.raise(ErrorKind::InvalidParagraphLine);
-                }
-
-                self.bump(1);
-
-                let conti;
-                match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
-                    None => conti = trim(self.bump_to_end()),
-                    Some(off) => {
-                        conti = trim(self.bump(off));
-                        self.consume_newline()?;
-                        self.consume_whitespace_comment()?;
-                    }
-                }
-
-                if let Some(first) = first.take() {
-                    buf.push_str(first);
-                }
-                if sym == b'|' {
-                    buf.push('\n');
-                }
-                if sym == b'>' && !conti.is_empty() {
-                    buf.push(' ');
-                }
-
-                buf.push_str(conti);
+            if let Some(first) = first.take() {
+                buf.push_str(first);
+            }
+            if sym == b'|' {
+                buf.push('\n');
+            }
+            if sym == b'>' && !conti.is_empty() {
+                buf.push(' ');
             }
 
-            if let Some(s) = first {
-                Ok(Either::Left(s))
-            } else {
-                Ok(Either::Right(buf))
-            }
+            buf.push_str(conti);
+        }
+
+        if let Some(s) = first {
+            Ok(Either::Left(s))
         } else {
-            self.raise_at(start, ErrorKind::ExpectedStringOrParagraph)
+            Ok(Either::Right(buf))
         }
     }
 }

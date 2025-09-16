@@ -37,38 +37,75 @@ impl<'de> Parser<'de> {
 //------------------------------------------------------------------------------
 
 macro_rules! deserialize_integer {
-    ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
+    ( $self:ident, $ty:ident ) => {{
         let rest = $self.rest_bytes();
-        let (x, o) = if matches!(rest, [b'0', b'x', ..] | [b'-', b'0', b'x', ..]) {
+        if rest.starts_with(b"0x") {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_HEX>(rest, &PARSE_INTEGER_OPTS)
-        } else if matches!(rest, [b'0', b'o', ..] | [b'-', b'0', b'o', ..]) {
+        } else if rest.starts_with(b"0o") {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_OCT>(rest, &PARSE_INTEGER_OPTS)
-        } else if matches!(rest, [b'0', b'b', ..] | [b'-', b'0', b'b', ..]) {
+        } else if rest.starts_with(b"0b") {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_BIN>(rest, &PARSE_INTEGER_OPTS)
         } else {
             lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
         }
-        .or_else(|e| $self.raise(e.into()))?;
+        .or_else(|e| $self.raise(e.into()))
+    }};
+}
 
-        $self.bump(o);
-        let val = $visitor.$method::<Error>(x)?;
+macro_rules! deserialize_unsigned_integer {
+    ( $self:ident, $ty:ident, $visitor:ident, $method:ident ) => {{
+        let (num, off) = deserialize_integer!($self, $ty)?;
+        let val = $self.watch($visitor.$method(num))?;
+
+        $self.bump(off);
         $self.consume_whitespace_comment()?;
 
-        return Ok(val);
+        Ok(val)
+    }};
+}
+
+macro_rules! deserialize_signed_integer {
+    ( $self:ident, $ty:ident, $out:ident, $visitor:ident, $method:ident ) => {{
+        let start = $self.pos;
+        let neg = $self.consume_ws_("-")?;
+        let (num, off) = deserialize_integer!($self, $ty)?;
+
+        let num = if neg {
+            if num <= $out::MIN.unsigned_abs() {
+                Ok((!num).wrapping_add(1) as $out)
+            } else {
+                $self.raise_at(start, ErrorKind::IntegerUnderflow)
+            }
+        } else if num > $out::MAX as $ty {
+            $self.raise_at(start, ErrorKind::IntegerOverflow)
+        } else {
+            Ok(num as $out)
+        }?;
+
+        let val = $self.watch($visitor.$method(num))?;
+
+        $self.bump(off);
+        $self.consume_whitespace_comment()?;
+
+        Ok(val)
     }};
 }
 
 macro_rules! deserialize_float {
     ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
-        let (x, o) =
+        let start = $self.pos;
+        let neg = $self.consume_ws_("-")?;
+        let (num, off) =
             lexical_core::parse_partial_with_options::<$ty, FLOAT_FORMAT>($self.rest_bytes(), &PARSE_FLOAT_OPTS)
-                .or_else(|e| $self.raise(e.into()))?;
+                .or_else(|e| $self.raise_at(start, e.into()))?;
 
-        $self.bump(o);
-        let val = $visitor.$method::<Error>(x)?;
+        let num = if neg { -num } else { num };
+        let val = $self.watch($visitor.$method(num))?;
+
+        $self.bump(off);
         $self.consume_whitespace_comment()?;
 
-        return Ok(val);
+        Ok(val)
     }};
 }
 
@@ -86,52 +123,54 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
 
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if self.consume_ws_("true")? {
-            vis.visit_bool(true)
+            self.watch(vis.visit_bool(true))
         } else if self.consume_ws_("false")? {
-            vis.visit_bool(false)
+            self.watch(vis.visit_bool(false))
         } else {
             self.raise(ErrorKind::ExpectedBoolean)
         }
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        vis.visit_char(self.parse_char()?)
+        let res = vis.visit_char(self.parse_char()?);
+        self.watch(res)
     }
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if let Some(b'b') = self.peek_byte() {
-            vis.visit_u8(self.parse_byte()?)
+            let res = vis.visit_u8(self.parse_byte()?);
+            self.watch(res)
         } else {
-            deserialize_integer!(self, u8, vis, visit_u8)
+            deserialize_unsigned_integer!(self, u8, vis, visit_u8)
         }
     }
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, u16, vis, visit_u16)
+        deserialize_unsigned_integer!(self, u16, vis, visit_u16)
     }
     fn deserialize_u32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, u32, vis, visit_u32)
+        deserialize_unsigned_integer!(self, u32, vis, visit_u32)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, u64, vis, visit_u64)
+        deserialize_unsigned_integer!(self, u64, vis, visit_u64)
     }
     fn deserialize_u128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, u128, vis, visit_u128)
+        deserialize_unsigned_integer!(self, u128, vis, visit_u128)
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i8, vis, visit_i8)
+        deserialize_signed_integer!(self, u8, i8, vis, visit_i8)
     }
     fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i16, vis, visit_i16)
+        deserialize_signed_integer!(self, u16, i16, vis, visit_i16)
     }
     fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i32, vis, visit_i32)
+        deserialize_signed_integer!(self, u32, i32, vis, visit_i32)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i64, vis, visit_i64)
+        deserialize_signed_integer!(self, u64, i64, vis, visit_i64)
     }
     fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, i128, vis, visit_i128)
+        deserialize_signed_integer!(self, u128, i128, vis, visit_i128)
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
@@ -146,8 +185,8 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         match self.parse_string_or_paragraph()? {
-            Either::Left(s) => vis.visit_borrowed_str(s),
-            Either::Right(buf) => vis.visit_string(buf),
+            Either::Left(s) => self.watch(vis.visit_borrowed_str(s)),
+            Either::Right(buf) => self.watch(vis.visit_string(buf)),
         }
     }
 
@@ -156,17 +195,18 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         match self.parse_byte_string()? {
-            Either::Left(bytes) => vis.visit_borrowed_bytes(bytes),
-            Either::Right(buf) => vis.visit_byte_buf(buf),
+            Either::Left(bytes) => self.watch(vis.visit_borrowed_bytes(bytes)),
+            Either::Right(buf) => self.watch(vis.visit_byte_buf(buf)),
         }
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if self.consume_ws_("?")? {
             if self.adjacent_to_delim() {
-                vis.visit_none()
+                self.watch(vis.visit_none())
             } else {
-                vis.visit_some(self)
+                let res = vis.visit_some(&mut *self);
+                self.watch(res)
             }
         } else {
             self.raise(ErrorKind::ExpectedOption)
@@ -176,13 +216,14 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_unit<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         let start = self.pos;
         if self.consume_ws_("(")? && self.consume_ws_(")")? {
-            return vis.visit_unit();
+            return self.watch(vis.visit_unit());
         }
 
         self.raise_at(start, ErrorKind::ExpectedUnit)
     }
 
     //------------------------------------------------------------------------------
+    // TODO: The following code not watched !!!
 
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
         let start = self.pos;

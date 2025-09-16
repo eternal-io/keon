@@ -24,6 +24,8 @@ pub enum ErrorKind {
     InvalidByteEscape,
     InvalidAsciiEscape,
     InvalidUnicodeEscape,
+    IntegerOverflow,
+    IntegerUnderflow,
     InvalidNumberFound(lexical_core::Error),
     InvalidBytesEncoding(data_encoding::DecodeKind),
     InvalidParagraphLine,
@@ -44,6 +46,8 @@ pub enum ErrorKind {
     ExpectedTuple,
     ExpectedMap,
     ExpectedUnit,
+    ExpectedStructure,
+
     ExpectedUnitStruct { name: &'static str },
     ExpectedNewtypeStruct { name: &'static str },
     ExpectedTupleStruct { name: &'static str },
