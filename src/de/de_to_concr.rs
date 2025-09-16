@@ -5,35 +5,6 @@ use serde::{
     Deserializer,
 };
 
-impl<'de> Parser<'de> {
-    #[inline]
-    fn access_tuple<'a>(&'a mut self, req_trailing_comma: bool) -> SeqAccessor<'a, 'de, false> {
-        SeqAccessor {
-            der: self,
-            req_trailing_comma,
-        }
-    }
-    #[inline]
-    fn access_seq<'a>(&'a mut self) -> SeqAccessor<'a, 'de, true> {
-        SeqAccessor {
-            der: self,
-            req_trailing_comma: false,
-        }
-    }
-    #[inline]
-    fn access_map<'a>(&'a mut self) -> MapAccessor<'a, 'de, false> {
-        MapAccessor { der: self }
-    }
-    #[inline]
-    fn access_struct<'a>(&'a mut self) -> MapAccessor<'a, 'de, true> {
-        MapAccessor { der: self }
-    }
-    #[inline]
-    fn access_enum<'a>(&'a mut self, variant: &'de str) -> EnumAccessor<'a, 'de> {
-        EnumAccessor { der: self, variant }
-    }
-}
-
 //------------------------------------------------------------------------------
 
 macro_rules! deserialize_integer {
@@ -209,67 +180,136 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
                 self.watch(res)
             }
         } else {
-            self.raise(ErrorKind::ExpectedOption)
+            self.raise(ErrorKind::ExpectedMaybe)
         }
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         let start = self.pos;
-        if self.consume_ws_("(")? && self.consume_ws_(")")? {
-            return self.watch(vis.visit_unit());
-        }
 
-        self.raise_at(start, ErrorKind::ExpectedUnit)
+        if self.consume_ws_("(")? && self.consume_ws_(")")? {
+            self.watch(vis.visit_unit())
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedUnit)
+        }
     }
 
     //------------------------------------------------------------------------------
-    // TODO: The following code not watched !!!
 
-    fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
+    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
         let start = self.pos;
+
         if self.consume_ws_("(")? {
-            self.consume_ident_exact(name)?;
-            if self.consume_ws_(")")? {
-                return vis.visit_unit();
-            }
-        }
+            let res = vis.visit_seq(self.access_tuple());
+            let val = self.watch(res)?;
 
-        self.raise_at(start, ErrorKind::ExpectedUnitStruct { name })
-    }
-
-    fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        if (self.consume_ws_("_")?
-            || self.consume_ws_("(")? && self.consume_ident_exact(name)? && self.consume_ws_(")")?)
-            && self.consume_ws_("(")?
-        {
-            let val = vis.visit_newtype_struct(&mut *self)?;
-            self.consume_ws_(",")?;
-            if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::Expected("`)` and optional preceding `,`"));
-            }
-
-            return Ok(val);
-        }
-
-        self.raise_at(start, ErrorKind::ExpectedNewtypeStruct { name })
-    }
-
-    fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, _len: usize, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        if (self.consume_ws_("_")?
-            || self.consume_ws_("(")? && self.consume_ident_exact(name)? && self.consume_ws_(")")?)
-            && self.consume_ws_("(")?
-        {
-            let val = vis.visit_seq(self.access_tuple(false))?;
             if !self.consume_ws_(")")? {
                 return self.raise(ErrorKind::Expected("`)`"));
             }
 
-            return Ok(val);
+            Ok(val)
+        } else if len == 1 {
+            let res = vis.visit_seq(self.access_unwrapped_unary_tuple());
+            let val = self.watch(res)?;
+
+            Ok(val)
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedTuple)
+        }
+    }
+
+    fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        let start = self.pos;
+
+        if self.consume_ws_("[")? {
+            let res = vis.visit_seq(self.access_seq());
+            let val = self.watch(res)?;
+
+            if !self.consume_ws_("]")? {
+                return self.raise(ErrorKind::Expected("`]`"));
+            }
+
+            Ok(val)
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedSequence)
+        }
+    }
+
+    fn deserialize_map<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
+        let start = self.pos;
+
+        if self.consume_ws_("{")? {
+            let res = vis.visit_map(self.access_map());
+            let val = self.watch(res)?;
+
+            if !self.consume_ws_("}")? {
+                return self.raise(ErrorKind::Expected("`}`"));
+            }
+
+            Ok(val)
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedMap)
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
+        let start = self.pos;
+
+        if self.consume_nominal_path_with_stem(name)? {
+            /* Name */
+            if self.consume_ws_("(")? {
+                /* Name() */
+                if !self.consume_ws_(")")? {
+                    return self.raise(ErrorKind::Expected("`)`"));
+                }
+            }
+        } else if self.consume_ws_("(")? {
+            /* () */
+            if !self.consume_ws_(")")? {
+                return self.raise(ErrorKind::Expected("`)`"));
+            }
+        } else {
+            return self.raise_at(start, ErrorKind::ExpectedUnitStruct { name });
         }
 
-        self.raise_at(start, ErrorKind::ExpectedTupleStruct { name })
+        self.watch(vis.visit_unit())
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
+        let start = self.pos;
+
+        if self.consume_nominal_path_with_stem(name)? && self.consume_ws_("(")? {
+            let res = vis.visit_newtype_struct(&mut *self);
+            let val = self.watch(res)?;
+
+            self.consume_ws_(",")?;
+            if !self.consume_ws_(")")? {
+                return self.raise(ErrorKind::Expected("`)`"));
+            }
+
+            Ok(val)
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedNewtypeStruct { name })
+        }
+    }
+
+    fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, _len: usize, vis: V) -> Result<V::Value> {
+        let start = self.pos;
+
+        if self.consume_nominal_path_with_stem(name)? && self.consume_ws_("(")? {
+            let res = vis.visit_seq(self.access_tuple());
+            let val = self.watch(res)?;
+
+            if !self.consume_ws_(")")? {
+                return self.raise(ErrorKind::Expected("`)`"));
+            }
+
+            Ok(val)
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedTupleStruct { name })
+        }
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -279,70 +319,27 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         vis: V,
     ) -> Result<V::Value> {
         let start = self.pos;
-        if (self.consume_ws_("_")?
-            || self.consume_ws_("(")? && self.consume_ident_exact(name)? && self.consume_ws_(")")?)
-            && self.consume_ws_("{")?
-        {
-            let val = vis.visit_map(self.access_struct())?;
+
+        if self.consume_nominal_path_with_stem(name)? && self.consume_ws_("{")? {
+            let res = vis.visit_map(self.access_struct());
+            let val = self.watch(res)?;
+
             if !self.consume_ws_("}")? {
                 return self.raise(ErrorKind::Expected("`}`"));
             }
 
-            return Ok(val);
+            Ok(val)
+        } else {
+            self.raise_at(start, ErrorKind::ExpectedStruct { name })
         }
-
-        self.raise_at(start, ErrorKind::ExpectedStruct { name })
     }
-
-    //------------------------------------------------------------------------------
-
-    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        if self.consume_ws_("(")? {
-            let val = vis.visit_seq(self.access_tuple(len == 1))?;
-            if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::Expected("`)`"));
-            }
-
-            return Ok(val);
-        }
-
-        self.raise_at(start, ErrorKind::ExpectedTuple)
-    }
-
-    fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        if self.consume_ws_("[")? {
-            let val = vis.visit_seq(self.access_seq())?;
-            if !self.consume_ws_("]")? {
-                return self.raise(ErrorKind::Expected("`]`"));
-            }
-
-            return Ok(val);
-        }
-
-        self.raise_at(start, ErrorKind::ExpectedSequence)
-    }
-
-    fn deserialize_map<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        let start = self.pos;
-        if self.consume_ws_("{")? {
-            let val = vis.visit_map(self.access_map())?;
-            if !self.consume_ws_("}")? {
-                return self.raise(ErrorKind::Expected("`}`"));
-            }
-
-            return Ok(val);
-        }
-
-        self.raise_at(start, ErrorKind::ExpectedMap)
-    }
-
-    //------------------------------------------------------------------------------
 
     fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        vis.visit_borrowed_str(self.consume_ident()?)
+        let res = vis.visit_borrowed_str(self.consume_ident()?);
+        self.watch(res)
     }
+
+    //------------------------------------------------------------------------------
 
     fn deserialize_enum<V: Visitor<'de>>(
         self,
@@ -350,66 +347,99 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         variants: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
-        let mut start = self.pos;
-        let mut variant = self.consume_ident()?;
+        let start = self.pos;
 
-        if self.consume_ws_("::")? {
-            if variant != name {
-                return self.raise_at(start, ErrorKind::ExpectedEnum { name });
-            }
+        let Some(variant_name) = self.consume_nominal_path_with_parent(name)? else {
+            return self.raise_at(start, ErrorKind::ExpectedEnum { name });
+        };
 
-            start = self.pos;
-            variant = self.consume_ident()?;
-        }
-
-        if !variants.contains(&variant) {
+        if !variants.contains(&variant_name) {
             return self.raise_at(start, ErrorKind::ExpectedVariant { variants });
         }
 
-        vis.visit_enum(self.access_enum(variant))
+        vis.visit_enum(self.access_enum(variant_name))
     }
 }
 
 //------------------------------------------------------------------------------
 
-struct SeqAccessor<'a, 'de, const VECTOR_MODE: bool> {
-    der: &'a mut Parser<'de>,
-    req_trailing_comma: bool,
-}
+impl<'de> Parser<'de> {
+    fn access_unwrapped_unary_tuple<'a>(&'a mut self) -> UnaryAccessor<'a, 'de> {
+        UnaryAccessor { der: Some(self) }
+    }
 
-impl<'a, 'de, const VECTOR_MODE: bool> Deref for SeqAccessor<'a, 'de, VECTOR_MODE> {
-    type Target = Parser<'de>;
-    fn deref(&self) -> &Self::Target {
-        self.der
+    fn access_tuple<'a>(&'a mut self) -> SeqAccessor<'a, 'de> {
+        SeqAccessor {
+            der: (!matches!(self.peek_byte(), Some(b')'))).then_some(self),
+        }
+    }
+
+    fn access_seq<'a>(&'a mut self) -> SeqAccessor<'a, 'de> {
+        SeqAccessor {
+            der: (!matches!(self.peek_byte(), Some(b']'))).then_some(self),
+        }
+    }
+
+    fn access_map<'a>(&'a mut self) -> MapAccessor<'a, 'de, false> {
+        MapAccessor {
+            der: (!matches!(self.peek_byte(), Some(b'}'))).then_some(self),
+        }
+    }
+
+    fn access_struct<'a>(&'a mut self) -> MapAccessor<'a, 'de, true> {
+        MapAccessor {
+            der: (!matches!(self.peek_byte(), Some(b'}'))).then_some(self),
+        }
+    }
+
+    fn access_enum<'a>(&'a mut self, variant_name: &'de str) -> EnumAccessor<'a, 'de> {
+        EnumAccessor {
+            der: self,
+            variant_name,
+        }
     }
 }
 
-impl<'a, 'de, const VECTOR_MODE: bool> DerefMut for SeqAccessor<'a, 'de, VECTOR_MODE> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.der
-    }
+//------------------------------------------------------------------------------
+
+// NOTE:
+// The result of `seed.deserialize(_)` does not need to call `Parser::watch(_)`,
+// as the parser's implementation of `serde::Deserializer` already handles the
+// `corrupted` flag correctly. Same below.
+
+struct UnaryAccessor<'a, 'de> {
+    der: Option<&'a mut Parser<'de>>,
 }
 
-impl<'a, 'de, const VECTOR_MODE: bool> SeqAccess<'de> for SeqAccessor<'a, 'de, VECTOR_MODE> {
+impl<'a, 'de> SeqAccess<'de> for UnaryAccessor<'a, 'de> {
     type Error = Error;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
-        if self.adjacent_to_delim() {
+        let Some(der) = self.der.take() else {
             return Ok(None);
-        }
+        };
 
-        let val = seed.deserialize(&mut **self)?;
+        Ok(Some(seed.deserialize(&mut *der)?))
+    }
+}
 
-        if !self.consume_ws_(",")? {
-            if VECTOR_MODE {
-                if !matches!(self.peek_byte(), Some(b']')) {
-                    return self.raise(ErrorKind::Expected("`,` or `]`"));
-                }
-            } else if !matches!(self.peek_byte(), Some(b')')) {
-                return self.raise(ErrorKind::Expected("`,` or `)`"));
-            } else if self.req_trailing_comma {
-                return self.raise(ErrorKind::Expected("`,` for a tuple of length 1"));
-            }
+//------------------------------------------------------------------------------
+
+struct SeqAccessor<'a, 'de> {
+    der: Option<&'a mut Parser<'de>>,
+}
+
+impl<'a, 'de> SeqAccess<'de> for SeqAccessor<'a, 'de> {
+    type Error = Error;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
+        let Some(ref mut der) = self.der else {
+            return Ok(None);
+        };
+
+        let val = seed.deserialize(&mut **der)?;
+        if !der.consume_ws_(",")? {
+            self.der = None;
         }
 
         Ok(Some(val))
@@ -419,48 +449,41 @@ impl<'a, 'de, const VECTOR_MODE: bool> SeqAccess<'de> for SeqAccessor<'a, 'de, V
 //------------------------------------------------------------------------------
 
 struct MapAccessor<'a, 'de, const STRUCT_MODE: bool> {
-    der: &'a mut Parser<'de>,
-}
-
-impl<'a, 'de, const STRUCT_MODE: bool> Deref for MapAccessor<'a, 'de, STRUCT_MODE> {
-    type Target = Parser<'de>;
-    fn deref(&self) -> &Self::Target {
-        self.der
-    }
-}
-
-impl<'a, 'de, const STRUCT_MODE: bool> DerefMut for MapAccessor<'a, 'de, STRUCT_MODE> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.der
-    }
+    der: Option<&'a mut Parser<'de>>,
 }
 
 impl<'a, 'de, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'a, 'de, STRUCT_MODE> {
     type Error = Error;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
-        if self.adjacent_to_delim() {
+        let Some(ref mut der) = self.der else {
             return Ok(None);
-        }
+        };
 
-        let val = seed.deserialize(&mut **self)?;
+        // NOTE:
+        // This line of code calls `deserialize_identifier` under STRUCT_MODE
+        // because a struct is being deserialized.
+        let key = seed.deserialize(&mut **der)?;
 
         if STRUCT_MODE {
-            if !self.consume_ws_(":")? {
-                return self.raise(ErrorKind::Expected("`:`"));
+            if !der.consume_ws_("=>")? {
+                return der.raise(ErrorKind::Expected("`=>`"));
             }
-        } else if !self.consume_ws_("=>")? {
-            return self.raise(ErrorKind::Expected("`=>`"));
+        } else if !der.consume_ws_(":")? {
+            return der.raise(ErrorKind::Expected("`:`"));
         }
 
-        Ok(Some(val))
+        Ok(Some(key))
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
-        let val = seed.deserialize(&mut **self)?;
+        let Some(ref mut der) = self.der else {
+            panic!("contract violation")
+        };
 
-        if !self.consume_ws_(",")? && !matches!(self.peek_byte(), Some(b'}')) {
-            return self.raise(ErrorKind::Expected("`,` or `}`"));
+        let val = seed.deserialize(&mut **der)?;
+        if !der.consume_ws_(",")? {
+            self.der = None;
         }
 
         Ok(val)
@@ -471,20 +494,19 @@ impl<'a, 'de, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'a, 'de, S
 
 struct EnumAccessor<'a, 'de> {
     der: &'a mut Parser<'de>,
-    variant: &'de str,
+    variant_name: &'de str,
 }
 
 impl<'a, 'de> EnumAccess<'de> for EnumAccessor<'a, 'de> {
     type Error = Error;
-
     type Variant = &'a mut Parser<'de>;
 
-    fn variant_seed<V>(self, seed: V) -> std::result::Result<(V::Value, Self::Variant), Self::Error>
-    where
-        V: DeserializeSeed<'de>,
-    {
+    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> Result<(V::Value, Self::Variant)> {
         Ok((
-            seed.deserialize(BorrowedStrDeserializer::<Error>::new(self.variant))?,
+            // NOTE:
+            // This line of code does not call `deserialize_identifier`, because we have
+            // complex nominal paths, and variant names have been extracted separately.
+            seed.deserialize(BorrowedStrDeserializer::<Error>::new(self.variant_name))?,
             self.der,
         ))
     }
@@ -520,7 +542,7 @@ impl<'de> VariantAccess<'de> for &mut Parser<'de> {
             return self.raise(ErrorKind::ExpectedNewtypeVariant);
         }
 
-        let val = vis.visit_seq(self.access_tuple(false))?;
+        let val = vis.visit_seq(self.access_tuple())?;
         if !self.consume_ws_(")")? {
             return self.raise(ErrorKind::Expected("`)`"));
         }

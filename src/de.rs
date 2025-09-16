@@ -372,7 +372,7 @@ impl<'de> Parser<'de> {
             return self.raise_at(start, ErrorKind::UnderscoreIdent);
         }
 
-        let end = self.pos;
+        let end: usize = self.pos;
         self.consume_whitespace_comment()?;
 
         Ok((raw_mode, &self.src[start..end]))
@@ -384,7 +384,7 @@ impl<'de> Parser<'de> {
         let (raw_mode, ident) = self.consume_keyword_or_ident()?;
         if !raw_mode {
             if let Ok(i) = KEYWORDS.binary_search(&ident) {
-                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword: KEYWORDS[i] });
+                return self.raise_at(start, ErrorKind::ExpectedIdentFound { keyword: KEYWORDS[i] });
             }
         }
         Ok(ident)
@@ -395,7 +395,7 @@ impl<'de> Parser<'de> {
         let start = self.pos;
         if !self.consume("`") {
             if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
-                return self.raise_at(start, ErrorKind::UnexpectedKeyword { keyword });
+                return self.raise_at(start, ErrorKind::ExpectedIdentFound { keyword });
             }
         }
 
@@ -405,6 +405,16 @@ impl<'de> Parser<'de> {
             self.pos = start;
             Ok(false)
         }
+    }
+
+    #[inline]
+    fn consume_nominal_path_with_stem(&mut self, name: &'static str) -> Result<bool> {
+        todo!()
+    }
+
+    #[inline]
+    fn consume_nominal_path_with_parent(&mut self, name: &'static str) -> Result<Option<&'de str>> {
+        todo!()
     }
 
     #[inline]
@@ -574,7 +584,7 @@ impl<'de> Parser<'de> {
 /// NOTE: A name starting with an underscore indicates that
 /// the parser does not consume any characters during the lookahead.
 #[derive(Debug, PartialEq)]
-enum Kind {
+enum Kind<'de> {
     _Char,
     _Byte,
     _Bytes,
@@ -592,8 +602,8 @@ enum Kind {
     Seq,
     Map,
     NominalUnnamed,
-    NominalStemOnly { stem: Str },
-    NominalFullNamed { stem: Str, parent: Str },
+    NominalStemOnly { name: &'de str },
+    NominalFullNamed { name: &'de str, path: Vec<&'de str> },
 }
 
 #[derive(Debug, PartialEq)]
@@ -605,7 +615,7 @@ enum NominalKind {
 
 impl<'de> Parser<'de> {
     #[inline]
-    fn lookahead(&mut self) -> Result<Kind> {
+    fn lookahead(&mut self) -> Result<Kind<'_>> {
         if self.consume_ws_("_")? {
             return Ok(Kind::NominalUnnamed);
         } else if self.consume_ws_("?")? {
@@ -650,23 +660,20 @@ impl<'de> Parser<'de> {
                         }
                     }
 
-                    let mut stem = word;
+                    let mut name = word;
                     if self.consume_ws_("::")? {
-                        let mut parent = vec![stem];
+                        let mut path = vec![name];
                         loop {
-                            stem = self.consume_ident()?;
+                            name = self.consume_ident()?;
                             if !self.consume_ws_("::")? {
                                 break;
                             }
-                            parent.push(stem);
+                            path.push(name);
                         }
 
-                        Kind::NominalFullNamed {
-                            stem: stem.into(),
-                            parent: parent.join("::").into(),
-                        }
+                        Kind::NominalFullNamed { name, path }
                     } else {
-                        Kind::NominalStemOnly { stem: stem.into() }
+                        Kind::NominalStemOnly { name }
                     }
                 }
 
@@ -706,7 +713,7 @@ impl<'de> Parser<'de> {
         } else if self.consume_ws_("{")? {
             Ok(NominalKind::Record)
         } else {
-            self.raise(ErrorKind::ExpectedStructure)
+            self.raise(ErrorKind::ExpectedNominalValue)
         }
     }
 }
@@ -1007,11 +1014,11 @@ impl<'de> Parser<'de> {
         }
 
         let mut buf = String::new();
-        let mut first;
+        let mut firstline;
         match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
-            None => first = Some(trim(self.bump_to_end())),
+            None => firstline = Some(trim(self.bump_to_end())),
             Some(off) => {
-                first = Some(trim(self.bump(off)));
+                firstline = Some(trim(self.bump(off)));
                 self.consume_newline()?;
                 self.consume_whitespace_comment()?;
             }
@@ -1033,30 +1040,30 @@ impl<'de> Parser<'de> {
 
             self.bump(1);
 
-            let conti;
+            let contiline;
             match memchr::memchr2(b'\r', b'\n', self.rest_bytes()) {
-                None => conti = trim(self.bump_to_end()),
+                None => contiline = trim(self.bump_to_end()),
                 Some(off) => {
-                    conti = trim(self.bump(off));
+                    contiline = trim(self.bump(off));
                     self.consume_newline()?;
                     self.consume_whitespace_comment()?;
                 }
             }
 
-            if let Some(first) = first.take() {
+            if let Some(first) = firstline.take() {
                 buf.push_str(first);
             }
             if sym == b'|' {
                 buf.push('\n');
             }
-            if sym == b'>' && !conti.is_empty() {
+            if sym == b'>' && !contiline.is_empty() {
                 buf.push(' ');
             }
 
-            buf.push_str(conti);
+            buf.push_str(contiline);
         }
 
-        if let Some(s) = first {
+        if let Some(s) = firstline {
             Ok(Either::Left(s))
         } else {
             Ok(Either::Right(buf))

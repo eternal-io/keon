@@ -30,13 +30,13 @@ pub enum Value {
     /// Literal 64-bit unsigned integer.
     Unsigned64(u64),
     /// Literal 64-bit signed integer.
-    /// Guaranteed to be a negative number if the value is parsed by KEON.
+    /// Guaranteed to be a negative number if this value is parsed by KEON.
     Negative64(i64),
 
     /// Literal 128-bit unsigned integer.
     Unsigned128(Box<u128>),
     /// Literal 128-bit signed integer.
-    /// Guaranteed to be a negative number if the value is parsed by KEON.
+    /// Guaranteed to be a negative number if this value is parsed by KEON.
     Negative128(Box<i128>),
 
     /// Literal string.
@@ -67,9 +67,19 @@ pub enum Value {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Nominal {
-    Unnamed { stru: Struct },
-    StemOnly { stru: Struct, stem: Str },
-    FullNamed { stru: Struct, stem: Str, parent: Str },
+    Unnamed {
+        stru: Struct,
+    },
+    StemOnly {
+        stru: Struct,
+        name: Str,
+    },
+    FullNamed {
+        stru: Struct,
+        name: Str,
+        /// Guaranteed to have at least one path component if this value is parsed by KEON.
+        path: Vec<Str>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

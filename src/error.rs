@@ -30,13 +30,17 @@ pub enum ErrorKind {
     InvalidBytesEncoding(data_encoding::DecodeKind),
     InvalidParagraphLine,
 
-    ExpectedValue,
     ExpectedEnd,
     UnexpectedEnd,
     ExpectedSemiOrEnd,
     ExpectedIdent,
-    UnexpectedKeyword { keyword: &'static str },
-    ExpectedOption,
+    ExpectedIdentFound { keyword: &'static str },
+    ExpectedValue,
+    ExpectedNominalValue,
+    Expected(&'static str),
+
+    /* parsing with known types */
+    ExpectedMaybe,
     ExpectedBoolean,
     ExpectedCharacter,
     ExpectedStringOrParagraph,
@@ -46,8 +50,6 @@ pub enum ErrorKind {
     ExpectedTuple,
     ExpectedMap,
     ExpectedUnit,
-    ExpectedStructure,
-
     ExpectedUnitStruct { name: &'static str },
     ExpectedNewtypeStruct { name: &'static str },
     ExpectedTupleStruct { name: &'static str },
@@ -58,7 +60,6 @@ pub enum ErrorKind {
     ExpectedNewtypeVariant,
     ExpectedTupleVariant,
     ExpectedStructVariant,
-    Expected(&'static str),
 }
 
 //------------------------------------------------------------------------------
