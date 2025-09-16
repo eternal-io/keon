@@ -47,8 +47,8 @@ where
     }
 
     #[inline]
-    pub fn is_poisoned(&self) -> bool {
-        self.der.is_poisoned()
+    pub fn is_corrupted(&self) -> bool {
+        self.der.is_corrupted()
     }
 }
 
@@ -59,8 +59,8 @@ where
     type Item = Result<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.der.is_poisoned() {
-            return Some(self.der.raise(ErrorKind::Poisoned));
+        if self.der.is_corrupted() {
+            return Some(self.der.raise(ErrorKind::Corrupted));
         }
         if self.der.has_reached_end() {
             return None;
@@ -102,14 +102,14 @@ pub struct Parser<'de> {
     leading_ws_handled: bool,
 
     /// If a parser has previously failed, to prevent it from being used again,
-    /// all subsequent uses of failable methods will fail with [`ErrorKind::Poisoned`].
+    /// all subsequent uses of failable methods will fail with [`ErrorKind::Corrupted`].
     ///
     /// This flag is primarily maintained by `raise_` methods. Implementations should not
     /// forget to set this flag if the [`Result`] is not constructed via a parser (e.g.
     /// via [`serde::de::Visitor`]). The convenience method [`Self::watch`] can be useful.
     ///
     /// All non-trait methods on this parser are guaranteed to handle this flag correctly.
-    poisoned: bool,
+    corrupted: bool,
 }
 
 impl<'de> Parser<'de> {
@@ -119,7 +119,7 @@ impl<'de> Parser<'de> {
             src,
             pos: 0,
             leading_ws_handled: false,
-            poisoned: false,
+            corrupted: false,
         }
     }
 
@@ -135,7 +135,7 @@ impl<'de> Parser<'de> {
     /// Returns `Ok(_)` if the current value is finished correctly and no more values.
     #[inline]
     pub fn finish(&mut self) -> Result<()> {
-        self.poison_guard()?;
+        self.corrupt_guard()?;
         self.consume_ws_(";")?;
         if self.has_reached_end() {
             Ok(())
@@ -148,7 +148,7 @@ impl<'de> Parser<'de> {
     /// The `bool` inside indicates whether there are more values.
     #[inline]
     pub fn finish_one(&mut self) -> Result<bool> {
-        self.poison_guard()?;
+        self.corrupt_guard()?;
         if self.consume_ws_(";")? {
             Ok(!self.has_reached_end())
         } else if self.has_reached_end() {
@@ -164,8 +164,8 @@ impl<'de> Parser<'de> {
     }
 
     #[inline]
-    pub fn is_poisoned(&self) -> bool {
-        self.poisoned
+    pub fn is_corrupted(&self) -> bool {
+        self.corrupted
     }
 }
 
@@ -217,15 +217,15 @@ impl<'de> Parser<'de> {
     #[inline]
     fn watch<T>(&mut self, res: Result<T>) -> Result<T> {
         if res.is_err() {
-            self.poisoned = true;
+            self.corrupted = true;
         }
         res
     }
 
     #[inline]
-    fn poison_guard(&mut self) -> Result<()> {
-        match self.poisoned {
-            true => self.raise(ErrorKind::Poisoned),
+    fn corrupt_guard(&mut self) -> Result<()> {
+        match self.corrupted {
+            true => self.raise(ErrorKind::Corrupted),
             false => Ok(()),
         }
     }
@@ -283,14 +283,14 @@ impl<'de> Parser<'de> {
     }
     #[inline]
     fn raise_at<T>(&mut self, pos: usize, kind: ErrorKind) -> Result<T> {
-        self.poison_guard()?;
-        self.poisoned = true;
+        self.corrupt_guard()?;
+        self.corrupted = true;
         Error::raise_at(pos, kind)
     }
     #[inline]
     fn raise_unexpected_end<T>(&mut self) -> Result<T> {
-        self.poison_guard()?;
-        self.poisoned = true;
+        self.corrupt_guard()?;
+        self.corrupted = true;
         Error::raise_at(self.src.len(), ErrorKind::UnexpectedEnd)
     }
 

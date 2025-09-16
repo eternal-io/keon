@@ -11,7 +11,7 @@ pub struct Error {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
-    Poisoned,
+    Corrupted,
     WontImplement,
 
     DeeplyNestedComment,
