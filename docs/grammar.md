@@ -104,7 +104,8 @@ BOOLEAN_LITERAL ->
 
 // integer literals
 INTEGER_LITERAL ->
-    `long`? `-`? ( DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL )
+    ( `long` WS )? ( `-` WS )?
+    ( DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL )
 
 DEC_LITERAL -> DEC_DIGIT ( `_` | DEC_DIGIT )*
 BIN_LITERAL -> `0b` `_`* BIN_DIGIT ( `_` | BIN_DIGIT )*
@@ -118,12 +119,11 @@ HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 
 // float literals
 FLOAT_LITERAL ->
-    `-`? (
-          `inf`
-        | `NaN`
-        | DEC_LITERAL `.`
-        | DEC_LITERAL ( `.` DEC_LITERAL )? FLOAT_EXPONENT
-    )
+    ( `-` WS )?
+    ( `inf`
+    | `NaN`
+    | DEC_LITERAL `.`
+    | DEC_LITERAL ( `.` DEC_LITERAL )? FLOAT_EXPONENT )
 
 FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
@@ -219,8 +219,8 @@ MapValue ->
 /*== Nominals ==*/
 
 Nominal ->
-      ( NominalPath | `_` )
-      ( StructValue | TupleValue )?
+    ( NominalPath | `_` )
+    ( StructValue | TupleValue )?
 
 NominalPath ->
     ( IDENTIFIER `::` )* IDENTIFIER
