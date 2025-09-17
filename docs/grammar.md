@@ -223,7 +223,7 @@ Nominal ->
     ( StructValue | TupleValue )?
 
 NominalPath ->
-    ( IDENTIFIER `::` )* IDENTIFIER
+    ( IDENTIFIER `::` )? IDENTIFIER
 
 StructValue ->
     `{` (
