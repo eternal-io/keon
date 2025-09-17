@@ -67,19 +67,9 @@ pub enum Value {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Nominal {
-    Unnamed {
-        stru: Struct,
-    },
-    StemOnly {
-        stru: Struct,
-        name: Str,
-    },
-    FullNamed {
-        stru: Struct,
-        name: Str,
-        /// Guaranteed to have at least one path component if this value is parsed by KEON.
-        path: Vec<Str>,
-    },
+    Unnamed { stru: Struct },
+    StemOnly { stru: Struct, name: Str },
+    FullNamed { stru: Struct, name: Str, parent: Str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

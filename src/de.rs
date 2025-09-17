@@ -224,9 +224,10 @@ impl<'de> Parser<'de> {
 
     #[inline]
     fn corrupt_guard(&mut self) -> Result<()> {
-        match self.corrupted {
-            true => self.raise(ErrorKind::Corrupted),
-            false => Ok(()),
+        if self.corrupted {
+            self.raise(ErrorKind::Corrupted)
+        } else {
+            Ok(())
         }
     }
 
@@ -283,13 +284,11 @@ impl<'de> Parser<'de> {
     }
     #[inline]
     fn raise_at<T>(&mut self, pos: usize, kind: ErrorKind) -> Result<T> {
-        self.corrupt_guard()?;
         self.corrupted = true;
         Error::raise_at(pos, kind)
     }
     #[inline]
     fn raise_unexpected_end<T>(&mut self) -> Result<T> {
-        self.corrupt_guard()?;
         self.corrupted = true;
         Error::raise_at(self.src.len(), ErrorKind::UnexpectedEnd)
     }
@@ -357,6 +356,14 @@ impl<'de> Parser<'de> {
 
     #[inline]
     fn consume_keyword_or_ident(&mut self) -> Result<(bool, &'de str)> {
+        self.consume_keyword_or_ident_or_underscore()?.ok_or_else(|| {
+            self.corrupted = true;
+            Error::new_at(self.pos - 1, ErrorKind::UnderscoreIdent)
+        })
+    }
+
+    #[inline]
+    fn consume_keyword_or_ident_or_underscore(&mut self) -> Result<Option<(bool, &'de str)>> {
         let raw_mode = self.consume("`");
         let start = self.pos;
         let need_more = if self.consume("_") {
@@ -369,13 +376,13 @@ impl<'de> Parser<'de> {
 
         let no_more = self.consume_while(|ch| unicode_ident::is_xid_continue(*ch)).is_empty();
         if need_more && no_more {
-            return self.raise_at(start, ErrorKind::UnderscoreIdent);
+            return Ok(None);
         }
 
-        let end: usize = self.pos;
+        let end = self.pos;
         self.consume_whitespace_comment()?;
 
-        Ok((raw_mode, &self.src[start..end]))
+        Ok(Some((raw_mode, &self.src[start..end])))
     }
 
     #[inline]
@@ -391,30 +398,26 @@ impl<'de> Parser<'de> {
     }
 
     #[inline]
-    fn consume_ident_exact(&mut self, ident: &'static str) -> Result<bool> {
-        let start = self.pos;
-        if !self.consume("`") {
-            if let Some(keyword) = KEYWORDS.iter().find(|kw| **kw == ident) {
-                return self.raise_at(start, ErrorKind::ExpectedIdentFound { keyword });
-            }
-        }
-
-        if self.consume_ws_(ident)? {
-            Ok(true)
-        } else {
-            self.pos = start;
-            Ok(false)
-        }
-    }
-
-    #[inline]
     fn consume_nominal_path_with_stem(&mut self, name: &'static str) -> Result<bool> {
+        // let mut stem = self.consume_ident_or_keyword()?;
+
+        // if self.consume_ws_("::")? {
+        //     stem = self.consume_ident()?;
+        // }
         todo!()
     }
 
     #[inline]
     fn consume_nominal_path_with_parent(&mut self, name: &'static str) -> Result<Option<&'de str>> {
         todo!()
+        // if self.consume_ws_("::")? {
+        //     let parent = stem;
+        //     let stem = self.consume_ident()?;
+
+        //     Ok((parent == name).then_some(stem))
+        // } else {
+        //     Ok(None)
+        // }
     }
 
     #[inline]
@@ -603,7 +606,7 @@ enum Kind<'de> {
     Map,
     NominalUnnamed,
     NominalStemOnly { name: &'de str },
-    NominalFullNamed { name: &'de str, path: Vec<&'de str> },
+    NominalFullNamed { name: &'de str, parent: &'de str },
 }
 
 #[derive(Debug, PartialEq)]
@@ -644,10 +647,10 @@ impl<'de> Parser<'de> {
                 [b'-' | b'0'..=b'9', ..] => break 'non_number false,
 
                 [_, ..] => {
-                    let (raw_mode, word) = self.consume_keyword_or_ident()?;
+                    let (raw_mode, name) = self.consume_keyword_or_ident()?;
                     'keyword: {
                         if !raw_mode {
-                            let kind = match word {
+                            let kind = match name {
                                 "long" => break 'non_number true,
                                 "NaN" => Kind::SpecialFloat(f64::NAN),
                                 "inf" => Kind::SpecialFloat(f64::INFINITY),
@@ -660,18 +663,11 @@ impl<'de> Parser<'de> {
                         }
                     }
 
-                    let mut name = word;
                     if self.consume_ws_("::")? {
-                        let mut path = vec![name];
-                        loop {
-                            name = self.consume_ident()?;
-                            if !self.consume_ws_("::")? {
-                                break;
-                            }
-                            path.push(name);
-                        }
+                        let parent = name;
+                        let name = self.consume_ident()?;
 
-                        Kind::NominalFullNamed { name, path }
+                        Kind::NominalFullNamed { name, parent }
                     } else {
                         Kind::NominalStemOnly { name }
                     }
