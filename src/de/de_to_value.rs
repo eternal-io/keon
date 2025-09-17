@@ -6,7 +6,7 @@ pub fn parse_value(s: &str) -> Result<Value> {
 }
 
 pub fn parse_values(s: &str) -> ValueIterParser<'_> {
-    ValueIterParser { der: Parser::new(s) }
+    Parser::new(s).into_value_iter()
 }
 
 //------------------------------------------------------------------------------
@@ -84,6 +84,40 @@ impl FromStr for Value {
 
 impl Value {
     pub fn deserialize(der: &mut Parser<'_>) -> Result<Self> {
-        todo!()
+        let val = match der.lookahead()? {
+            Kind::_Char => der.parse_char()?.into(),
+            Kind::_Byte => der.parse_byte()?.into(),
+            Kind::_Bytes => der.parse_byte_string()?.converge(),
+            Kind::_StringOrParagraph => der.parse_string_or_paragraph()?.converge(),
+
+            Kind::Bool(v) => v.into(),
+            Kind::SpecialFloat(v) => v.into(),
+
+            Kind::Int { neg } => todo!(),
+            Kind::Float { neg } => todo!(),
+            Kind::LongInt { neg } => todo!(),
+
+            Kind::Maybe => Self::deserialize_maybe(der)?,
+            Kind::Tuple => todo!(),
+            Kind::Seq => todo!(),
+            Kind::Map => todo!(),
+
+            Kind::NominalUnnamed => todo!(),
+            Kind::NominalStemOnly { name } => todo!(),
+            Kind::NominalFullNamed { name, parent } => todo!(),
+        };
+
+        Ok(val)
+    }
+
+    /// NOTE: The leading `?` has already been consumed.
+    fn deserialize_maybe(der: &mut Parser) -> Result<Self> {
+        let val = if der.adjacent_to_delim() {
+            Value::Maybe(None)
+        } else {
+            Value::Maybe(Some(Box::new(Self::deserialize(der)?)))
+        };
+
+        Ok(val)
     }
 }

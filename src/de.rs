@@ -560,13 +560,10 @@ enum Kind<'de> {
     _Bytes,
     _StringOrParagraph,
     Bool(bool),
-    UnsFloat,
-    NegFloat,
     SpecialFloat(f64),
-    UnsInt,
-    NegInt,
-    LongUnsInt,
-    LongNegInt,
+    Int { neg: bool },
+    Float { neg: bool },
+    LongInt { neg: bool },
     Maybe,
     Tuple,
     Seq,
@@ -641,20 +638,20 @@ impl<'de> Parser<'de> {
 
         let kind = if long_number {
             if self.consume_ws_("-")? {
-                Kind::LongNegInt
+                Kind::LongInt { neg: true }
             } else {
-                Kind::LongUnsInt
+                Kind::LongInt { neg: false }
             }
         } else if self.consume_ws_("-")? {
             if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
-                Kind::NegFloat
+                Kind::Float { neg: true }
             } else {
-                Kind::NegInt
+                Kind::Int { neg: true }
             }
         } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
-            Kind::UnsFloat // lexical-core can handle `inf` and `NaN`.
+            Kind::Float { neg: false } // lexical-core can handle `inf` and `NaN`.
         } else {
-            Kind::UnsInt
+            Kind::Int { neg: false }
         };
 
         Ok(kind)
@@ -679,6 +676,19 @@ impl<'de> Parser<'de> {
 enum Either<L, R> {
     Left(L),
     Right(R),
+}
+
+impl<L, R> Either<L, R> {
+    fn converge<T>(self) -> T
+    where
+        L: Into<T>,
+        R: Into<T>,
+    {
+        match self {
+            Either::Left(left) => left.into(),
+            Either::Right(right) => right.into(),
+        }
+    }
 }
 
 macro_rules! maybe_deserialize_baseXX {
@@ -866,6 +876,7 @@ impl<'de> Parser<'de> {
         self.raise_at(start, ErrorKind::ExpectedByteString)
     }
 
+    #[inline]
     fn parse_string_or_paragraph(&mut self) -> Result<Either<&'de str, String>> {
         let start = self.pos;
         let delim_len = self.consume_while_fast(is_backtick).len();

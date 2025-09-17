@@ -93,24 +93,25 @@ macro_rules! impl_into {
     };
 }
 
-impl_into!( Value | v: bool   => Value::Bool(v) );
-impl_into!( Value | v: char   => Value::Char(v) );
-impl_into!( Value | v: f32    => Value::Float(v.into()) );
-impl_into!( Value | v: f64    => Value::Float(v.into()) );
-impl_into!( Value | v: u8     => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u16    => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u32    => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u64    => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u128   => Value::Unsigned128(Box::new(v)) );
-impl_into!( Value | v: i8     => Value::Negative64(v as _) );
-impl_into!( Value | v: i16    => Value::Negative64(v as _) );
-impl_into!( Value | v: i32    => Value::Negative64(v as _) );
-impl_into!( Value | v: i64    => Value::Negative64(v as _) );
-impl_into!( Value | v: i128   => Value::Negative128(Box::new(v)) );
-impl_into!( Value | v: String => Value::String(Box::new(v)) );
-impl_into!( Value | v: &str   => Value::String(Box::new(v.into())) );
-impl_into!( Value | v: &[u8]  => Value::ByteBuf(Box::new(v.into())) );
-impl_into!( Value | v: ()     => Value::Tuple(None) );
+impl_into!( Value | v: bool    => Value::Bool(v) );
+impl_into!( Value | v: char    => Value::Char(v) );
+impl_into!( Value | v: f32     => Value::Float(v.into()) );
+impl_into!( Value | v: f64     => Value::Float(v.into()) );
+impl_into!( Value | v: u8      => Value::Unsigned64(v as _) );
+impl_into!( Value | v: u16     => Value::Unsigned64(v as _) );
+impl_into!( Value | v: u32     => Value::Unsigned64(v as _) );
+impl_into!( Value | v: u64     => Value::Unsigned64(v as _) );
+impl_into!( Value | v: u128    => Value::Unsigned128(Box::new(v)) );
+impl_into!( Value | v: i8      => Value::Negative64(v as _) );
+impl_into!( Value | v: i16     => Value::Negative64(v as _) );
+impl_into!( Value | v: i32     => Value::Negative64(v as _) );
+impl_into!( Value | v: i64     => Value::Negative64(v as _) );
+impl_into!( Value | v: i128    => Value::Negative128(Box::new(v)) );
+impl_into!( Value | v: String  => Value::String(Box::new(v)) );
+impl_into!( Value | v: &str    => Value::String(Box::new(v.into())) );
+impl_into!( Value | v: ByteBuf => Value::ByteBuf(Box::new(v)) );
+impl_into!( Value | v: &[u8]   => Value::ByteBuf(Box::new(v.into())) );
+impl_into!( Value | v: ()      => Value::Tuple(None) );
 
 //------------------------------------------------------------------------------
 
