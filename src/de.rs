@@ -4,86 +4,15 @@ use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
     NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
 };
-use serde::Deserialize;
 
 pub mod de_to_concr;
 pub mod de_to_value;
 
-pub fn parse<'de, T>(s: &'de str) -> Result<T>
-where
-    T: Deserialize<'de>,
-{
-    let mut der = Parser::new(s);
-    let value = T::deserialize(&mut der)?;
-    der.finish().and(Ok(value))
-}
-
-pub fn parse_many<'de, T>(s: &'de str) -> IterParser<'de, T>
-where
-    T: Deserialize<'de>,
-{
-    Parser::new(s).into_iter()
-}
-
-//------------------------------------------------------------------------------
-
-pub struct IterParser<'de, T> {
-    der: Parser<'de>,
-    phantom: PhantomData<T>,
-}
-
-impl<'de, T> IterParser<'de, T>
-where
-    T: Deserialize<'de>,
-{
-    #[inline]
-    pub fn into_inner(self) -> Parser<'de> {
-        self.der
-    }
-
-    #[inline]
-    pub fn is_exhausted(&self) -> bool {
-        self.der.has_reached_end()
-    }
-
-    #[inline]
-    pub fn is_corrupted(&self) -> bool {
-        self.der.is_corrupted()
-    }
-}
-
-impl<'de, T> Iterator for IterParser<'de, T>
-where
-    T: Deserialize<'de>,
-{
-    type Item = Result<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.der.is_corrupted() {
-            return Some(self.der.raise(ErrorKind::Corrupted));
-        }
-        if self.der.has_reached_end() {
-            return None;
-        }
-
-        let e = 'fail: {
-            if let Err(e) = self.der.consume_whitespace_comment_first() {
-                break 'fail e;
-            }
-            let v = match T::deserialize(&mut self.der) {
-                Err(e) => break 'fail e,
-                Ok(v) => v,
-            };
-            if let Err(e) = self.der.finish_one() {
-                break 'fail e;
-            }
-
-            return Some(Ok(v));
-        };
-
-        Some(Err(e))
-    }
-}
+#[doc(inline)]
+pub use self::{
+    de_to_concr::{parse, parse_many},
+    de_to_value::{parse_many_value, parse_value},
+};
 
 //------------------------------------------------------------------------------
 
@@ -123,15 +52,6 @@ impl<'de> Parser<'de> {
         }
     }
 
-    #[inline]
-    #[allow(clippy::should_implement_trait)]
-    pub fn into_iter<T: Deserialize<'de>>(self) -> IterParser<'de, T> {
-        IterParser {
-            der: self,
-            phantom: PhantomData,
-        }
-    }
-
     /// Returns `Ok(_)` if the current value is finished correctly and no more values.
     #[inline]
     pub fn finish(&mut self) -> Result<()> {
@@ -146,6 +66,8 @@ impl<'de> Parser<'de> {
 
     /// Returns `Ok(_)` if the current value is finished correctly.
     /// The `bool` inside indicates whether there are more values.
+    ///
+    /// You have to call this method before parsing every next value.
     #[inline]
     pub fn finish_one(&mut self) -> Result<bool> {
         self.corrupt_guard()?;
@@ -227,9 +149,9 @@ enum Keyword {
 /// The keyword list is sorted and must be sorted.
 const KEYWORDS: &[&str] = &["NaN", "false", "inf", "long", "true"];
 
-impl Into<&'static str> for Keyword {
-    fn into(self) -> &'static str {
-        KEYWORDS[self as usize]
+impl From<Keyword> for &'static str {
+    fn from(value: Keyword) -> Self {
+        KEYWORDS[value as usize]
     }
 }
 

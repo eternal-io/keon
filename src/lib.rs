@@ -5,7 +5,7 @@ pub mod value;
 
 #[doc(inline)]
 pub use crate::{
-    de::{parse, parse_many},
+    de::{parse, parse_many, parse_many_value, parse_value},
     error::{Error, ErrorKind, Result},
     value::Value,
 };
