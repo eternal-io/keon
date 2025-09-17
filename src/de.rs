@@ -171,9 +171,6 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-/// The keyword list is sorted and must be sorted.
-const KEYWORDS: &[&str] = &["NaN", "false", "inf", "long", "true"];
-
 const INTEGER_FORMAT: u128 = lexical_core::format::RUST_LITERAL;
 
 const INTEGER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
@@ -211,6 +208,44 @@ fn is_whitespace(ch: &char) -> bool {
 
 fn is_backtick(byte: &u8) -> bool {
     *byte == b'`'
+}
+
+enum Token<'de> {
+    Keyword(Keyword),
+    Identifier(&'de str),
+    Underscore,
+}
+
+enum Keyword {
+    NotANumber,
+    False,
+    Infinity,
+    Long,
+    True,
+}
+
+/// The keyword list is sorted and must be sorted.
+const KEYWORDS: &[&str] = &["NaN", "false", "inf", "long", "true"];
+
+impl Into<&'static str> for Keyword {
+    fn into(self) -> &'static str {
+        KEYWORDS[self as usize]
+    }
+}
+
+impl TryFrom<&str> for Keyword {
+    type Error = ();
+
+    fn try_from(s: &str) -> StdResult<Self, Self::Error> {
+        KEYWORDS.binary_search(&s).or(Err(())).map(|idx| match idx {
+            0 => Self::NotANumber,
+            1 => Self::False,
+            2 => Self::Infinity,
+            3 => Self::Long,
+            4 => Self::True,
+            _ => unreachable!(),
+        })
+    }
 }
 
 impl<'de> Parser<'de> {
@@ -355,15 +390,31 @@ impl<'de> Parser<'de> {
     }
 
     #[inline]
-    fn consume_keyword_or_ident(&mut self) -> Result<(bool, &'de str)> {
-        self.consume_keyword_or_ident_or_underscore()?.ok_or_else(|| {
-            self.corrupted = true;
-            Error::new_at(self.pos - 1, ErrorKind::UnderscoreIdent)
-        })
+    fn consume_ident(&mut self) -> Result<&'de str> {
+        let start = self.pos;
+        match self.consume_keyword_or_ident_or_underscore()? {
+            Token::Keyword(kw) => self.raise_at(start, ErrorKind::UnexpectedKeywordIdent { keyword: kw.into() }),
+
+            Token::Identifier(ident) => Ok(ident),
+
+            Token::Underscore => self.raise_at(start, ErrorKind::UnexpectedUnderscoreIdent),
+        }
     }
 
     #[inline]
-    fn consume_keyword_or_ident_or_underscore(&mut self) -> Result<Option<(bool, &'de str)>> {
+    fn consume_ident_or_underscore(&mut self) -> Result<Option<&'de str>> {
+        let start = self.pos;
+        match self.consume_keyword_or_ident_or_underscore()? {
+            Token::Keyword(kw) => self.raise_at(start, ErrorKind::UnexpectedKeywordIdent { keyword: kw.into() }),
+
+            Token::Identifier(ident) => Ok(Some(ident)),
+
+            Token::Underscore => Ok(None),
+        }
+    }
+
+    #[inline]
+    fn consume_keyword_or_ident_or_underscore(&mut self) -> Result<Token<'de>> {
         let raw_mode = self.consume("`");
         let start = self.pos;
         let need_more = if self.consume("_") {
@@ -376,48 +427,48 @@ impl<'de> Parser<'de> {
 
         let no_more = self.consume_while(|ch| unicode_ident::is_xid_continue(*ch)).is_empty();
         if need_more && no_more {
-            return Ok(None);
+            return Ok(Token::Underscore);
         }
 
         let end = self.pos;
+
         self.consume_whitespace_comment()?;
 
-        Ok(Some((raw_mode, &self.src[start..end])))
-    }
-
-    #[inline]
-    fn consume_ident(&mut self) -> Result<&'de str> {
-        let start = self.pos;
-        let (raw_mode, ident) = self.consume_keyword_or_ident()?;
-        if !raw_mode {
-            if let Ok(i) = KEYWORDS.binary_search(&ident) {
-                return self.raise_at(start, ErrorKind::ExpectedIdentFound { keyword: KEYWORDS[i] });
+        let ident = &self.src[start..end];
+        let token = if !raw_mode {
+            if let Ok(kw) = Keyword::try_from(ident) {
+                Token::Keyword(kw)
+            } else {
+                Token::Identifier(ident)
             }
+        } else {
+            Token::Identifier(ident)
+        };
+
+        Ok(token)
+    }
+
+    #[inline]
+    fn consume_nominal_path_of_struct(&mut self, name: &'static str) -> Result<bool> {
+        let mut stem = self.consume_ident_or_underscore()?;
+        if self.consume_ws_("::")? {
+            stem = self.consume_ident_or_underscore()?;
         }
-        Ok(ident)
+
+        Ok(stem.map(|s| s == name).unwrap_or(true))
     }
 
     #[inline]
-    fn consume_nominal_path_with_stem(&mut self, name: &'static str) -> Result<bool> {
-        // let mut stem = self.consume_ident_or_keyword()?;
+    fn consume_nominal_path_of_enum(&mut self, name: &'static str) -> Result<Option<&'de str>> {
+        let stem = self.consume_ident_or_underscore()?;
+        if self.consume_ws_("::")? {
+            let parent = stem;
+            let stem = self.consume_ident()?;
 
-        // if self.consume_ws_("::")? {
-        //     stem = self.consume_ident()?;
-        // }
-        todo!()
-    }
-
-    #[inline]
-    fn consume_nominal_path_with_parent(&mut self, name: &'static str) -> Result<Option<&'de str>> {
-        todo!()
-        // if self.consume_ws_("::")? {
-        //     let parent = stem;
-        //     let stem = self.consume_ident()?;
-
-        //     Ok((parent == name).then_some(stem))
-        // } else {
-        //     Ok(None)
-        // }
+            Ok(parent.map(|p| p == name).unwrap_or(true).then_some(stem))
+        } else {
+            Ok(stem)
+        }
     }
 
     #[inline]
@@ -586,7 +637,6 @@ impl<'de> Parser<'de> {
 
 /// NOTE: A name starting with an underscore indicates that
 /// the parser does not consume any characters during the lookahead.
-#[derive(Debug, PartialEq)]
 enum Kind<'de> {
     _Char,
     _Byte,
@@ -609,7 +659,6 @@ enum Kind<'de> {
     NominalFullNamed { name: &'de str, parent: &'de str },
 }
 
-#[derive(Debug, PartialEq)]
 enum NominalKind {
     Unit,
     Tuple,
@@ -619,9 +668,7 @@ enum NominalKind {
 impl<'de> Parser<'de> {
     #[inline]
     fn lookahead(&mut self) -> Result<Kind<'_>> {
-        if self.consume_ws_("_")? {
-            return Ok(Kind::NominalUnnamed);
-        } else if self.consume_ws_("?")? {
+        if self.consume_ws_("?")? {
             return Ok(Kind::Maybe);
         } else if self.consume_ws_("(")? {
             return Ok(Kind::Tuple);
@@ -646,32 +693,28 @@ impl<'de> Parser<'de> {
 
                 [b'-' | b'0'..=b'9', ..] => break 'non_number false,
 
-                [_, ..] => {
-                    let (raw_mode, name) = self.consume_keyword_or_ident()?;
-                    'keyword: {
-                        if !raw_mode {
-                            let kind = match name {
-                                "long" => break 'non_number true,
-                                "NaN" => Kind::SpecialFloat(f64::NAN),
-                                "inf" => Kind::SpecialFloat(f64::INFINITY),
-                                "true" => Kind::Bool(true),
-                                "false" => Kind::Bool(false),
-                                _ => break 'keyword,
-                            };
+                [_, ..] => match self.consume_keyword_or_ident_or_underscore()? {
+                    Token::Keyword(kw) => match kw {
+                        Keyword::Long => break 'non_number true,
+                        Keyword::True => Kind::Bool(true),
+                        Keyword::False => Kind::Bool(false),
+                        Keyword::Infinity => Kind::SpecialFloat(f64::NAN),
+                        Keyword::NotANumber => Kind::SpecialFloat(f64::INFINITY),
+                    },
 
-                            return Ok(kind);
+                    Token::Identifier(name) => {
+                        if self.consume_ws_("::")? {
+                            let parent = name;
+                            let name = self.consume_ident()?;
+
+                            Kind::NominalFullNamed { name, parent }
+                        } else {
+                            Kind::NominalStemOnly { name }
                         }
                     }
 
-                    if self.consume_ws_("::")? {
-                        let parent = name;
-                        let name = self.consume_ident()?;
-
-                        Kind::NominalFullNamed { name, parent }
-                    } else {
-                        Kind::NominalStemOnly { name }
-                    }
-                }
+                    Token::Underscore => Kind::NominalUnnamed,
+                },
 
                 [] => return self.raise(ErrorKind::ExpectedValue),
             };

@@ -9,3 +9,5 @@ pub use crate::{
     error::{Error, ErrorKind, Result},
     value::Value,
 };
+
+pub(crate) use core::result::Result as StdResult;

@@ -1,4 +1,4 @@
-use core::{fmt, ops::Range};
+use core::fmt;
 
 pub type Result<T> = ::core::result::Result<T, Error>;
 
@@ -16,7 +16,6 @@ pub enum ErrorKind {
 
     DeeplyNestedComment,
     NonAsciiByteString,
-    UnderscoreIdent,
     UnbalancedRawDelimiters,
     UnexpectedCarriageReturn,
 
@@ -34,7 +33,8 @@ pub enum ErrorKind {
     UnexpectedEnd,
     ExpectedSemiOrEnd,
     ExpectedIdent,
-    ExpectedIdentFound { keyword: &'static str },
+    UnexpectedKeywordIdent { keyword: &'static str },
+    UnexpectedUnderscoreIdent,
     ExpectedValue,
     ExpectedNominalValue,
     Expected(&'static str),

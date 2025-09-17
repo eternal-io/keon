@@ -4,8 +4,6 @@ use serde::{
     Deserializer,
 };
 
-//------------------------------------------------------------------------------
-
 macro_rules! deserialize_integer {
     ( $self:ident, $ty:ident ) => {{
         $self.corrupt_guard()?;
@@ -82,8 +80,6 @@ macro_rules! deserialize_float {
         Ok(val)
     }};
 }
-
-//------------------------------------------------------------------------------
 
 impl<'de> Deserializer<'de> for &mut Parser<'de> {
     type Error = Error;
@@ -267,7 +263,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
         self.corrupt_guard()?;
 
-        if self.consume_nominal_path_with_stem(name)? {
+        if self.consume_nominal_path_of_struct(name)? {
             /* Name */
             if self.consume_ws_("(")? {
                 /* Name () */
@@ -291,7 +287,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.corrupt_guard()?;
 
         let start = self.pos;
-        if self.consume_nominal_path_with_stem(name)? && self.consume_ws_("(")? {
+        if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("(")? {
             let res = vis.visit_newtype_struct(&mut *self);
             let val = self.watch(res)?;
 
@@ -310,7 +306,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.corrupt_guard()?;
 
         let start = self.pos;
-        if self.consume_nominal_path_with_stem(name)? && self.consume_ws_("(")? {
+        if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("(")? {
             let res = vis.visit_seq(self.access_tuple());
             let val = self.watch(res)?;
 
@@ -333,7 +329,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.corrupt_guard()?;
 
         let start = self.pos;
-        if self.consume_nominal_path_with_stem(name)? && self.consume_ws_("{")? {
+        if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("{")? {
             let res = vis.visit_map(self.access_struct());
             let val = self.watch(res)?;
 
@@ -365,7 +361,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.corrupt_guard()?;
 
         let start = self.pos;
-        let Some(variant_name) = self.consume_nominal_path_with_parent(name)? else {
+        let Some(variant_name) = self.consume_nominal_path_of_enum(name)? else {
             return self.raise_at(start, ErrorKind::ExpectedEnum { name });
         };
 
