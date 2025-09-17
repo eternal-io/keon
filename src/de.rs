@@ -11,7 +11,7 @@ pub mod de_to_value;
 #[doc(inline)]
 pub use self::{
     de_to_concr::{parse, parse_many},
-    de_to_value::{parse_many_value, parse_value},
+    de_to_value::{parse_value, parse_values},
 };
 
 //------------------------------------------------------------------------------
@@ -26,8 +26,6 @@ pub struct Parser<'de> {
     /// However, only the first value requires additional whitespace handling,
     /// as [`consume_ws_(";")`](Self::consume_ws_) handles all leading whitespace after the first value.
     /// Therefore, this flag exists to allow for some simple optimizations.
-    ///
-    /// Implementations can simply call [`Self::consume_whitespace_comment_first`] before parsing each value to simplify the work.
     leading_ws_handled: bool,
 
     /// If a parser has previously failed, to prevent it from being used again,
@@ -43,7 +41,7 @@ pub struct Parser<'de> {
 
 impl<'de> Parser<'de> {
     #[inline]
-    pub const fn new(src: &'de str) -> Self {
+    pub fn new(src: &'de str) -> Self {
         Self {
             src,
             pos: 0,
@@ -55,23 +53,27 @@ impl<'de> Parser<'de> {
     /// Returns `Ok(_)` if the current value is finished correctly and no more values.
     #[inline]
     pub fn finish(&mut self) -> Result<()> {
-        self.corrupt_guard()?;
-        self.consume_ws_(";")?;
-        if self.has_reached_end() {
-            Ok(())
+        if self.corrupted {
+            self.raise(ErrorKind::Corrupted)
         } else {
-            self.raise(ErrorKind::ExpectedEnd)
+            self.consume_ws_(";")?;
+            if !self.has_reached_end() {
+                self.raise(ErrorKind::ExpectedEnd)
+            } else {
+                Ok(())
+            }
         }
     }
 
     /// Returns `Ok(_)` if the current value is finished correctly.
     /// The `bool` inside indicates whether there are more values.
     ///
-    /// You have to call this method before parsing every next value.
+    /// Call this method before deserializing every next value.
     #[inline]
     pub fn finish_one(&mut self) -> Result<bool> {
-        self.corrupt_guard()?;
-        if self.consume_ws_(";")? {
+        if self.corrupted {
+            self.raise(ErrorKind::Corrupted)
+        } else if self.consume_ws_(";")? {
             Ok(!self.has_reached_end())
         } else if self.has_reached_end() {
             Ok(false)
@@ -180,11 +182,11 @@ impl<'de> Parser<'de> {
     }
 
     #[inline]
-    fn corrupt_guard(&mut self) -> Result<()> {
+    fn deserialize_guard(&mut self) -> Result<()> {
         if self.corrupted {
             self.raise(ErrorKind::Corrupted)
         } else {
-            Ok(())
+            self.consume_whitespace_comment_first()
         }
     }
 
@@ -311,7 +313,6 @@ impl<'de> Parser<'de> {
         .as_bytes()
     }
 
-    #[inline]
     fn consume_ident(&mut self) -> Result<&'de str> {
         let start = self.pos;
         match self.consume_keyword_or_ident_or_underscore()? {
@@ -323,7 +324,6 @@ impl<'de> Parser<'de> {
         }
     }
 
-    #[inline]
     fn consume_ident_or_underscore(&mut self) -> Result<Option<&'de str>> {
         let start = self.pos;
         match self.consume_keyword_or_ident_or_underscore()? {
@@ -335,7 +335,6 @@ impl<'de> Parser<'de> {
         }
     }
 
-    #[inline]
     fn consume_keyword_or_ident_or_underscore(&mut self) -> Result<Token<'de>> {
         let raw_mode = self.consume("`");
         let start = self.pos;
@@ -370,7 +369,6 @@ impl<'de> Parser<'de> {
         Ok(token)
     }
 
-    #[inline]
     fn consume_nominal_path_of_struct(&mut self, name: &'static str) -> Result<bool> {
         let mut stem = self.consume_ident_or_underscore()?;
         if self.consume_ws_("::")? {
@@ -380,7 +378,6 @@ impl<'de> Parser<'de> {
         Ok(stem.map(|s| s == name).unwrap_or(true))
     }
 
-    #[inline]
     fn consume_nominal_path_of_enum(&mut self, name: &'static str) -> Result<Option<&'de str>> {
         let stem = self.consume_ident_or_underscore()?;
         if self.consume_ws_("::")? {
@@ -403,7 +400,6 @@ impl<'de> Parser<'de> {
         }
     }
 
-    #[inline]
     fn consume_whitespace_comment(&mut self) -> Result<()> {
         loop {
             self.consume_while(is_whitespace);
@@ -446,7 +442,6 @@ impl<'de> Parser<'de> {
         Ok(())
     }
 
-    #[inline]
     fn consume_whitespace_comment_first(&mut self) -> Result<()> {
         if !self.leading_ws_handled {
             self.consume_whitespace_comment()?;

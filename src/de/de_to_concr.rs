@@ -9,8 +9,9 @@ where
     T: Deserialize<'de>,
 {
     let mut der = Parser::new(s);
-    let value = T::deserialize(&mut der)?;
-    der.finish().and(Ok(value))
+    let val = T::deserialize(&mut der)?;
+
+    der.finish().and(Ok(val))
 }
 
 pub fn parse_many<'de, T>(s: &'de str) -> IterParser<'de, T>
@@ -45,12 +46,9 @@ where
         }
 
         let e = 'fail: {
-            if let Err(e) = self.der.consume_whitespace_comment_first() {
-                break 'fail e;
-            }
             let v = match T::deserialize(&mut self.der) {
-                Err(e) => break 'fail e,
                 Ok(v) => v,
+                Err(e) => break 'fail e,
             };
             if let Err(e) = self.der.finish_one() {
                 break 'fail e;
@@ -101,7 +99,7 @@ impl<'de> Parser<'de> {
 
 macro_rules! deserialize_integer {
     ( $self:ident, $ty:ident ) => {{
-        $self.corrupt_guard()?;
+        $self.deserialize_guard()?;
 
         let rest = $self.rest_bytes();
         if rest.starts_with(b"0x") {
@@ -158,7 +156,7 @@ macro_rules! deserialize_signed_integer {
 
 macro_rules! deserialize_float {
     ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
-        $self.corrupt_guard()?;
+        $self.deserialize_guard()?;
 
         let start = $self.pos;
         let neg = $self.consume_ws_("-")?;
@@ -187,7 +185,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         if self.consume_ws_("true")? {
             self.watch(vis.visit_bool(true))
@@ -199,7 +197,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         let res = vis.visit_char(self.parse_char()?);
         self.watch(res)
@@ -207,7 +205,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if let Some(b'b') = self.peek_byte() {
-            self.corrupt_guard()?;
+            self.deserialize_guard()?;
             let res = vis.visit_u8(self.parse_byte()?);
             self.watch(res)
         } else {
@@ -254,7 +252,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_str(vis)
     }
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         match self.parse_string_or_paragraph()? {
             Either::Left(s) => self.watch(vis.visit_borrowed_str(s)),
@@ -266,7 +264,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_bytes(vis)
     }
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         match self.parse_byte_string()? {
             Either::Left(bytes) => self.watch(vis.visit_borrowed_bytes(bytes)),
@@ -275,7 +273,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         if self.consume_ws_("?")? {
             if self.adjacent_to_delim() {
@@ -290,7 +288,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         let start = self.pos;
         if self.consume_ws_("(")? && self.consume_ws_(")")? {
@@ -303,7 +301,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     //------------------------------------------------------------------------------
 
     fn deserialize_tuple<V: Visitor<'de>>(self, _len: usize, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         if self.consume_ws_("(")? {
             let res = vis.visit_seq(self.access_tuple());
@@ -320,7 +318,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         if self.consume_ws_("[")? {
             let res = vis.visit_seq(self.access_seq());
@@ -337,7 +335,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         if self.consume_ws_("{")? {
             let res = vis.visit_map(self.access_map());
@@ -356,7 +354,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     //------------------------------------------------------------------------------
 
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         if self.consume_nominal_path_of_struct(name)? {
             /* Name */
@@ -379,7 +377,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         let start = self.pos;
         if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("(")? {
@@ -398,7 +396,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, _len: usize, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         let start = self.pos;
         if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("(")? {
@@ -421,7 +419,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         _fields: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         let start = self.pos;
         if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("{")? {
@@ -439,7 +437,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     }
 
     fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         let res = vis.visit_borrowed_str(self.consume_ident()?);
         self.watch(res)
@@ -453,7 +451,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         variants: &'static [&'static str],
         vis: V,
     ) -> Result<V::Value> {
-        self.corrupt_guard()?;
+        self.deserialize_guard()?;
 
         let start = self.pos;
         let Some(variant_name) = self.consume_nominal_path_of_enum(name)? else {
