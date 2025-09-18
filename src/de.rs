@@ -370,24 +370,30 @@ impl<'de> Parser<'de> {
     }
 
     fn consume_nominal_path_of_struct(&mut self, name: &'static str) -> Result<bool> {
-        let mut stem = self.consume_ident_or_underscore()?;
-        if self.consume_ws_("::")? {
-            stem = self.consume_ident_or_underscore()?;
-        }
+        let res = match self.consume_ident_or_underscore()? {
+            None => true,
+            Some(ident) => match self.consume_ws_("::")? {
+                false => name == ident,
+                true => name == self.consume_ident()?,
+            },
+        };
 
-        Ok(stem.map(|s| s == name).unwrap_or(true))
+        Ok(res)
     }
 
     fn consume_nominal_path_of_enum(&mut self, name: &'static str) -> Result<Option<&'de str>> {
-        let stem = self.consume_ident_or_underscore()?;
-        if self.consume_ws_("::")? {
-            let parent = stem;
-            let stem = self.consume_ident()?;
+        let res = match self.consume_ident_or_underscore()? {
+            None => None,
+            Some(ident) => match self.consume_ws_("::")? {
+                false => Some(ident),
+                true => match name == ident {
+                    false => None,
+                    true => Some(self.consume_ident()?),
+                },
+            },
+        };
 
-            Ok(parent.map(|p| p == name).unwrap_or(true).then_some(stem))
-        } else {
-            Ok(stem)
-        }
+        Ok(res)
     }
 
     #[inline]
