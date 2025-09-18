@@ -24,8 +24,8 @@ pub struct Parser<'de> {
     /// To avoid possible failures when creating a parser,
     /// whitespace handling is moved to the first value being parsed.
     /// However, only the first value requires additional whitespace handling,
-    /// as [`consume_ws_(";")`](Self::consume_ws_) handles all leading whitespace after the first value.
-    /// Therefore, this flag exists to allow for some simple optimizations.
+    /// as [`Self::consume_ws_`] handles all leading whitespace after the first value.
+    /// Therefore, this flag exists to allow an important optimization.
     leading_ws_handled: bool,
 
     /// If a parser has previously failed, to prevent it from being used again,
@@ -33,9 +33,8 @@ pub struct Parser<'de> {
     ///
     /// This flag is primarily maintained by `raise_` methods. Implementations should not
     /// forget to set this flag if the [`Result`] is not constructed via a parser (e.g.
-    /// via [`serde::de::Visitor`]). The convenience method [`Self::watch`] can be useful.
-    ///
-    /// All non-trait methods on this parser are guaranteed to handle this flag correctly.
+    /// via [`serde::de::Visitor`]). Besides, all non-trait methods on this parser are
+    /// guaranteed to handle this flag correctly.
     corrupted: bool,
 }
 
@@ -173,23 +172,6 @@ impl TryFrom<&str> for Keyword {
 }
 
 impl<'de> Parser<'de> {
-    #[inline]
-    fn watch<T>(&mut self, res: Result<T>) -> Result<T> {
-        if res.is_err() {
-            self.corrupted = true;
-        }
-        res
-    }
-
-    #[inline]
-    fn deserialize_guard(&mut self) -> Result<()> {
-        if self.corrupted {
-            self.raise(ErrorKind::Corrupted)
-        } else {
-            self.consume_whitespace_comment_first()
-        }
-    }
-
     #[inline]
     const fn rest(&self) -> &'de str {
         self.src.split_at(self.pos).1
@@ -369,33 +351,6 @@ impl<'de> Parser<'de> {
         Ok(token)
     }
 
-    fn consume_nominal_path_of_struct(&mut self, name: &'static str) -> Result<bool> {
-        let res = match self.consume_ident_or_underscore()? {
-            None => true,
-            Some(ident) => match self.consume_ws_("::")? {
-                false => name == ident,
-                true => name == self.consume_ident()?,
-            },
-        };
-
-        Ok(res)
-    }
-
-    fn consume_nominal_path_of_enum(&mut self, name: &'static str) -> Result<Option<&'de str>> {
-        let res = match self.consume_ident_or_underscore()? {
-            None => None,
-            Some(ident) => match self.consume_ws_("::")? {
-                false => Some(ident),
-                true => match name == ident {
-                    false => None,
-                    true => Some(self.consume_ident()?),
-                },
-            },
-        };
-
-        Ok(res)
-    }
-
     #[inline]
     fn consume_newline(&mut self) -> Result<()> {
         self.consume("\r");
@@ -455,6 +410,25 @@ impl<'de> Parser<'de> {
         }
 
         Ok(())
+    }
+
+    #[inline]
+    fn escape_byte(&mut self) -> Option<Result<u8>> {
+        if self.consume("\\") {
+            self.__escape_byte().or_else(|| Some(self.__escape_common()))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn escape_char(&mut self) -> Option<Result<char>> {
+        if self.consume("\\") {
+            self.__escape_char()
+                .or_else(|| Some(self.__escape_common().map(Into::into)))
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -533,146 +507,6 @@ impl<'de> Parser<'de> {
                     self.raise(ErrorKind::Expected("`}`"))
                 }
             })
-        }
-    }
-
-    #[inline]
-    fn escape_byte(&mut self) -> Option<Result<u8>> {
-        if self.consume("\\") {
-            self.__escape_byte().or_else(|| Some(self.__escape_common()))
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    fn escape_char(&mut self) -> Option<Result<char>> {
-        if self.consume("\\") {
-            self.__escape_char()
-                .or_else(|| Some(self.__escape_common().map(Into::into)))
-        } else {
-            None
-        }
-    }
-}
-
-//------------------------------------------------------------------------------
-
-/// NOTE: A name starting with an underscore indicates that
-/// the parser does not consume any characters during the lookahead.
-enum Kind<'de> {
-    _Char,
-    _Byte,
-    _Bytes,
-    _StringOrParagraph,
-    Bool(bool),
-    SpecialFloat(f64),
-    Int { neg: bool },
-    Float { neg: bool },
-    LongInt { neg: bool },
-    Maybe,
-    Tuple,
-    Seq,
-    Map,
-    NominalUnnamed,
-    NominalStemOnly { name: &'de str },
-    NominalFullNamed { name: &'de str, parent: &'de str },
-}
-
-enum NominalKind {
-    Unit,
-    Tuple,
-    Record,
-}
-
-impl<'de> Parser<'de> {
-    #[inline]
-    fn lookahead(&mut self) -> Result<Kind<'_>> {
-        if self.consume_ws_("?")? {
-            return Ok(Kind::Maybe);
-        } else if self.consume_ws_("(")? {
-            return Ok(Kind::Tuple);
-        } else if self.consume_ws_("[")? {
-            return Ok(Kind::Seq);
-        } else if self.consume_ws_("{")? {
-            return Ok(Kind::Map);
-        }
-
-        let long_number = 'non_number: {
-            let kind = match self.rest_bytes() {
-                [b'\'', ..] => Kind::_Char,
-
-                [b'b', b'\'', ..] => Kind::_Byte,
-
-                [b'b', b'"' | b'`', ..]
-                | [b'b', b'1', b'6', b'"', ..]
-                | [b'b', b'3', b'2', b'"', ..]
-                | [b'b', b'6', b'4', b'"', ..] => Kind::_Bytes,
-
-                [b'"', ..] | [b'`', b'`' | b'"' | b'|', ..] => Kind::_StringOrParagraph,
-
-                [b'-' | b'0'..=b'9', ..] => break 'non_number false,
-
-                [_, ..] => match self.consume_keyword_or_ident_or_underscore()? {
-                    Token::Keyword(kw) => match kw {
-                        Keyword::Long => break 'non_number true,
-                        Keyword::True => Kind::Bool(true),
-                        Keyword::False => Kind::Bool(false),
-                        Keyword::Infinity => Kind::SpecialFloat(f64::NAN),
-                        Keyword::NotANumber => Kind::SpecialFloat(f64::INFINITY),
-                    },
-
-                    Token::Identifier(name) => {
-                        if self.consume_ws_("::")? {
-                            let parent = name;
-                            let name = self.consume_ident()?;
-
-                            Kind::NominalFullNamed { name, parent }
-                        } else {
-                            Kind::NominalStemOnly { name }
-                        }
-                    }
-
-                    Token::Underscore => Kind::NominalUnnamed,
-                },
-
-                [] => return self.raise(ErrorKind::ExpectedValue),
-            };
-
-            return Ok(kind);
-        };
-
-        let kind = if long_number {
-            if self.consume_ws_("-")? {
-                Kind::LongInt { neg: true }
-            } else {
-                Kind::LongInt { neg: false }
-            }
-        } else if self.consume_ws_("-")? {
-            if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
-                Kind::Float { neg: true }
-            } else {
-                Kind::Int { neg: true }
-            }
-        } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
-            Kind::Float { neg: false } // lexical-core can handle `inf` and `NaN`.
-        } else {
-            Kind::Int { neg: false }
-        };
-
-        Ok(kind)
-    }
-
-    #[inline]
-    fn lookahead_nominal(&mut self) -> Result<NominalKind> {
-        if self.adjacent_to_delim() {
-            Ok(NominalKind::Unit)
-        } else if self.consume_ws_("(")? {
-            Ok(NominalKind::Tuple)
-        } else if self.consume_ws_("{")? {
-            Ok(NominalKind::Record)
-        } else {
-            self.raise(ErrorKind::ExpectedNominalValue)
         }
     }
 }

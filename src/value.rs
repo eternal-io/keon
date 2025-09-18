@@ -2,10 +2,11 @@ use std::{
     cmp::Ordering,
     collections::BTreeMap,
     hash::{Hash, Hasher},
+    mem,
 };
 
-pub mod de_to_concr;
-pub mod ser_to_value;
+pub mod concr_to_value;
+pub mod value_to_concr;
 
 pub type Str = Box<str>;
 pub type ByteBuf = Vec<u8>;
@@ -146,5 +147,18 @@ impl Hash for Float {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.0.to_bits());
+    }
+}
+
+//------------------------------------------------------------------------------
+
+impl Nominal {
+    #[inline]
+    pub fn set_struct(&mut self, stru: Struct) -> Struct {
+        match self {
+            Nominal::Unnamed { stru: struct_ }
+            | Nominal::StemOnly { stru: struct_, .. }
+            | Nominal::FullNamed { stru: struct_, .. } => mem::replace(struct_, stru),
+        }
     }
 }

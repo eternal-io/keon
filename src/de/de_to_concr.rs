@@ -93,6 +93,50 @@ impl<'de> Parser<'de> {
             phantom: PhantomData,
         }
     }
+
+    #[inline]
+    fn watch<T>(&mut self, res: Result<T>) -> Result<T> {
+        if res.is_err() {
+            self.corrupted = true;
+        }
+        res
+    }
+
+    #[inline]
+    fn deserialize_guard(&mut self) -> Result<()> {
+        if self.corrupted {
+            self.raise(ErrorKind::Corrupted)
+        } else {
+            self.consume_whitespace_comment_first()
+        }
+    }
+
+    fn consume_nominal_path_of_struct(&mut self, name: &'static str) -> Result<bool> {
+        let res = match self.consume_ident_or_underscore()? {
+            None => true,
+            Some(ident) => match self.consume_ws_("::")? {
+                false => name == ident,
+                true => name == self.consume_ident()?,
+            },
+        };
+
+        Ok(res)
+    }
+
+    fn consume_nominal_path_of_enum(&mut self, name: &'static str) -> Result<Option<&'de str>> {
+        let res = match self.consume_ident_or_underscore()? {
+            None => None,
+            Some(ident) => match self.consume_ws_("::")? {
+                false => Some(ident),
+                true => match name == ident {
+                    false => None,
+                    true => Some(self.consume_ident()?),
+                },
+            },
+        };
+
+        Ok(res)
+    }
 }
 
 //------------------------------------------------------------------------------

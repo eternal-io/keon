@@ -13,6 +13,7 @@ pub struct Error {
 pub enum ErrorKind {
     Corrupted,
     WontImplement,
+    ExceededRecursionLimit,
 
     DeeplyNestedComment,
     NonAsciiByteString,
