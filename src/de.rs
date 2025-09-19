@@ -1,8 +1,9 @@
 use super::{value::*, *};
-use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8};
+use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8, ops::Neg};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
-    NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
+    FromLexicalWithOptions, NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions,
+    ParseIntegerOptionsBuilder,
 };
 
 pub mod de_to_concr;
@@ -93,37 +94,6 @@ impl<'de> Parser<'de> {
 }
 
 //------------------------------------------------------------------------------
-
-const INTEGER_FORMAT: u128 = lexical_core::format::RUST_LITERAL;
-
-const INTEGER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .base_prefix(Some(NonZeroU8::new(b'x').unwrap()))
-    .mantissa_radix(16)
-    .build();
-const INTEGER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .base_prefix(Some(NonZeroU8::new(b'o').unwrap()))
-    .mantissa_radix(8)
-    .build();
-const INTEGER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .base_prefix(Some(NonZeroU8::new(b'b').unwrap()))
-    .mantissa_radix(2)
-    .build();
-
-const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
-    .no_multi_digit(false)
-    .build_unchecked();
-
-const FLOAT_FORMAT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .required_fraction_digits(false)
-    .no_special(false)
-    .build();
-
-const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
-    .lossy(false)
-    .nan_string(Some(b"NaN"))
-    .inf_string(Some(b"inf"))
-    .infinity_string(None)
-    .build_unchecked();
 
 fn is_whitespace(ch: &char) -> bool {
     ch.is_whitespace()
@@ -508,6 +478,144 @@ impl<'de> Parser<'de> {
                 }
             })
         }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+const INTEGER_FORMAT: u128 = lexical_core::format::RUST_LITERAL;
+
+const INTEGER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .base_prefix(Some(NonZeroU8::new(b'x').unwrap()))
+    .mantissa_radix(16)
+    .build();
+const INTEGER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .base_prefix(Some(NonZeroU8::new(b'o').unwrap()))
+    .mantissa_radix(8)
+    .build();
+const INTEGER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .base_prefix(Some(NonZeroU8::new(b'b').unwrap()))
+    .mantissa_radix(2)
+    .build();
+
+const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
+    .no_multi_digit(false)
+    .build_unchecked();
+
+const FLOAT_FORMAT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
+    .required_fraction_digits(false)
+    .no_special(false)
+    .build();
+
+const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
+    .lossy(false)
+    .nan_string(Some(b"NaN"))
+    .inf_string(Some(b"inf"))
+    .infinity_string(None)
+    .build_unchecked();
+
+macro_rules! impl_integer_to_signed {
+    ( $ty:ident => $out:ident ) => {
+        impl ToSigned for $ty {
+            type Signed = $out;
+            #[inline]
+            fn to_signed(self, neg: bool) -> StdResult<Self::Signed, ErrorKind> {
+                if neg {
+                    if self <= $out::MIN.unsigned_abs() {
+                        Ok((!self).wrapping_add(1) as $out)
+                    } else {
+                        Err(ErrorKind::IntegerUnderflow)
+                    }
+                } else if self > $out::MAX as $ty {
+                    Err(ErrorKind::IntegerOverflow)
+                } else {
+                    Ok(self as $out)
+                }
+            }
+        }
+    };
+}
+
+impl_integer_to_signed!(u8 => i8);
+impl_integer_to_signed!(u16 => i16);
+impl_integer_to_signed!(u32 => i32);
+impl_integer_to_signed!(u64 => i64);
+impl_integer_to_signed!(u128 => i128);
+
+trait ToSigned {
+    type Signed;
+    fn to_signed(self, neg: bool) -> StdResult<Self::Signed, ErrorKind>;
+}
+
+impl<'de> Parser<'de> {
+    fn parse_integer_unsigned<T>(&mut self) -> Result<T>
+    where
+        T: FromLexicalWithOptions<Options = ParseIntegerOptions>,
+    {
+        let rest = self.rest_bytes();
+        let (num, off) = if rest.starts_with(b"0x") {
+            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT_HEX>(rest, &PARSE_INTEGER_OPTS)
+        } else if rest.starts_with(b"0o") {
+            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT_OCT>(rest, &PARSE_INTEGER_OPTS)
+        } else if rest.starts_with(b"0b") {
+            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT_BIN>(rest, &PARSE_INTEGER_OPTS)
+        } else {
+            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
+        }
+        .or_else(|e| self.raise(e.into()))?;
+
+        self.bump(off);
+        self.consume_whitespace_comment()?;
+
+        Ok(num)
+    }
+
+    fn parse_integer_signed<T>(&mut self) -> Result<T::Signed>
+    where
+        T: FromLexicalWithOptions<Options = ParseIntegerOptions> + ToSigned,
+    {
+        let start = self.pos;
+        let neg = self.consume_ws_("-")?;
+        let num = self.parse_integer_unsigned::<T>()?;
+        let num = num.to_signed(neg).or_else(|kind| self.raise_at(start, kind))?;
+
+        Ok(num)
+    }
+
+    fn parse_integer_with_known<T>(&mut self, start: usize, neg: bool) -> Result<Either<T, T::Signed>>
+    where
+        T: FromLexicalWithOptions<Options = ParseIntegerOptions> + ToSigned,
+    {
+        let num = self.parse_integer_unsigned::<T>()?;
+        let num = match neg {
+            true => Either::Right(num.to_signed(true).or_else(|kind| self.raise_at(start, kind))?),
+            false => Either::Left(num),
+        };
+
+        Ok(num)
+    }
+
+    fn parse_float<T>(&mut self) -> Result<T>
+    where
+        T: Neg<Output = T> + FromLexicalWithOptions<Options = ParseFloatOptions>,
+    {
+        let start = self.pos;
+        let neg = self.consume_ws_("-")?;
+        self.parse_float_with_known(start, neg)
+    }
+
+    fn parse_float_with_known<T>(&mut self, start: usize, neg: bool) -> Result<T>
+    where
+        T: Neg<Output = T> + FromLexicalWithOptions<Options = ParseFloatOptions>,
+    {
+        let (num, off) =
+            lexical_core::parse_partial_with_options::<T, FLOAT_FORMAT>(self.rest_bytes(), &PARSE_FLOAT_OPTS)
+                .or_else(|e| self.raise_at(start, e.into()))?;
+
+        self.bump(off);
+        self.consume_whitespace_comment()?;
+
+        Ok(if neg { -num } else { num })
     }
 }
 

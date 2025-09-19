@@ -29,16 +29,16 @@ pub enum Value {
     Float(Float),
 
     /// Literal 64-bit unsigned integer.
-    Unsigned64(u64),
+    UInt64(u64),
     /// Literal 64-bit signed integer.
-    /// Guaranteed to be a negative number if this value is parsed by KEON.
-    Negative64(i64),
+    /// Guaranteed to be a non-positive number if this value is parsed by KEON.
+    SInt64(i64),
 
     /// Literal 128-bit unsigned integer.
-    Unsigned128(Box<u128>),
+    UInt128(Box<u128>),
     /// Literal 128-bit signed integer.
-    /// Guaranteed to be a negative number if this value is parsed by KEON.
-    Negative128(Box<i128>),
+    /// Guaranteed to be a non-positive number if this value is parsed by KEON.
+    SInt128(Box<i128>),
 
     /// Literal string.
     String(Box<String>),
@@ -83,41 +83,41 @@ pub enum Struct {
 //------------------------------------------------------------------------------
 
 macro_rules! impl_into {
-    ( $out:ty | $value:ident: $from:ty => $($tt:tt)* ) => {
-        impl From<$from> for $out {
+    ( $value:ident: $from:ty => $t0:tt $($tt:tt)* ) => {
+        impl From<$from> for $t0 {
             #[inline]
             #[allow(unused_variables)]
             fn from($value: $from) -> Self {
-                $($tt)*
+                $t0 $($tt)*
             }
         }
     };
 }
 
-impl_into!( Value | v: bool    => Value::Bool(v) );
-impl_into!( Value | v: char    => Value::Char(v) );
-impl_into!( Value | v: f32     => Value::Float(v.into()) );
-impl_into!( Value | v: f64     => Value::Float(v.into()) );
-impl_into!( Value | v: u8      => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u16     => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u32     => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u64     => Value::Unsigned64(v as _) );
-impl_into!( Value | v: u128    => Value::Unsigned128(Box::new(v)) );
-impl_into!( Value | v: i8      => Value::Negative64(v as _) );
-impl_into!( Value | v: i16     => Value::Negative64(v as _) );
-impl_into!( Value | v: i32     => Value::Negative64(v as _) );
-impl_into!( Value | v: i64     => Value::Negative64(v as _) );
-impl_into!( Value | v: i128    => Value::Negative128(Box::new(v)) );
-impl_into!( Value | v: String  => Value::String(Box::new(v)) );
-impl_into!( Value | v: &str    => Value::String(Box::new(v.into())) );
-impl_into!( Value | v: ByteBuf => Value::ByteBuf(Box::new(v)) );
-impl_into!( Value | v: &[u8]   => Value::ByteBuf(Box::new(v.into())) );
-impl_into!( Value | v: ()      => Value::Tuple(None) );
+impl_into!(v: bool    => Value::Bool(v));
+impl_into!(v: char    => Value::Char(v));
+impl_into!(v: f32     => Value::Float(v.into()));
+impl_into!(v: f64     => Value::Float(v.into()));
+impl_into!(v: u8      => Value::UInt64(v as _));
+impl_into!(v: u16     => Value::UInt64(v as _));
+impl_into!(v: u32     => Value::UInt64(v as _));
+impl_into!(v: u64     => Value::UInt64(v as _));
+impl_into!(v: u128    => Value::UInt128(Box::new(v)));
+impl_into!(v: i8      => Value::SInt64(v as _));
+impl_into!(v: i16     => Value::SInt64(v as _));
+impl_into!(v: i32     => Value::SInt64(v as _));
+impl_into!(v: i64     => Value::SInt64(v as _));
+impl_into!(v: i128    => Value::SInt128(Box::new(v)));
+impl_into!(v: String  => Value::String(Box::new(v)));
+impl_into!(v: &str    => Value::String(Box::new(v.into())));
+impl_into!(v: ByteBuf => Value::ByteBuf(Box::new(v)));
+impl_into!(v: &[u8]   => Value::ByteBuf(Box::new(v.into())));
+impl_into!(v: ()      => Value::Tuple(None));
 
 //------------------------------------------------------------------------------
 
-impl_into!( Float | v: f32 => Float(v as _) );
-impl_into!( Float | v: f64 => Float(v as _) );
+impl_into!(v: f32 => Float(v as _));
+impl_into!(v: f64 => Float(v as _));
 
 impl Eq for Float {}
 

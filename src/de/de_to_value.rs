@@ -96,7 +96,7 @@ impl<'de> Parser<'de> {
 impl FromStr for Value {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> Result<Value> {
         let mut der = Parser::new(s);
         let val = Self::deserialize(&mut der)?;
 
@@ -105,11 +105,11 @@ impl FromStr for Value {
 }
 
 impl Value {
-    pub fn deserialize(der: &mut Parser) -> Result<Self> {
+    pub fn deserialize(der: &mut Parser) -> Result<Value> {
         Self::deserialize_limited(der, None)
     }
 
-    pub fn deserialize_limited(der: &mut Parser, mut ttl: Option<u32>) -> Result<Self> {
+    pub fn deserialize_limited(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         if der.is_corrupted() {
             return der.raise(ErrorKind::Corrupted);
         }
@@ -118,6 +118,7 @@ impl Value {
 
         der.consume_whitespace_comment_first()?;
 
+        let start = der.pos;
         let val = match der.lookahead()? {
             Kind::_Char => der.parse_char()?.into(),
             Kind::_Byte => der.parse_byte()?.into(),
@@ -127,9 +128,9 @@ impl Value {
             Kind::Bool(v) => v.into(),
             Kind::SpecialFloat(v) => v.into(),
 
-            Kind::Float { neg } => Self::deserialize_float(der, neg)?,
-            Kind::Int { neg } => Self::deserialize_integer(der, neg)?,
-            Kind::LongInt { neg } => Self::deserialize_long_integer(der, neg)?,
+            Kind::Float { neg } => der.parse_float_with_known::<f64>(start, neg)?.into(),
+            Kind::Int { neg } => der.parse_integer_with_known::<u64>(start, neg)?.converge(),
+            Kind::LongInt { neg } => der.parse_integer_with_known::<u128>(start, neg)?.converge(),
 
             Kind::Maybe => Self::deserialize_maybe(der, ttl)?,
             Kind::Tuple => Self::deserialize_tuple(der, ttl)?,
@@ -146,22 +147,8 @@ impl Value {
 
     //------------------------------------------------------------------------------
 
-    fn deserialize_float(der: &mut Parser, neg: bool) -> Result<Self> {
-        todo!()
-    }
-
-    fn deserialize_integer(der: &mut Parser, neg: bool) -> Result<Self> {
-        todo!()
-    }
-
-    fn deserialize_long_integer(der: &mut Parser, neg: bool) -> Result<Self> {
-        todo!()
-    }
-
-    //------------------------------------------------------------------------------
-
     /// NOTE: The leading `?` has already been consumed.
-    fn deserialize_maybe(der: &mut Parser, mut ttl: Option<u32>) -> Result<Self> {
+    fn deserialize_maybe(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         ttl = der.recursion_guard(ttl)?;
 
         let val = match der.adjacent_to_delim() {
@@ -173,7 +160,7 @@ impl Value {
     }
 
     /// NOTE: The leading `(` has already been consumed.
-    fn deserialize_tuple(der: &mut Parser, mut ttl: Option<u32>) -> Result<Self> {
+    fn deserialize_tuple(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         ttl = der.recursion_guard(ttl)?;
 
         let mut vals = Values::new();
@@ -192,7 +179,7 @@ impl Value {
     }
 
     /// NOTE: The leading `[` has already been consumed.
-    fn deserialize_seq(der: &mut Parser, mut ttl: Option<u32>) -> Result<Self> {
+    fn deserialize_seq(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         ttl = der.recursion_guard(ttl)?;
 
         let mut vals = Values::new();
@@ -211,7 +198,7 @@ impl Value {
     }
 
     /// NOTE: The leading `{` has already been consumed.
-    fn deserialize_map(der: &mut Parser, mut ttl: Option<u32>) -> Result<Self> {
+    fn deserialize_map(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         ttl = der.recursion_guard(ttl)?;
 
         let mut map = ValueMap::new();
@@ -237,8 +224,8 @@ impl Value {
     //------------------------------------------------------------------------------
 
     /// NOTE: The leading nominal path has already been consumed.
-    fn deserialize_nominal(der: &mut Parser, ttl: Option<u32>, mut prototype: Nominal) -> Result<Self> {
-        let nom = match der.lookahead_nominal()? {
+    fn deserialize_nominal(der: &mut Parser, ttl: Option<u32>, mut prototype: Nominal) -> Result<Value> {
+        let nom = match der.nominal_lookahead()? {
             NominalKind::Unit => prototype,
 
             NominalKind::Tuple => {
@@ -376,29 +363,20 @@ impl<'de> Parser<'de> {
             return Ok(kind);
         };
 
+        let neg = self.consume_ws_("-")?;
         let kind = if long_number {
-            if self.consume_ws_("-")? {
-                Kind::LongInt { neg: true }
-            } else {
-                Kind::LongInt { neg: false }
-            }
-        } else if self.consume_ws_("-")? {
-            if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
-                Kind::Float { neg: true }
-            } else {
-                Kind::Int { neg: true }
-            }
-        } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| byte.is_ascii_digit()) {
-            Kind::Float { neg: false } // lexical-core can handle `inf` and `NaN`.
+            Kind::LongInt { neg }
+        } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| !byte.is_ascii_digit()) {
+            Kind::Float { neg } // lexical-core can handle `inf` and `NaN`.
         } else {
-            Kind::Int { neg: false }
+            Kind::Int { neg }
         };
 
         Ok(kind)
     }
 
     #[inline]
-    fn lookahead_nominal(&mut self) -> Result<NominalKind> {
+    fn nominal_lookahead(&mut self) -> Result<NominalKind> {
         if self.adjacent_to_delim() {
             Ok(NominalKind::Unit)
         } else if self.consume_ws_("(")? {

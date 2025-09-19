@@ -141,78 +141,12 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-macro_rules! deserialize_integer {
-    ( $self:ident, $ty:ident ) => {{
+macro_rules! deserialize_number {
+    ( $self:ident, $parse_fn:ident, $ty:ident, $visitor:ident, $visit_fn:ident ) => {{
         $self.deserialize_guard()?;
 
-        let rest = $self.rest_bytes();
-        if rest.starts_with(b"0x") {
-            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_HEX>(rest, &PARSE_INTEGER_OPTS)
-        } else if rest.starts_with(b"0o") {
-            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_OCT>(rest, &PARSE_INTEGER_OPTS)
-        } else if rest.starts_with(b"0b") {
-            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT_BIN>(rest, &PARSE_INTEGER_OPTS)
-        } else {
-            lexical_core::parse_partial_with_options::<$ty, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
-        }
-        .or_else(|e| $self.raise(e.into()))
-    }};
-}
-
-macro_rules! deserialize_unsigned_integer {
-    ( $self:ident, $ty:ident, $visitor:ident, $method:ident ) => {{
-        let (num, off) = deserialize_integer!($self, $ty)?;
-        let val = $self.watch($visitor.$method(num))?;
-
-        $self.bump(off);
-        $self.consume_whitespace_comment()?;
-
-        Ok(val)
-    }};
-}
-
-macro_rules! deserialize_signed_integer {
-    ( $self:ident, $ty:ident, $out:ident, $visitor:ident, $method:ident ) => {{
-        let start = $self.pos;
-        let neg = $self.consume_ws_("-")?;
-        let (num, off) = deserialize_integer!($self, $ty)?;
-
-        let num = if neg {
-            if num <= $out::MIN.unsigned_abs() {
-                Ok((!num).wrapping_add(1) as $out)
-            } else {
-                $self.raise_at(start, ErrorKind::IntegerUnderflow)
-            }
-        } else if num > $out::MAX as $ty {
-            $self.raise_at(start, ErrorKind::IntegerOverflow)
-        } else {
-            Ok(num as $out)
-        }?;
-
-        let val = $self.watch($visitor.$method(num))?;
-
-        $self.bump(off);
-        $self.consume_whitespace_comment()?;
-
-        Ok(val)
-    }};
-}
-
-macro_rules! deserialize_float {
-    ( $self:ident, $ty:ty, $visitor:ident, $method:ident ) => {{
-        $self.deserialize_guard()?;
-
-        let start = $self.pos;
-        let neg = $self.consume_ws_("-")?;
-        let (num, off) =
-            lexical_core::parse_partial_with_options::<$ty, FLOAT_FORMAT>($self.rest_bytes(), &PARSE_FLOAT_OPTS)
-                .or_else(|e| $self.raise_at(start, e.into()))?;
-
-        let num = if neg { -num } else { num };
-        let val = $self.watch($visitor.$method(num))?;
-
-        $self.bump(off);
-        $self.consume_whitespace_comment()?;
+        let num = $self.$parse_fn::<$ty>()?;
+        let val = $self.watch($visitor.$visit_fn(num))?;
 
         Ok(val)
     }};
@@ -253,43 +187,43 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let res = vis.visit_u8(self.parse_byte()?);
             self.watch(res)
         } else {
-            deserialize_unsigned_integer!(self, u8, vis, visit_u8)
+            deserialize_number!(self, parse_integer_unsigned, u8, vis, visit_u8)
         }
     }
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_unsigned_integer!(self, u16, vis, visit_u16)
+        deserialize_number!(self, parse_integer_unsigned, u16, vis, visit_u16)
     }
     fn deserialize_u32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_unsigned_integer!(self, u32, vis, visit_u32)
+        deserialize_number!(self, parse_integer_unsigned, u32, vis, visit_u32)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_unsigned_integer!(self, u64, vis, visit_u64)
+        deserialize_number!(self, parse_integer_unsigned, u64, vis, visit_u64)
     }
     fn deserialize_u128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_unsigned_integer!(self, u128, vis, visit_u128)
+        deserialize_number!(self, parse_integer_unsigned, u128, vis, visit_u128)
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_signed_integer!(self, u8, i8, vis, visit_i8)
+        deserialize_number!(self, parse_integer_signed, u8, vis, visit_i8)
     }
     fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_signed_integer!(self, u16, i16, vis, visit_i16)
+        deserialize_number!(self, parse_integer_signed, u16, vis, visit_i16)
     }
     fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_signed_integer!(self, u32, i32, vis, visit_i32)
+        deserialize_number!(self, parse_integer_signed, u32, vis, visit_i32)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_signed_integer!(self, u64, i64, vis, visit_i64)
+        deserialize_number!(self, parse_integer_signed, u64, vis, visit_i64)
     }
     fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_signed_integer!(self, u128, i128, vis, visit_i128)
+        deserialize_number!(self, parse_integer_signed, u128, vis, visit_i128)
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_float!(self, f32, vis, visit_f32)
+        deserialize_number!(self, parse_float, f32, vis, visit_f32)
     }
     fn deserialize_f64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_float!(self, f64, vis, visit_f64)
+        deserialize_number!(self, parse_float, f64, vis, visit_f64)
     }
 
     fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
