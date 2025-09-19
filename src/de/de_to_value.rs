@@ -163,9 +163,9 @@ impl Value {
     fn deserialize_tuple(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         ttl = der.recursion_guard(ttl)?;
 
-        let mut vals = Values::new();
+        let mut seq = Values::new();
         while !der.adjacent_to_delim() {
-            vals.push(Self::deserialize_limited(der, ttl)?);
+            seq.push(Self::deserialize_limited(der, ttl)?);
             if !der.consume_ws_(",")? {
                 break;
             }
@@ -175,16 +175,16 @@ impl Value {
             return der.raise(ErrorKind::Expected("`)`"));
         }
 
-        Ok(Value::Tuple((!vals.is_empty()).then(|| Box::new(vals))))
+        Ok(Value::Tuple((!seq.is_empty()).then(|| Box::new(seq))))
     }
 
     /// NOTE: The leading `[` has already been consumed.
     fn deserialize_seq(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         ttl = der.recursion_guard(ttl)?;
 
-        let mut vals = Values::new();
+        let mut seq = Values::new();
         while !der.adjacent_to_delim() {
-            vals.push(Self::deserialize_limited(der, ttl)?);
+            seq.push(Self::deserialize_limited(der, ttl)?);
             if !der.consume_ws_(",")? {
                 break;
             }
@@ -194,7 +194,7 @@ impl Value {
             return der.raise(ErrorKind::Expected("`]`"));
         }
 
-        Ok(Value::Seq(Box::new(vals)))
+        Ok(Value::Seq(Box::new(seq)))
     }
 
     /// NOTE: The leading `{` has already been consumed.
@@ -244,12 +244,45 @@ impl Value {
 
     /// NOTE: The leading `(` has been consumed.
     fn deserialize_nominal_tuple(der: &mut Parser, mut ttl: Option<u32>) -> Result<Struct> {
-        todo!()
+        ttl = der.recursion_guard(ttl)?;
+
+        let mut seq = Values::new();
+        while !der.adjacent_to_delim() {
+            seq.push(Self::deserialize_limited(der, ttl)?);
+            if !der.consume_ws_(",")? {
+                break;
+            }
+        }
+
+        if !der.consume_ws_("]")? {
+            return der.raise(ErrorKind::Expected("`]`"));
+        }
+
+        Ok(Struct::Tuple(seq))
     }
 
     /// NOTE: The leading `{` has been consumed.
     fn deserialize_nominal_record(der: &mut Parser, mut ttl: Option<u32>) -> Result<Struct> {
-        todo!()
+        ttl = der.recursion_guard(ttl)?;
+
+        let mut map = Record::new();
+        while !der.adjacent_to_delim() {
+            let key = der.consume_ident()?.into();
+            if !der.consume_ws_(":")? {
+                return der.raise(ErrorKind::Expected("`:`"));
+            }
+
+            map.insert(key, Self::deserialize_limited(der, ttl)?);
+            if !der.consume_ws_(",")? {
+                break;
+            }
+        }
+
+        if !der.consume_ws_("}")? {
+            return der.raise(ErrorKind::Expected("`}`"));
+        }
+
+        Ok(Struct::Record(map))
     }
 }
 
