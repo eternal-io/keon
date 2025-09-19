@@ -9,13 +9,37 @@ use lexical_core::{
 pub mod de_to_concr;
 pub mod de_to_value;
 
-#[doc(inline)]
-pub use self::{
-    de_to_concr::{parse, parse_many},
-    de_to_value::{parse_value, parse_values},
-};
+pub fn parse<'de, T: Parsable<'de>>(s: &'de str) -> Result<T> {
+    let mut der = Parser::new(s);
+    let val = der.parse_one()?;
+    der.finish().and(Ok(val))
+}
+
+pub fn parse_limited<'de, T: Parsable<'de>>(s: &'de str, limit: Option<u32>) -> Result<T> {
+    let mut der = Parser::new(s);
+    let val = der.parse_one_limited(limit)?;
+    der.finish().and(Ok(val))
+}
+
+pub fn parse_many<'de, T: Parsable<'de>>(s: &'de str) -> IterParser<'de, T> {
+    Parser::new(s).into_iter()
+}
+
+pub fn parse_many_limited<'de, T: Parsable<'de>>(s: &'de str, limit: Option<u32>) -> IterParser<'de, T> {
+    Parser::new(s).into_limited_iter(limit)
+}
 
 //------------------------------------------------------------------------------
+
+#[doc(alias = "Deserialize")]
+pub trait Parsable<'de>: Sized {
+    #[inline]
+    fn parse_via(der: &mut Parser<'de>) -> Result<Self> {
+        Self::parse_limited_via(der, None)
+    }
+
+    fn parse_limited_via(der: &mut Parser<'de>, limit: Option<u32>) -> Result<Self>;
+}
 
 #[doc(alias = "Deserializer")]
 pub struct Parser<'de> {
@@ -48,6 +72,35 @@ impl<'de> Parser<'de> {
             leading_ws_handled: false,
             corrupted: false,
         }
+    }
+
+    #[inline]
+    #[allow(clippy::should_implement_trait)]
+    pub fn into_iter<T: Parsable<'de>>(self) -> IterParser<'de, T> {
+        IterParser {
+            der: self,
+            ttl: None,
+            typ: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn into_limited_iter<T: Parsable<'de>>(self, limit: Option<u32>) -> IterParser<'de, T> {
+        IterParser {
+            der: self,
+            ttl: limit,
+            typ: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn parse_one<T: Parsable<'de>>(&mut self) -> Result<T> {
+        T::parse_via(self)
+    }
+
+    #[inline]
+    pub fn parse_one_limited<T: Parsable<'de>>(&mut self, limit: Option<u32>) -> Result<T> {
+        T::parse_limited_via(self, limit)
     }
 
     /// Returns `Ok(_)` if the current value is finished correctly and no more values.
@@ -90,6 +143,69 @@ impl<'de> Parser<'de> {
     #[inline]
     pub fn is_corrupted(&self) -> bool {
         self.corrupted
+    }
+}
+
+//------------------------------------------------------------------------------
+
+/// NOTE:
+/// As an iterator, once the internal parser becomes corrupted,
+/// it will always return `Some(Err(_))` with [`ErrorKind::Corrupted`] .
+pub struct IterParser<'de, T> {
+    der: Parser<'de>,
+    ttl: Option<u32>,
+    typ: PhantomData<T>,
+}
+
+impl<'de, T> Iterator for IterParser<'de, T>
+where
+    T: Parsable<'de>,
+{
+    type Item = Result<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.der.is_corrupted() {
+            return Some(self.der.raise(ErrorKind::Corrupted));
+        }
+        if self.der.has_reached_end() {
+            return None;
+        }
+
+        let e = 'fail: {
+            let v = match self.der.parse_one_limited(self.ttl) {
+                Ok(v) => v,
+                Err(e) => break 'fail e,
+            };
+            if let Err(e) = self.der.finish_one() {
+                break 'fail e;
+            }
+
+            return Some(Ok(v));
+        };
+
+        Some(Err(e))
+    }
+}
+
+impl<'de, T> IterParser<'de, T> {
+    #[inline]
+    pub fn into_inner(self) -> Parser<'de> {
+        self.der
+    }
+
+    #[inline]
+    pub fn is_exhausted(&self) -> bool {
+        self.der.has_reached_end()
+    }
+
+    #[inline]
+    pub fn is_corrupted(&self) -> bool {
+        self.der.is_corrupted()
+    }
+
+    #[inline]
+    pub fn set_limit(&mut self, limit: Option<u32>) {
+        self.ttl = limit;
     }
 }
 

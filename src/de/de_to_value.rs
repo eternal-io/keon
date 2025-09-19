@@ -1,84 +1,13 @@
 use super::*;
-use core::str::FromStr;
 
-pub fn parse_value(s: &str) -> Result<Value> {
-    Value::from_str(s)
-}
-
-pub fn parse_values(s: &str) -> ValueIterParser<'_> {
-    Parser::new(s).into_value_iter()
-}
-
-//------------------------------------------------------------------------------
-
-/// NOTE:
-/// As an iterator, once the internal parser becomes corrupted,
-/// it will always return `Some(Err(_))` with [`ErrorKind::Corrupted`] .
-pub struct ValueIterParser<'de> {
-    der: Parser<'de>,
-    ttl: Option<u32>,
-}
-
-impl Iterator for ValueIterParser<'_> {
-    type Item = Result<Value>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.der.is_corrupted() {
-            return Some(self.der.raise(ErrorKind::Corrupted));
-        }
-        if self.der.has_reached_end() {
-            return None;
-        }
-
-        let e = 'fail: {
-            let v = match Value::deserialize_limited(&mut self.der, self.ttl) {
-                Ok(v) => v,
-                Err(e) => break 'fail e,
-            };
-            if let Err(e) = self.der.finish_one() {
-                break 'fail e;
-            }
-
-            return Some(Ok(v));
-        };
-
-        Some(Err(e))
-    }
-}
-
-impl<'de> ValueIterParser<'de> {
+impl<'de> Parsable<'de> for Value {
     #[inline]
-    pub fn into_inner(self) -> Parser<'de> {
-        self.der
-    }
-
-    #[inline]
-    pub fn is_exhausted(&self) -> bool {
-        self.der.has_reached_end()
-    }
-
-    #[inline]
-    pub fn is_corrupted(&self) -> bool {
-        self.der.is_corrupted()
-    }
-
-    #[inline]
-    pub fn set_ttl(&mut self, ttl: Option<u32>) {
-        self.ttl = ttl;
+    fn parse_limited_via(der: &mut Parser<'de>, limit: Option<u32>) -> Result<Self> {
+        Value::deserialize(der, limit)
     }
 }
 
 impl<'de> Parser<'de> {
-    #[inline]
-    pub fn into_value_iter(self) -> ValueIterParser<'de> {
-        self.into_value_iter_limited(None)
-    }
-
-    #[inline]
-    pub fn into_value_iter_limited(self, ttl: Option<u32>) -> ValueIterParser<'de> {
-        ValueIterParser { der: self, ttl }
-    }
-
     #[inline]
     fn recursion_guard(&mut self, ttl: Option<u32>) -> Result<Option<u32>> {
         match ttl {
@@ -93,23 +22,8 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-impl FromStr for Value {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Value> {
-        let mut der = Parser::new(s);
-        let val = Self::deserialize(&mut der)?;
-
-        der.finish().and(Ok(val))
-    }
-}
-
 impl Value {
-    pub fn deserialize(der: &mut Parser) -> Result<Value> {
-        Self::deserialize_limited(der, None)
-    }
-
-    pub fn deserialize_limited(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
+    fn deserialize(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         if der.is_corrupted() {
             return der.raise(ErrorKind::Corrupted);
         }
@@ -153,7 +67,7 @@ impl Value {
 
         let val = match der.adjacent_to_delim() {
             true => None,
-            false => Some(Box::new(Self::deserialize_limited(der, ttl)?)),
+            false => Some(Box::new(Self::deserialize(der, ttl)?)),
         };
 
         Ok(Value::Maybe(val))
@@ -165,7 +79,7 @@ impl Value {
 
         let mut seq = Values::new();
         while !der.adjacent_to_delim() {
-            seq.push(Self::deserialize_limited(der, ttl)?);
+            seq.push(Self::deserialize(der, ttl)?);
             if !der.consume_ws_(",")? {
                 break;
             }
@@ -184,7 +98,7 @@ impl Value {
 
         let mut seq = Values::new();
         while !der.adjacent_to_delim() {
-            seq.push(Self::deserialize_limited(der, ttl)?);
+            seq.push(Self::deserialize(der, ttl)?);
             if !der.consume_ws_(",")? {
                 break;
             }
@@ -203,12 +117,12 @@ impl Value {
 
         let mut map = ValueMap::new();
         while !der.adjacent_to_delim() {
-            let key = Self::deserialize_limited(der, ttl)?;
+            let key = Self::deserialize(der, ttl)?;
             if !der.consume_ws_("=>")? {
                 return der.raise(ErrorKind::Expected("`=>`"));
             }
 
-            map.insert(key, Self::deserialize_limited(der, ttl)?);
+            map.insert(key, Self::deserialize(der, ttl)?);
             if !der.consume_ws_(",")? {
                 break;
             }
@@ -248,7 +162,7 @@ impl Value {
 
         let mut seq = Values::new();
         while !der.adjacent_to_delim() {
-            seq.push(Self::deserialize_limited(der, ttl)?);
+            seq.push(Self::deserialize(der, ttl)?);
             if !der.consume_ws_(",")? {
                 break;
             }
@@ -272,7 +186,7 @@ impl Value {
                 return der.raise(ErrorKind::Expected("`:`"));
             }
 
-            map.insert(key, Self::deserialize_limited(der, ttl)?);
+            map.insert(key, Self::deserialize(der, ttl)?);
             if !der.consume_ws_(",")? {
                 break;
             }
@@ -339,7 +253,7 @@ enum NominalKind {
     Record,
 }
 
-impl<'de> Parser<'de> {
+impl Parser<'_> {
     #[inline]
     fn lookahead(&mut self) -> Result<Kind> {
         if self.consume_ws_("?")? {

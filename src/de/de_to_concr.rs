@@ -4,96 +4,14 @@ use serde::{
     Deserialize, Deserializer,
 };
 
-pub fn parse<'de, T>(s: &'de str) -> Result<T>
-where
-    T: Deserialize<'de>,
-{
-    let mut der = Parser::new(s);
-    let val = T::deserialize(&mut der)?;
-
-    der.finish().and(Ok(val))
-}
-
-pub fn parse_many<'de, T>(s: &'de str) -> IterParser<'de, T>
-where
-    T: Deserialize<'de>,
-{
-    Parser::new(s).into_iter()
-}
-
-//------------------------------------------------------------------------------
-
-/// NOTE:
-/// As an iterator, once the internal parser becomes corrupted,
-/// it will always return `Some(Err(_))` with [`ErrorKind::Corrupted`] .
-pub struct IterParser<'de, T> {
-    der: Parser<'de>,
-    phantom: PhantomData<T>,
-}
-
-impl<'de, T> Iterator for IterParser<'de, T>
-where
-    T: Deserialize<'de>,
-{
-    type Item = Result<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.der.is_corrupted() {
-            return Some(self.der.raise(ErrorKind::Corrupted));
-        }
-        if self.der.has_reached_end() {
-            return None;
-        }
-
-        let e = 'fail: {
-            let v = match T::deserialize(&mut self.der) {
-                Ok(v) => v,
-                Err(e) => break 'fail e,
-            };
-            if let Err(e) = self.der.finish_one() {
-                break 'fail e;
-            }
-
-            return Some(Ok(v));
-        };
-
-        Some(Err(e))
-    }
-}
-
-impl<'de, T> IterParser<'de, T>
-where
-    T: Deserialize<'de>,
-{
+impl<'de, T: Deserialize<'de>> Parsable<'de> for T {
     #[inline]
-    pub fn into_inner(self) -> Parser<'de> {
-        self.der
-    }
-
-    #[inline]
-    pub fn is_exhausted(&self) -> bool {
-        self.der.has_reached_end()
-    }
-
-    #[inline]
-    pub fn is_corrupted(&self) -> bool {
-        self.der.is_corrupted()
+    fn parse_limited_via(der: &mut Parser<'de>, _limit: Option<u32>) -> Result<Self> {
+        Self::deserialize(der)
     }
 }
 
 impl<'de> Parser<'de> {
-    #[inline]
-    #[allow(clippy::should_implement_trait)]
-    pub fn into_iter<T>(self) -> IterParser<'de, T>
-    where
-        T: Deserialize<'de>,
-    {
-        IterParser {
-            der: self,
-            phantom: PhantomData,
-        }
-    }
-
     #[inline]
     fn watch<T>(&mut self, res: Result<T>) -> Result<T> {
         if res.is_err() {

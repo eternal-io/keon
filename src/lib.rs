@@ -5,9 +5,10 @@ pub mod value;
 
 #[doc(inline)]
 pub use crate::{
-    de::{parse, parse_many, parse_value, parse_values},
-    error::{Error, ErrorKind, Result},
+    de::{parse, parse_limited, parse_many, parse_many_limited},
+    error::{Error, ErrorKind},
     value::Value,
 };
 
+pub(crate) use crate::error::Result;
 pub(crate) use core::result::Result as StdResult;
