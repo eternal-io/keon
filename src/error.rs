@@ -17,6 +17,8 @@ pub enum ErrorKind {
     WontImplement,
     DeeplyNestedComment,
     ExceededRecursionLimit,
+    Deserialize(String),
+    Serialize(String),
 
     /* string related */
     UnbalancedRawDelimiters,
@@ -113,13 +115,19 @@ impl core::error::Error for Error {}
 
 impl serde::de::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
-        todo!()
+        Self {
+            pos: 0,
+            kind: ErrorKind::Deserialize(msg.to_string()),
+        }
     }
 }
 
 impl serde::ser::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
-        todo!()
+        Self {
+            pos: 0,
+            kind: ErrorKind::Serialize(msg.to_string()),
+        }
     }
 }
 

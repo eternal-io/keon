@@ -1,4 +1,5 @@
 use super::*;
+use core::ops::{Deref, DerefMut};
 use serde::{
     de::{value::BorrowedStrDeserializer, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
     Deserialize, Deserializer,
@@ -13,9 +14,10 @@ impl<'de, T: Deserialize<'de>> Parsable<'de> for T {
 
 impl<'de> Parser<'de> {
     #[inline]
-    fn watch<T>(&mut self, res: Result<T>) -> Result<T> {
-        if res.is_err() {
+    fn watch_at<T>(&mut self, pos: usize, mut res: Result<T>) -> Result<T> {
+        if let Err(e) = &mut res {
             self.corrupted = true;
+            e.pos = pos;
         }
         res
     }
@@ -63,8 +65,9 @@ macro_rules! deserialize_number {
     ( $self:ident, $parse_fn:ident, $ty:ident, $visitor:ident, $visit_fn:ident ) => {{
         $self.deserialize_guard()?;
 
+        let start = $self.pos;
         let num = $self.$parse_fn::<$ty>()?;
-        let val = $self.watch($visitor.$visit_fn(num))?;
+        let val = $self.watch_at(start, $visitor.$visit_fn(num))?;
 
         Ok(val)
     }};
@@ -83,10 +86,12 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_bool<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
 
+        let start = self.pos;
+
         if self.consume_ws_("true")? {
-            self.watch(vis.visit_bool(true))
+            self.watch_at(start, vis.visit_bool(true))
         } else if self.consume_ws_("false")? {
-            self.watch(vis.visit_bool(false))
+            self.watch_at(start, vis.visit_bool(false))
         } else {
             self.raise(ErrorKind::ExpectedBoolean)
         }
@@ -95,15 +100,20 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_char<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
 
+        let start = self.pos;
         let res = vis.visit_char(self.parse_char()?);
-        self.watch(res)
+
+        self.watch_at(start, res)
     }
 
     fn deserialize_u8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         if let Some(b'b') = self.peek_byte() {
             self.deserialize_guard()?;
+
+            let start = self.pos;
             let res = vis.visit_u8(self.parse_byte()?);
-            self.watch(res)
+
+            self.watch_at(start, res)
         } else {
             deserialize_number!(self, parse_integer_unsigned, u8, vis, visit_u8)
         }
@@ -150,9 +160,11 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_str<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
 
+        let start = self.pos;
+
         match self.parse_string_or_paragraph()? {
-            Either::Left(s) => self.watch(vis.visit_borrowed_str(s)),
-            Either::Right(buf) => self.watch(vis.visit_string(buf)),
+            Either::Left(s) => self.watch_at(start, vis.visit_borrowed_str(s)),
+            Either::Right(buf) => self.watch_at(start, vis.visit_string(buf)),
         }
     }
 
@@ -162,21 +174,25 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_bytes<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
 
+        let start = self.pos;
+
         match self.parse_byte_string()? {
-            Either::Left(bytes) => self.watch(vis.visit_borrowed_bytes(bytes)),
-            Either::Right(buf) => self.watch(vis.visit_byte_buf(buf)),
+            Either::Left(bytes) => self.watch_at(start, vis.visit_borrowed_bytes(bytes)),
+            Either::Right(buf) => self.watch_at(start, vis.visit_byte_buf(buf)),
         }
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
 
+        let start = self.pos;
+
         if self.consume_ws_("?")? {
             if self.adjacent_to_delim() {
-                self.watch(vis.visit_none())
+                self.watch_at(start, vis.visit_none())
             } else {
                 let res = vis.visit_some(&mut *self);
-                self.watch(res)
+                self.watch_at(start, res)
             }
         } else {
             self.raise(ErrorKind::ExpectedMaybe)
@@ -187,8 +203,9 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_guard()?;
 
         let start = self.pos;
+
         if self.consume_ws_("(")? && self.consume_ws_(")")? {
-            self.watch(vis.visit_unit())
+            self.watch_at(start, vis.visit_unit())
         } else {
             self.raise_at(start, ErrorKind::ExpectedUnit)
         }
@@ -200,8 +217,9 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_guard()?;
 
         if self.consume_ws_("(")? {
+            let start = self.pos;
             let res = vis.visit_seq(self.access_tuple());
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_(")")? {
                 return self.raise(ErrorKind::ExpectedParenClose);
@@ -217,8 +235,9 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_guard()?;
 
         if self.consume_ws_("[")? {
+            let start = self.pos;
             let res = vis.visit_seq(self.access_seq());
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_("]")? {
                 return self.raise(ErrorKind::ExpectedBrackClose);
@@ -234,8 +253,9 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_guard()?;
 
         if self.consume_ws_("{")? {
+            let start = self.pos;
             let res = vis.visit_map(self.access_map());
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_("}")? {
                 return self.raise(ErrorKind::ExpectedBraceClose);
@@ -251,6 +271,8 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
 
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
+
+        let start = self.pos;
 
         if self.consume_nominal_path_of_struct(name)? {
             /* Name */
@@ -269,16 +291,17 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             return self.raise(ErrorKind::ExpectedUnitStruct { name });
         }
 
-        self.watch(vis.visit_unit())
+        self.watch_at(start, vis.visit_unit())
     }
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
 
         let start = self.pos;
+
         if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("(")? {
             let res = vis.visit_newtype_struct(&mut *self);
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             self.consume_ws_(",")?;
             if !self.consume_ws_(")")? {
@@ -295,9 +318,10 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_guard()?;
 
         let start = self.pos;
+
         if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("(")? {
             let res = vis.visit_seq(self.access_tuple());
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_(")")? {
                 return self.raise(ErrorKind::ExpectedParenClose);
@@ -318,9 +342,10 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
         self.deserialize_guard()?;
 
         let start = self.pos;
+
         if self.consume_nominal_path_of_struct(name)? && self.consume_ws_("{")? {
             let res = vis.visit_map(self.access_struct());
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_("}")? {
                 return self.raise(ErrorKind::ExpectedBraceClose);
@@ -335,8 +360,10 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
     fn deserialize_identifier<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
         self.deserialize_guard()?;
 
+        let start = self.pos;
         let res = vis.visit_borrowed_str(self.consume_ident()?);
-        self.watch(res)
+
+        self.watch_at(start, res)
     }
 
     //------------------------------------------------------------------------------
@@ -358,7 +385,10 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             return self.raise_at(start, ErrorKind::ExpectedVariant { variants });
         }
 
-        vis.visit_enum(self.access_enum(variant_name))
+        let res = vis.visit_enum(self.access_enum(variant_name));
+        let val = self.watch_at(start, res)?;
+
+        Ok(val)
     }
 }
 
@@ -481,7 +511,7 @@ struct EnumAccessor<'a, 'de> {
 
 impl<'a, 'de> EnumAccess<'de> for EnumAccessor<'a, 'de> {
     type Error = Error;
-    type Variant = &'a mut Parser<'de>;
+    type Variant = VariantAccessor<'a, 'de>;
 
     fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> Result<(V::Value, Self::Variant)> {
         Ok((
@@ -489,15 +519,33 @@ impl<'a, 'de> EnumAccess<'de> for EnumAccessor<'a, 'de> {
             // This line of code does not call `deserialize_identifier`, because we have
             // complex nominal paths, and variant names have been extracted separately.
             seed.deserialize(BorrowedStrDeserializer::<Error>::new(self.variant_name))?,
-            self.der,
+            VariantAccessor(self.der),
         ))
     }
 }
 
-impl<'de> VariantAccess<'de> for &mut Parser<'de> {
+//------------------------------------------------------------------------------
+
+struct VariantAccessor<'a, 'de>(&'a mut Parser<'de>);
+
+impl<'a, 'de> Deref for VariantAccessor<'a, 'de> {
+    type Target = Parser<'de>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a, 'de> DerefMut for VariantAccessor<'a, 'de> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+    }
+}
+
+impl<'a, 'de> VariantAccess<'de> for VariantAccessor<'a, 'de> {
     type Error = Error;
 
-    fn unit_variant(self) -> Result<()> {
+    fn unit_variant(mut self) -> Result<()> {
         if self.adjacent_to_delim() {
             Ok(())
         } else {
@@ -505,9 +553,9 @@ impl<'de> VariantAccess<'de> for &mut Parser<'de> {
         }
     }
 
-    fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
+    fn newtype_variant_seed<T: DeserializeSeed<'de>>(mut self, seed: T) -> Result<T::Value> {
         if self.consume_ws_("(")? {
-            let val = seed.deserialize(&mut *self)?;
+            let val = seed.deserialize(&mut *self.0)?;
 
             self.consume_ws_(",")?;
             if self.consume_ws_(")")? {
@@ -520,10 +568,12 @@ impl<'de> VariantAccess<'de> for &mut Parser<'de> {
         }
     }
 
-    fn tuple_variant<V: Visitor<'de>>(self, _len: usize, vis: V) -> Result<V::Value> {
+    fn tuple_variant<V: Visitor<'de>>(mut self, _len: usize, vis: V) -> Result<V::Value> {
+        let start = self.pos;
+
         if self.consume_ws_("(")? {
             let res = vis.visit_seq(self.access_tuple());
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             if self.consume_ws_(")")? {
                 Ok(val)
@@ -535,10 +585,12 @@ impl<'de> VariantAccess<'de> for &mut Parser<'de> {
         }
     }
 
-    fn struct_variant<V: Visitor<'de>>(self, _fields: &'static [&'static str], vis: V) -> Result<V::Value> {
+    fn struct_variant<V: Visitor<'de>>(mut self, _fields: &'static [&'static str], vis: V) -> Result<V::Value> {
+        let start = self.pos;
+
         if self.consume_ws_("{")? {
             let res = vis.visit_map(self.access_struct());
-            let val = self.watch(res)?;
+            let val = self.watch_at(start, res)?;
 
             if self.consume_ws_("}")? {
                 Ok(val)
