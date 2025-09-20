@@ -605,7 +605,6 @@ const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
     .trailing_digit_separator(true)
     .consecutive_digit_separator(true)
     .no_positive_mantissa_sign(true)
-    .required_integer_digits(true)
     .case_sensitive_special(true)
     .build();
 
@@ -664,11 +663,11 @@ impl<'de> Parser<'de> {
     where
         T: FromLexicalWithOptions<Options = ParseIntegerOptions>,
     {
-        let (num, off) = if self.consume(b"0x")? {
+        let (num, off) = if self.consume("0x") {
             lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_HEX>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
-        } else if self.consume(b"0o")? {
+        } else if self.consume("0o") {
             lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_OCT>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
-        } else if self.consume(b"0b")? {
+        } else if self.consume("0b") {
             lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_BIN>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
         } else {
             lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
