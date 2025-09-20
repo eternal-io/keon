@@ -120,10 +120,7 @@ HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 // float literals
 FLOAT_LITERAL ->
     ( `-` WS )?
-    ( `inf`
-    | `NaN`
-    | DEC_LITERAL `.`
-    | DEC_LITERAL ( `.` DEC_LITERAL )? FLOAT_EXPONENT )
+    ( `inf` | `NaN` | DEC_LITERAL ( `.` DEC_LITERAL? )? FLOAT_EXPONENT? )
 
 FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
