@@ -153,14 +153,14 @@ impl From<lexical_core::Error> for Error {
         use lexical_core::Error::*;
         use ErrorKind::*;
 
-        let (pos, kind) = match e {
-            Overflow(o) => (o, IntegerOverflow),
-            Underflow(o) => (o, IntegerUnderflow),
+        let kind = match e {
+            Overflow(_) => IntegerOverflow,
+            Underflow(_) => IntegerUnderflow,
 
-            _ => (0, InvalidNumber),
+            _ => InvalidNumber,
         };
 
-        Self { pos, kind }
+        Self { pos: 0, kind }
     }
 }
 
