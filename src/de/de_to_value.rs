@@ -86,7 +86,7 @@ impl Value {
         }
 
         if !der.consume_ws_(")")? {
-            return der.raise(ErrorKind::Expected("`)`"));
+            return der.raise(ErrorKind::ExpectedParenClose);
         }
 
         Ok(Value::Tuple((!seq.is_empty()).then(|| Box::new(seq))))
@@ -105,7 +105,7 @@ impl Value {
         }
 
         if !der.consume_ws_("]")? {
-            return der.raise(ErrorKind::Expected("`]`"));
+            return der.raise(ErrorKind::ExpectedBrackClose);
         }
 
         Ok(Value::Seq(Box::new(seq)))
@@ -119,7 +119,7 @@ impl Value {
         while !der.adjacent_to_delim() {
             let key = Self::deserialize(der, ttl)?;
             if !der.consume_ws_("=>")? {
-                return der.raise(ErrorKind::Expected("`=>`"));
+                return der.raise(ErrorKind::ExpectedFatArrow);
             }
 
             map.insert(key, Self::deserialize(der, ttl)?);
@@ -129,7 +129,7 @@ impl Value {
         }
 
         if !der.consume_ws_("}")? {
-            return der.raise(ErrorKind::Expected("`}`"));
+            return der.raise(ErrorKind::ExpectedBraceClose);
         }
 
         Ok(Value::Map(Box::new(map)))
@@ -169,7 +169,7 @@ impl Value {
         }
 
         if !der.consume_ws_("]")? {
-            return der.raise(ErrorKind::Expected("`]`"));
+            return der.raise(ErrorKind::ExpectedBrackClose);
         }
 
         Ok(Struct::Tuple(seq))
@@ -183,7 +183,7 @@ impl Value {
         while !der.adjacent_to_delim() {
             let key = der.consume_ident()?.into();
             if !der.consume_ws_(":")? {
-                return der.raise(ErrorKind::Expected("`:`"));
+                return der.raise(ErrorKind::ExpectedColon);
             }
 
             map.insert(key, Self::deserialize(der, ttl)?);
@@ -193,7 +193,7 @@ impl Value {
         }
 
         if !der.consume_ws_("}")? {
-            return der.raise(ErrorKind::Expected("`}`"));
+            return der.raise(ErrorKind::ExpectedBraceClose);
         }
 
         Ok(Struct::Record(map))

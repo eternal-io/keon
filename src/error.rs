@@ -11,15 +11,18 @@ pub struct Error {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
+    /* special */
     Corrupted,
     WontImplement,
+    DeeplyNestedComment,
     ExceededRecursionLimit,
 
-    DeeplyNestedComment,
+    /* string related */
     NonAsciiByteString,
     UnbalancedRawDelimiters,
     UnexpectedCarriageReturn,
 
+    /* in detail */
     InvalidEscape,
     InvalidByteEscape,
     InvalidAsciiEscape,
@@ -30,15 +33,31 @@ pub enum ErrorKind {
     InvalidBytesEncoding(data_encoding::DecodeKind),
     InvalidParagraphLine,
 
+    /* structural */
     ExpectedEnd,
     UnexpectedEnd,
     ExpectedSemiOrEnd,
     ExpectedIdent,
-    UnexpectedKeywordIdent { keyword: &'static str },
+    UnexpectedKeywordIdent(&'static str),
     UnexpectedUnderscoreIdent,
     ExpectedValue,
     ExpectedNominalValue,
-    Expected(&'static str),
+
+    /* syntactic integrity */
+    /// `'`
+    ExpectedQuote,
+    /// `:`
+    ExpectedColon,
+    /// `=>`
+    ExpectedFatArrow,
+    /// `{`
+    ExpectedBraceOpen,
+    /// `}`
+    ExpectedBraceClose,
+    /// `]`
+    ExpectedBrackClose,
+    /// `)`
+    ExpectedParenClose,
 
     /* parsing with known types */
     ExpectedMaybe,
@@ -51,12 +70,24 @@ pub enum ErrorKind {
     ExpectedTuple,
     ExpectedMap,
     ExpectedUnit,
-    ExpectedUnitStruct { name: &'static str },
-    ExpectedNewtypeStruct { name: &'static str },
-    ExpectedTupleStruct { name: &'static str },
-    ExpectedStruct { name: &'static str },
-    ExpectedEnum { name: &'static str },
-    ExpectedVariant { variants: &'static [&'static str] },
+    ExpectedUnitStruct {
+        name: &'static str,
+    },
+    ExpectedNewtypeStruct {
+        name: &'static str,
+    },
+    ExpectedTupleStruct {
+        name: &'static str,
+    },
+    ExpectedStruct {
+        name: &'static str,
+    },
+    ExpectedEnum {
+        name: &'static str,
+    },
+    ExpectedVariant {
+        variants: &'static [&'static str],
+    },
     ExpectedUnitVariant,
     ExpectedNewtypeVariant,
     ExpectedTupleVariant,

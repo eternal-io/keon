@@ -204,7 +204,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch(res)?;
 
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::Expected("`)`"));
+                return self.raise(ErrorKind::ExpectedParenClose);
             }
 
             Ok(val)
@@ -221,7 +221,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch(res)?;
 
             if !self.consume_ws_("]")? {
-                return self.raise(ErrorKind::Expected("`]`"));
+                return self.raise(ErrorKind::ExpectedBrackClose);
             }
 
             Ok(val)
@@ -238,7 +238,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch(res)?;
 
             if !self.consume_ws_("}")? {
-                return self.raise(ErrorKind::Expected("`}`"));
+                return self.raise(ErrorKind::ExpectedBraceClose);
             }
 
             Ok(val)
@@ -257,13 +257,13 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             if self.consume_ws_("(")? {
                 /* Name () */
                 if !self.consume_ws_(")")? {
-                    return self.raise(ErrorKind::Expected("`)`"));
+                    return self.raise(ErrorKind::ExpectedParenClose);
                 }
             }
         } else if self.consume_ws_("(")? {
             /* () */
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::Expected("`)`"));
+                return self.raise(ErrorKind::ExpectedParenClose);
             }
         } else {
             return self.raise(ErrorKind::ExpectedUnitStruct { name });
@@ -282,7 +282,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
 
             self.consume_ws_(",")?;
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::Expected("`)`"));
+                return self.raise(ErrorKind::ExpectedParenClose);
             }
 
             Ok(val)
@@ -300,7 +300,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch(res)?;
 
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::Expected("`)`"));
+                return self.raise(ErrorKind::ExpectedParenClose);
             }
 
             Ok(val)
@@ -323,7 +323,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch(res)?;
 
             if !self.consume_ws_("}")? {
-                return self.raise(ErrorKind::Expected("`}`"));
+                return self.raise(ErrorKind::ExpectedBraceClose);
             }
 
             Ok(val)
@@ -445,12 +445,12 @@ impl<'a, 'de, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'a, 'de, S
         match STRUCT_MODE {
             true => {
                 if !der.consume_ws_(":")? {
-                    return der.raise(ErrorKind::Expected("`:`"));
+                    return der.raise(ErrorKind::ExpectedColon);
                 }
             }
             false => {
                 if !der.consume_ws_("=>")? {
-                    return der.raise(ErrorKind::Expected("`=>`"));
+                    return der.raise(ErrorKind::ExpectedFatArrow);
                 }
             }
         }
@@ -513,7 +513,7 @@ impl<'de> VariantAccess<'de> for &mut Parser<'de> {
             if self.consume_ws_(")")? {
                 Ok(val)
             } else {
-                self.raise(ErrorKind::Expected("`)`"))
+                self.raise(ErrorKind::ExpectedParenClose)
             }
         } else {
             self.raise(ErrorKind::ExpectedNewtypeVariant)
@@ -528,7 +528,7 @@ impl<'de> VariantAccess<'de> for &mut Parser<'de> {
             if self.consume_ws_(")")? {
                 Ok(val)
             } else {
-                self.raise(ErrorKind::Expected("`)`"))
+                self.raise(ErrorKind::ExpectedParenClose)
             }
         } else {
             self.raise(ErrorKind::ExpectedTupleVariant)
@@ -543,7 +543,7 @@ impl<'de> VariantAccess<'de> for &mut Parser<'de> {
             if self.consume_ws_("}")? {
                 Ok(val)
             } else {
-                self.raise(ErrorKind::Expected("`}`"))
+                self.raise(ErrorKind::ExpectedBraceClose)
             }
         } else {
             self.raise(ErrorKind::ExpectedStructVariant)

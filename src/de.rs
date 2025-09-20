@@ -384,7 +384,7 @@ impl<'de> Parser<'de> {
     fn consume_ident(&mut self) -> Result<&'de str> {
         let start = self.pos;
         match self.consume_keyword_or_ident_or_underscore()? {
-            Token::Keyword(kw) => self.raise_at(start, ErrorKind::UnexpectedKeywordIdent { keyword: kw.into() }),
+            Token::Keyword(kw) => self.raise_at(start, ErrorKind::UnexpectedKeywordIdent(kw.into())),
 
             Token::Identifier(ident) => Ok(ident),
 
@@ -395,7 +395,7 @@ impl<'de> Parser<'de> {
     fn consume_ident_or_underscore(&mut self) -> Result<Option<&'de str>> {
         let start = self.pos;
         match self.consume_keyword_or_ident_or_underscore()? {
-            Token::Keyword(kw) => self.raise_at(start, ErrorKind::UnexpectedKeywordIdent { keyword: kw.into() }),
+            Token::Keyword(kw) => self.raise_at(start, ErrorKind::UnexpectedKeywordIdent(kw.into())),
 
             Token::Identifier(ident) => Ok(Some(ident)),
 
@@ -570,7 +570,7 @@ impl<'de> Parser<'de> {
                 let start = self.pos;
                 let delta = self.consume_while(|ch| *ch != '}');
                 let Some((b'{', delta)) = delta.split_first() else {
-                    return self.raise_at(start, ErrorKind::Expected("`{`"));
+                    return self.raise_at(start, ErrorKind::ExpectedBraceOpen);
                 };
 
                 let chr = lexical_core::parse_with_options::<
@@ -590,7 +590,7 @@ impl<'de> Parser<'de> {
                         self.raise_at(start + 1, ErrorKind::InvalidUnicodeEscape)
                     }
                 } else {
-                    self.raise(ErrorKind::Expected("`}`"))
+                    self.raise(ErrorKind::ExpectedBraceClose)
                 }
             })
         }
@@ -797,7 +797,7 @@ impl<'de> Parser<'de> {
             };
 
             if !self.consume_ws_("'")? {
-                return self.raise(ErrorKind::Expected("`'`"));
+                return self.raise(ErrorKind::ExpectedQuote);
             }
 
             return Ok(ch);
@@ -825,7 +825,7 @@ impl<'de> Parser<'de> {
             };
 
             if !self.consume_ws_("'")? {
-                return self.raise(ErrorKind::Expected("`'`"));
+                return self.raise(ErrorKind::ExpectedQuote);
             }
 
             return Ok(byte);
