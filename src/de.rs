@@ -599,32 +599,28 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-const INTEGER_FORMAT: u128 = lexical_core::format::RUST_LITERAL;
+const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
+    .digit_separator(NonZeroU8::new(b'_'))
+    .internal_digit_separator(true)
+    .trailing_digit_separator(true)
+    .consecutive_digit_separator(true)
+    .no_positive_mantissa_sign(true)
+    .required_integer_digits(true)
+    .case_sensitive_special(true)
+    .build();
 
-const INTEGER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .base_prefix(Some(NonZeroU8::new(b'x').unwrap()))
-    .mantissa_radix(16)
-    .build();
-const INTEGER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .base_prefix(Some(NonZeroU8::new(b'o').unwrap()))
-    .mantissa_radix(8)
-    .build();
-const INTEGER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .base_prefix(Some(NonZeroU8::new(b'b').unwrap()))
-    .mantissa_radix(2)
-    .build();
+const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(16).build();
+const NUMBER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(8).build();
+const NUMBER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(2).build();
 
 const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
     .no_multi_digit(false)
     .build_unchecked();
 
-const FLOAT_FORMAT: u128 = NumberFormatBuilder::rebuild(INTEGER_FORMAT)
-    .required_fraction_digits(false)
-    .no_special(false)
-    .build();
-
 const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
     .lossy(false)
+    .exponent(b'e')
+    .decimal_point(b'.')
     .nan_string(Some(b"NaN"))
     .inf_string(Some(b"inf"))
     .infinity_string(None)
@@ -668,15 +664,14 @@ impl<'de> Parser<'de> {
     where
         T: FromLexicalWithOptions<Options = ParseIntegerOptions>,
     {
-        let rest = self.rest_bytes();
-        let (num, off) = if rest.starts_with(b"0x") {
-            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT_HEX>(rest, &PARSE_INTEGER_OPTS)
-        } else if rest.starts_with(b"0o") {
-            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT_OCT>(rest, &PARSE_INTEGER_OPTS)
-        } else if rest.starts_with(b"0b") {
-            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT_BIN>(rest, &PARSE_INTEGER_OPTS)
+        let (num, off) = if self.consume(b"0x")? {
+            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_HEX>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
+        } else if self.consume(b"0o")? {
+            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_OCT>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
+        } else if self.consume(b"0b")? {
+            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_BIN>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
         } else {
-            lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
+            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
         }
         .map_err(|e| {
             self.corrupted = true;
