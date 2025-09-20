@@ -678,7 +678,12 @@ impl<'de> Parser<'de> {
         } else {
             lexical_core::parse_partial_with_options::<T, INTEGER_FORMAT>(rest, &PARSE_INTEGER_OPTS)
         }
-        .or_else(|e| self.raise(e.into()))?;
+        .map_err(|e| {
+            self.corrupted = true;
+            let mut e: Error = e.into();
+            e.pos += self.pos;
+            e
+        })?;
 
         self.bump(off);
         self.consume_whitespace_comment()?;
@@ -725,8 +730,13 @@ impl<'de> Parser<'de> {
         T: Neg<Output = T> + FromLexicalWithOptions<Options = ParseFloatOptions>,
     {
         let (num, off) =
-            lexical_core::parse_partial_with_options::<T, FLOAT_FORMAT>(self.rest_bytes(), &PARSE_FLOAT_OPTS)
-                .or_else(|e| self.raise_at(start, e.into()))?;
+            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT>(self.rest_bytes(), &PARSE_FLOAT_OPTS)
+                .map_err(|e| {
+                    self.corrupted = true;
+                    let mut e: Error = e.into();
+                    e.pos += start;
+                    e
+                })?;
 
         self.bump(off);
         self.consume_whitespace_comment()?;
@@ -764,6 +774,7 @@ macro_rules! maybe_deserialize_baseXX {
             };
 
             let buf = $decoder.decode(&rest[..off]).map_err(|e| {
+                $self.corrupted = true;
                 let mut e: Error = e.into();
                 e.pos += $self.pos;
                 e
@@ -839,7 +850,7 @@ impl<'de> Parser<'de> {
         #[inline]
         fn filter_non_ascii(s: &str, der: &mut Parser) -> Result<()> {
             match s.as_bytes().iter().enumerate().find(|(_off, byte)| !byte.is_ascii()) {
-                Some((off, _byte)) => der.raise_at(der.pos - s.len() + off, ErrorKind::NonAsciiByteString),
+                Some((off, _byte)) => der.raise_at(der.pos - s.len() + off, ErrorKind::UnexpectedNonAsciiCharacter),
                 None => Ok(()),
             }
         }

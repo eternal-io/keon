@@ -1,3 +1,4 @@
+use super::*;
 use core::fmt;
 
 pub type Result<T> = ::core::result::Result<T, Error>;
@@ -18,20 +19,22 @@ pub enum ErrorKind {
     ExceededRecursionLimit,
 
     /* string related */
-    NonAsciiByteString,
     UnbalancedRawDelimiters,
     UnexpectedCarriageReturn,
+    UnexpectedNonAsciiCharacter,
 
     /* in detail */
+    InvalidNumber,
+    IntegerOverflow,
+    IntegerUnderflow,
     InvalidEscape,
     InvalidByteEscape,
     InvalidAsciiEscape,
     InvalidUnicodeEscape,
-    IntegerOverflow,
-    IntegerUnderflow,
-    InvalidNumberFound(lexical_core::Error),
-    InvalidBytesEncoding(data_encoding::DecodeKind),
     InvalidParagraphLine,
+    InvalidEncodingLength,
+    InvalidEncodingTrailing,
+    InvalidEncodingCharacter,
 
     /* structural */
     ExpectedEnd,
@@ -104,20 +107,7 @@ impl Error {
     pub(crate) const fn raise_at<T>(pos: usize, kind: ErrorKind) -> Result<T> {
         Err(Self::new_at(pos, kind))
     }
-
-    // pub(crate) const fn with_kind(mut self, kind: ErrorKind) -> Self {
-    //     self.kind = kind;
-    //     self
-    // }
 }
-
-// impl TryFrom<Vec<Error>> for Error {
-//     type Error = ();
-
-//     fn try_from(value: Vec<Error>) -> ::core::result::Result<Self, Self::Error> {
-//         value.into_iter().next().ok_or(())
-//     }
-// }
 
 impl core::error::Error for Error {}
 
@@ -139,12 +129,30 @@ impl fmt::Display for Error {
     }
 }
 
+#[doc(hidden)]
 impl From<data_encoding::DecodeError> for Error {
     fn from(e: data_encoding::DecodeError) -> Self {
         Self {
             pos: e.position,
-            kind: e.kind.into(),
+            kind: e.kind.try_into().expect("internal use should not panic"),
         }
+    }
+}
+
+#[doc(hidden)]
+impl From<lexical_core::Error> for Error {
+    fn from(e: lexical_core::Error) -> Self {
+        use lexical_core::Error::*;
+        use ErrorKind::*;
+
+        let (pos, kind) = match e {
+            Overflow(o) => (o, IntegerOverflow),
+            Underflow(o) => (o, IntegerUnderflow),
+
+            _ => (0, InvalidNumber),
+        };
+
+        Self { pos, kind }
     }
 }
 
@@ -156,14 +164,26 @@ impl fmt::Display for ErrorKind {
     }
 }
 
-impl From<lexical_core::Error> for ErrorKind {
-    fn from(e: lexical_core::Error) -> Self {
-        ErrorKind::InvalidNumberFound(e)
-    }
-}
+impl TryFrom<data_encoding::DecodeKind> for ErrorKind {
+    type Error = ();
 
-impl From<data_encoding::DecodeKind> for ErrorKind {
-    fn from(e: data_encoding::DecodeKind) -> Self {
-        ErrorKind::InvalidBytesEncoding(e)
+    fn try_from(e: data_encoding::DecodeKind) -> StdResult<Self, Self::Error> {
+        'ue: {
+            use data_encoding::DecodeKind::*;
+            use ErrorKind::*;
+
+            let kind = match e {
+                Length => InvalidEncodingLength,
+                Symbol => InvalidEncodingCharacter,
+                Trailing => InvalidEncodingTrailing,
+                // Since padding is not currently allowed,
+                // no padding related errors will be encountered.
+                Padding => break 'ue,
+            };
+
+            return Ok(kind);
+        }
+
+        Err(())
     }
 }
