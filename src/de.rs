@@ -1,5 +1,6 @@
-use super::{value::*, *};
-use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8, ops::Neg};
+use self::error::*;
+use crate::value::*;
+use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8, ops::Neg, result::Result as StdResult};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
     FromLexicalWithOptions, NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions,
@@ -8,6 +9,7 @@ use lexical_core::{
 
 pub mod de_to_concr;
 pub mod de_to_value;
+pub mod error;
 
 pub fn parse<'de, T: Parsable<'de>>(s: &'de str) -> Result<T> {
     let mut der = Parser::new(s);

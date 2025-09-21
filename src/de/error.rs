@@ -1,8 +1,10 @@
 use super::*;
 use core::fmt;
 
+#[doc(alias = "ParseResult")]
 pub type Result<T> = ::core::result::Result<T, Error>;
 
+#[doc(alias = "ParseError")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     pub pos: usize,
@@ -10,6 +12,7 @@ pub struct Error {
 }
 
 #[non_exhaustive]
+#[doc(alias = "ParseErrorKind")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
     /* special */
@@ -18,7 +21,6 @@ pub enum ErrorKind {
     DeeplyNestedComment,
     ExceededRecursionLimit,
     Deserialize(String),
-    Serialize(String),
 
     /* string related */
     UnbalancedRawDelimiters,
@@ -118,15 +120,6 @@ impl serde::de::Error for Error {
         Self {
             pos: 0,
             kind: ErrorKind::Deserialize(msg.to_string()),
-        }
-    }
-}
-
-impl serde::ser::Error for Error {
-    fn custom<T: fmt::Display>(msg: T) -> Self {
-        Self {
-            pos: 0,
-            kind: ErrorKind::Serialize(msg.to_string()),
         }
     }
 }
