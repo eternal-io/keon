@@ -1,8 +1,7 @@
-use super::*;
 use core::fmt;
 
 #[doc(alias = "ParseResult")]
-pub type Result<T> = ::core::result::Result<T, Error>;
+pub type Result<T, E = Error> = ::core::result::Result<T, E>;
 
 #[doc(alias = "ParseError")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,7 +167,7 @@ impl fmt::Display for ErrorKind {
 impl TryFrom<data_encoding::DecodeKind> for ErrorKind {
     type Error = ();
 
-    fn try_from(e: data_encoding::DecodeKind) -> StdResult<Self, Self::Error> {
+    fn try_from(e: data_encoding::DecodeKind) -> Result<Self, Self::Error> {
         'ue: {
             use data_encoding::DecodeKind::*;
             use ErrorKind::*;

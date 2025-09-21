@@ -1,6 +1,6 @@
 use self::error::*;
 use crate::value::*;
-use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8, ops::Neg, result::Result as StdResult};
+use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8, ops::Neg};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
     FromLexicalWithOptions, NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions,
@@ -247,7 +247,7 @@ impl From<Keyword> for &'static str {
 impl TryFrom<&str> for Keyword {
     type Error = ();
 
-    fn try_from(s: &str) -> StdResult<Self, Self::Error> {
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
         KEYWORDS.binary_search(&s).or(Err(())).map(|idx| match idx {
             0 => Self::NotANumber,
             1 => Self::False,
@@ -632,7 +632,7 @@ macro_rules! impl_integer_to_signed {
         impl ToSigned for $ty {
             type Signed = $out;
             #[inline]
-            fn to_signed(self, neg: bool) -> StdResult<Self::Signed, ErrorKind> {
+            fn to_signed(self, neg: bool) -> Result<Self::Signed, ErrorKind> {
                 if neg {
                     if self <= $out::MIN.unsigned_abs() {
                         Ok((!self).wrapping_add(1) as $out)
@@ -657,7 +657,7 @@ impl_integer_to_signed!(u128 => i128);
 
 trait ToSigned {
     type Signed;
-    fn to_signed(self, neg: bool) -> StdResult<Self::Signed, ErrorKind>;
+    fn to_signed(self, neg: bool) -> Result<Self::Signed, ErrorKind>;
 }
 
 impl<'de> Parser<'de> {
