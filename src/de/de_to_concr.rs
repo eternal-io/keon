@@ -248,7 +248,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::ExpectedParenClose);
+                return self.raise(ErrorKind::ExpectedTupleClose);
             }
 
             Ok(val)
@@ -266,7 +266,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_("]")? {
-                return self.raise(ErrorKind::ExpectedBrackClose);
+                return self.raise(ErrorKind::ExpectedSequenceClose);
             }
 
             Ok(val)
@@ -305,13 +305,13 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             if self.consume_ws_("(")? {
                 /* Name () */
                 if !self.consume_ws_(")")? {
-                    return self.raise(ErrorKind::ExpectedParenClose);
+                    return self.raise(ErrorKind::ExpectedTupleClose);
                 }
             }
         } else if self.consume_ws_("(")? {
             /* () */
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::ExpectedParenClose);
+                return self.raise(ErrorKind::ExpectedTupleClose);
             }
         } else {
             return self.raise(ErrorKind::ExpectedUnitStruct { name });
@@ -331,7 +331,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
 
             self.consume_ws_(",")?;
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::ExpectedParenClose);
+                return self.raise(ErrorKind::ExpectedTupleClose);
             }
 
             Ok(val)
@@ -350,7 +350,7 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
             let val = self.watch_at(start, res)?;
 
             if !self.consume_ws_(")")? {
-                return self.raise(ErrorKind::ExpectedParenClose);
+                return self.raise(ErrorKind::ExpectedTupleClose);
             }
 
             Ok(val)
@@ -587,7 +587,7 @@ impl<'a, 'de> VariantAccess<'de> for VariantAccessor<'a, 'de> {
             if self.consume_ws_(")")? {
                 Ok(val)
             } else {
-                self.raise(ErrorKind::ExpectedParenClose)
+                self.raise(ErrorKind::ExpectedTupleClose)
             }
         } else {
             self.raise(ErrorKind::ExpectedNewtypeVariant)
@@ -604,7 +604,7 @@ impl<'a, 'de> VariantAccess<'de> for VariantAccessor<'a, 'de> {
             if self.consume_ws_(")")? {
                 Ok(val)
             } else {
-                self.raise(ErrorKind::ExpectedParenClose)
+                self.raise(ErrorKind::ExpectedTupleClose)
             }
         } else {
             self.raise(ErrorKind::ExpectedTupleVariant)

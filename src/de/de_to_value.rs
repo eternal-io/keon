@@ -86,7 +86,7 @@ impl Value {
         }
 
         if !der.consume_ws_(")")? {
-            return der.raise(ErrorKind::ExpectedParenClose);
+            return der.raise(ErrorKind::ExpectedTupleClose);
         }
 
         Ok(Value::Tuple((!seq.is_empty()).then(|| Box::new(seq))))
@@ -105,7 +105,7 @@ impl Value {
         }
 
         if !der.consume_ws_("]")? {
-            return der.raise(ErrorKind::ExpectedBrackClose);
+            return der.raise(ErrorKind::ExpectedSequenceClose);
         }
 
         Ok(Value::Seq(Box::new(seq)))
@@ -169,7 +169,7 @@ impl Value {
         }
 
         if !der.consume_ws_("]")? {
-            return der.raise(ErrorKind::ExpectedBrackClose);
+            return der.raise(ErrorKind::ExpectedSequenceClose);
         }
 
         Ok(Struct::Tuple(seq))
@@ -279,15 +279,15 @@ impl Parser<'_> {
 
                 [b'"', ..] | [b'`', b'`' | b'"' | b'|', ..] => Kind::_StringOrParagraph,
 
-                [b'-' | b'0'..=b'9', ..] => break 'non_number false,
+                [b'-' | b'0'..=b'9' | b'.', ..] => break 'non_number false,
 
                 [_, ..] => match self.consume_keyword_or_ident_or_underscore()? {
                     Token::Keyword(kw) => match kw {
                         Keyword::Long => break 'non_number true,
                         Keyword::True => Kind::Bool(true),
                         Keyword::False => Kind::Bool(false),
-                        Keyword::Infinity => Kind::SpecialFloat(f64::NAN),
-                        Keyword::NotANumber => Kind::SpecialFloat(f64::INFINITY),
+                        Keyword::Infinity => Kind::SpecialFloat(f64::INFINITY),
+                        Keyword::NotANumber => Kind::SpecialFloat(f64::NAN),
                     },
 
                     Token::Identifier(name) => {
@@ -313,8 +313,14 @@ impl Parser<'_> {
         let neg = self.consume_ws_("-")?;
         let kind = if long_number {
             Kind::LongInt { neg }
+        } else if self.consume_ws_("inf")? {
+            Kind::SpecialFloat(f64::NEG_INFINITY)
+        } else if self.consume_ws_("NaN")? {
+            Kind::SpecialFloat(f64::NAN)
+        } else if let [b'0', b'x' | b'o' | b'b', ..] = self.rest_bytes() {
+            Kind::Int { neg }
         } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| !byte.is_ascii_digit()) {
-            Kind::Float { neg } // lexical-core can handle `inf` and `NaN`.
+            Kind::Float { neg }
         } else {
             Kind::Int { neg }
         };

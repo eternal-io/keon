@@ -60,10 +60,10 @@ pub enum ErrorKind {
     ExpectedBraceOpen,
     /// `}`
     ExpectedBraceClose,
-    /// `]`
-    ExpectedBrackClose,
     /// `)`
-    ExpectedParenClose,
+    ExpectedTupleClose,
+    /// `]`
+    ExpectedSequenceClose,
 
     /* parsing with known types */
     ExpectedMaybe,
