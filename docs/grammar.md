@@ -216,11 +216,12 @@ MapValue ->
 /*== Nominals ==*/
 
 Nominal ->
-    ( NominalPath | `_` )
-    ( StructValue | TupleValue )?
+    NominalPath ( TupleValue | StructValue )?
 
 NominalPath ->
-    ( IDENTIFIER `::` )? IDENTIFIER
+    ( `_` | IDENTIFIER ) ( `::` IDENTIFIER )?
+    // We could certainly support complex paths like `path::to::Foo::Bar`,
+    // but this seemed to lack usefulness and is no longer provided.
 
 StructValue ->
     `{` (
