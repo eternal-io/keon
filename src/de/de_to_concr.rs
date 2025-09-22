@@ -74,25 +74,13 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-macro_rules! deserialize_integer {
-    ( $self:ident, $parse_fn:ident, $ty:ident, $visitor:ident, $visit_fn:ident ) => {{
+macro_rules! deserialize_number {
+    ( $self:ident, $parse_fn:ident, $ty:ident, $visitor:ident, $visit_fn:ident $(, $expr:expr)? ) => {{
         $self.deserialize_guard()?;
-        $self.consume_ws_("long")?;
+        $($expr;)?
 
         let start = $self.pos;
         let num = $self.$parse_fn::<$ty>()?;
-        let val = $self.watch_at(start, $visitor.$visit_fn(num))?;
-
-        Ok(val)
-    }};
-}
-
-macro_rules! deserialize_float {
-    ( $self:ident, $ty:ident, $visitor:ident, $visit_fn:ident ) => {{
-        $self.deserialize_guard()?;
-
-        let start = $self.pos;
-        let num = $self.parse_float::<$ty>()?;
         let val = $self.watch_at(start, $visitor.$visit_fn(num))?;
 
         Ok(val)
@@ -141,43 +129,57 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
 
             self.watch_at(start, res)
         } else {
-            deserialize_integer!(self, parse_integer_unsigned, u8, vis, visit_u8)
+            deserialize_number!(self, parse_integer_unsigned, u8, vis, visit_u8)
         }
     }
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_unsigned, u16, vis, visit_u16)
+        deserialize_number!(self, parse_integer_unsigned, u16, vis, visit_u16)
     }
     fn deserialize_u32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_unsigned, u32, vis, visit_u32)
+        deserialize_number!(self, parse_integer_unsigned, u32, vis, visit_u32)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_unsigned, u64, vis, visit_u64)
+        deserialize_number!(self, parse_integer_unsigned, u64, vis, visit_u64)
     }
     fn deserialize_u128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_unsigned, u128, vis, visit_u128)
+        deserialize_number!(
+            self,
+            parse_integer_unsigned,
+            u128,
+            vis,
+            visit_u128,
+            self.consume_ws_("long")?
+        )
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_signed, u8, vis, visit_i8)
+        deserialize_number!(self, parse_integer_signed, u8, vis, visit_i8)
     }
     fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_signed, u16, vis, visit_i16)
+        deserialize_number!(self, parse_integer_signed, u16, vis, visit_i16)
     }
     fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_signed, u32, vis, visit_i32)
+        deserialize_number!(self, parse_integer_signed, u32, vis, visit_i32)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_signed, u64, vis, visit_i64)
+        deserialize_number!(self, parse_integer_signed, u64, vis, visit_i64)
     }
     fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_integer!(self, parse_integer_signed, u128, vis, visit_i128)
+        deserialize_number!(
+            self,
+            parse_integer_signed,
+            u128,
+            vis,
+            visit_i128,
+            self.consume_ws_("long")?
+        )
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_float!(self, f32, vis, visit_f32)
+        deserialize_number!(self, parse_float, f32, vis, visit_f32)
     }
     fn deserialize_f64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_float!(self, f64, vis, visit_f64)
+        deserialize_number!(self, parse_float, f64, vis, visit_f64)
     }
 
     fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
