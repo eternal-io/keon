@@ -43,8 +43,8 @@ impl Value {
             Kind::SpecialFloat(v) => v.into(),
 
             Kind::Float { neg } => der.parse_float_with_known::<f64>(start, neg)?.into(),
-            Kind::Int { neg } => der.parse_integer_with_known::<u64>(start, neg)?.converge(),
-            Kind::LongInt { neg } => der.parse_integer_with_known::<u128>(start, neg)?.converge(),
+            Kind::Int { neg } => der.parse_integer_either_with_known::<u64>(start, neg)?.converge(),
+            Kind::LongInt { neg } => der.parse_integer_either_with_known::<u128>(start, neg)?.converge(),
 
             Kind::Maybe => Self::deserialize_maybe(der, ttl)?,
             Kind::Tuple => Self::deserialize_tuple(der, ttl)?,

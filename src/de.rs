@@ -627,6 +627,11 @@ const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
     .infinity_string(None)
     .build_unchecked();
 
+trait ToSigned {
+    type Signed;
+    fn to_signed(self, neg: bool) -> Result<Self::Signed, ErrorKind>;
+}
+
 macro_rules! impl_integer_to_signed {
     ( $ty:ident => $out:ident ) => {
         impl ToSigned for $ty {
@@ -655,16 +660,12 @@ impl_integer_to_signed!(u32 => i32);
 impl_integer_to_signed!(u64 => i64);
 impl_integer_to_signed!(u128 => i128);
 
-trait ToSigned {
-    type Signed;
-    fn to_signed(self, neg: bool) -> Result<Self::Signed, ErrorKind>;
-}
-
 impl<'de> Parser<'de> {
     fn parse_integer_unsigned<T>(&mut self) -> Result<T>
     where
         T: FromLexicalWithOptions<Options = ParseIntegerOptions>,
     {
+        let start = self.pos;
         let (num, off) = if self.consume("0x") {
             lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_HEX>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
         } else if self.consume("0o") {
@@ -682,6 +683,15 @@ impl<'de> Parser<'de> {
         })?;
 
         self.bump(off);
+
+        if self
+            .peek_byte()
+            .map(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
+            .unwrap_or(false)
+        {
+            return self.raise_at(start, ErrorKind::InvalidNumber);
+        }
+
         self.consume_whitespace_comment()?;
 
         Ok(num)
@@ -699,7 +709,7 @@ impl<'de> Parser<'de> {
         Ok(num)
     }
 
-    fn parse_integer_with_known<T>(&mut self, start: usize, neg: bool) -> Result<Either<T, T::Signed>>
+    fn parse_integer_either_with_known<T>(&mut self, start: usize, neg: bool) -> Result<Either<T, T::Signed>>
     where
         T: FromLexicalWithOptions<Options = ParseIntegerOptions> + ToSigned,
     {
@@ -735,6 +745,15 @@ impl<'de> Parser<'de> {
                 })?;
 
         self.bump(off);
+
+        if self
+            .peek_byte()
+            .map(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
+            .unwrap_or(false)
+        {
+            return self.raise_at(start, ErrorKind::InvalidNumber);
+        }
+
         self.consume_whitespace_comment()?;
 
         Ok(if neg { -num } else { num })
