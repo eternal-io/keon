@@ -33,9 +33,13 @@ impl<'de> Parser<'de> {
 
     fn consume_nominal_path_of_struct(&mut self, name: &'static str) -> Result<bool> {
         let res = match self.consume_ident_or_underscore()? {
+            // _ //
             None => true,
+            // Name //
             Some(ident) => match self.consume_ws_("::")? {
+                // Name //
                 false => name == ident,
+                // Name::ActualName //
                 true => name == self.consume_ident()?,
             },
         };
@@ -45,9 +49,18 @@ impl<'de> Parser<'de> {
 
     fn consume_nominal_path_of_enum(&mut self, name: &'static str) -> Result<Option<&'de str>> {
         let res = match self.consume_ident_or_underscore()? {
-            None => None,
+            // _ //
+            None => match self.consume_ws_("::")? {
+                // _ //
+                false => None,
+                // _::Variant //
+                true => Some(self.consume_ident()?),
+            },
+            // Name //
             Some(ident) => match self.consume_ws_("::")? {
+                // Name //
                 false => Some(ident),
+                // Name::Variant //
                 true => match name == ident {
                     false => None,
                     true => Some(self.consume_ident()?),
