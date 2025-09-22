@@ -701,18 +701,19 @@ impl<'de> Parser<'de> {
     where
         T: FromLexicalWithOptions<Options = ParseIntegerOptions> + ToSigned,
     {
-        let start = self.pos;
         let neg = self.consume_ws_("-")?;
+        let start = self.pos;
         let num = self.parse_integer_unsigned::<T>()?;
         let num = num.to_signed(neg).or_else(|kind| self.raise_at(start, kind))?;
 
         Ok(num)
     }
 
-    fn parse_integer_either_with_known<T>(&mut self, start: usize, neg: bool) -> Result<Either<T, T::Signed>>
+    fn parse_integer_either_with_known<T>(&mut self, neg: bool) -> Result<Either<T, T::Signed>>
     where
         T: FromLexicalWithOptions<Options = ParseIntegerOptions> + ToSigned,
     {
+        let start = self.pos;
         let num = self.parse_integer_unsigned::<T>()?;
         let num = match neg {
             true => Either::Right(num.to_signed(true).or_else(|kind| self.raise_at(start, kind))?),
@@ -726,15 +727,15 @@ impl<'de> Parser<'de> {
     where
         T: Neg<Output = T> + FromLexicalWithOptions<Options = ParseFloatOptions>,
     {
-        let start = self.pos;
         let neg = self.consume_ws_("-")?;
-        self.parse_float_with_known(start, neg)
+        self.parse_float_with_known(neg)
     }
 
-    fn parse_float_with_known<T>(&mut self, start: usize, neg: bool) -> Result<T>
+    fn parse_float_with_known<T>(&mut self, neg: bool) -> Result<T>
     where
         T: Neg<Output = T> + FromLexicalWithOptions<Options = ParseFloatOptions>,
     {
+        let start = self.pos;
         let (num, off) =
             lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT>(self.rest_bytes(), &PARSE_FLOAT_OPTS)
                 .map_err(|e| {
