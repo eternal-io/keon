@@ -1,10 +1,9 @@
 use self::error::*;
 use crate::value::*;
-use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8, ops::Neg};
+use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_core::{
-    FromLexicalWithOptions, NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions,
-    ParseIntegerOptionsBuilder,
+    NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
 };
 
 pub mod de_to_concr;
@@ -231,12 +230,11 @@ enum Keyword {
     NotANumber,
     False,
     Infinity,
-    Long,
     True,
 }
 
 /// The keyword list is sorted and must be sorted.
-const KEYWORDS: &[&str] = &["NaN", "false", "inf", "long", "true"];
+const KEYWORDS: &[&str] = &["NaN", "false", "inf", "true"];
 
 impl From<Keyword> for &'static str {
     fn from(value: Keyword) -> Self {
@@ -252,8 +250,7 @@ impl TryFrom<&str> for Keyword {
             0 => Self::NotANumber,
             1 => Self::False,
             2 => Self::Infinity,
-            3 => Self::Long,
-            4 => Self::True,
+            3 => Self::True,
             _ => unreachable!(),
         })
     }
@@ -601,142 +598,6 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-trait ToSigned {
-    type Signed;
-    fn to_signed(self, neg: bool) -> Result<Self::Signed, ErrorKind>;
-}
-
-macro_rules! impl_integer_to_signed {
-    ( $ty:ident => $out:ident ) => {
-        impl ToSigned for $ty {
-            type Signed = $out;
-            #[inline]
-            fn to_signed(self, neg: bool) -> Result<Self::Signed, ErrorKind> {
-                if neg {
-                    if self <= $out::MIN.unsigned_abs() {
-                        Ok((!self).wrapping_add(1) as $out)
-                    } else {
-                        Err(ErrorKind::IntegerUnderflow)
-                    }
-                } else if self > $out::MAX as $ty {
-                    Err(ErrorKind::IntegerOverflow)
-                } else {
-                    Ok(self as $out)
-                }
-            }
-        }
-    };
-}
-
-impl_integer_to_signed!(u8 => i8);
-impl_integer_to_signed!(u16 => i16);
-impl_integer_to_signed!(u32 => i32);
-impl_integer_to_signed!(u64 => i64);
-impl_integer_to_signed!(u128 => i128);
-
-impl<'de> Parser<'de> {
-    fn parse_integer_unsigned<T>(&mut self) -> Result<T>
-    where
-        T: FromLexicalWithOptions<Options = ParseIntegerOptions>,
-    {
-        let start = self.pos;
-        let (num, off) = if self.consume("0x") {
-            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_HEX>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
-        } else if self.consume("0o") {
-            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_OCT>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
-        } else if self.consume("0b") {
-            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT_BIN>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
-        } else {
-            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT>(self.rest_bytes(), &PARSE_INTEGER_OPTS)
-        }
-        .map_err(|e| {
-            self.corrupted = true;
-            let mut e: Error = e.into();
-            e.pos += self.pos;
-            e
-        })?;
-
-        self.bump(off);
-
-        if self
-            .peek_byte()
-            .map(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
-            .unwrap_or(false)
-        {
-            return self.raise_at(start, ErrorKind::InvalidNumber);
-        }
-
-        self.consume_whitespace_comment()?;
-
-        Ok(num)
-    }
-
-    fn parse_integer_signed<T>(&mut self) -> Result<T::Signed>
-    where
-        T: FromLexicalWithOptions<Options = ParseIntegerOptions> + ToSigned,
-    {
-        let neg = self.consume_ws_("-")?;
-        let start = self.pos;
-        let num = self.parse_integer_unsigned::<T>()?;
-        let num = num.to_signed(neg).or_else(|kind| self.raise_at(start, kind))?;
-
-        Ok(num)
-    }
-
-    fn parse_integer_either_with_known<T>(&mut self, neg: bool) -> Result<Either<T, T::Signed>>
-    where
-        T: FromLexicalWithOptions<Options = ParseIntegerOptions> + ToSigned,
-    {
-        let start = self.pos;
-        let num = self.parse_integer_unsigned::<T>()?;
-        let num = match neg {
-            true => Either::Right(num.to_signed(true).or_else(|kind| self.raise_at(start, kind))?),
-            false => Either::Left(num),
-        };
-
-        Ok(num)
-    }
-
-    fn parse_float<T>(&mut self) -> Result<T>
-    where
-        T: Neg<Output = T> + FromLexicalWithOptions<Options = ParseFloatOptions>,
-    {
-        let neg = self.consume_ws_("-")?;
-        self.parse_float_with_known(neg)
-    }
-
-    fn parse_float_with_known<T>(&mut self, neg: bool) -> Result<T>
-    where
-        T: Neg<Output = T> + FromLexicalWithOptions<Options = ParseFloatOptions>,
-    {
-        let start = self.pos;
-        let (num, off) =
-            lexical_core::parse_partial_with_options::<T, NUMBER_FORMAT>(self.rest_bytes(), &PARSE_FLOAT_OPTS)
-                .map_err(|e| {
-                    self.corrupted = true;
-                    let mut e: Error = e.into();
-                    e.pos += start;
-                    e
-                })?;
-
-        self.bump(off);
-
-        if self
-            .peek_byte()
-            .map(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
-            .unwrap_or(false)
-        {
-            return self.raise_at(start, ErrorKind::InvalidNumber);
-        }
-
-        self.consume_whitespace_comment()?;
-
-        Ok(if neg { -num } else { num })
-    }
-}
-
-//------------------------------------------------------------------------------
-
 const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
     .digit_separator(NonZeroU8::new(b'_'))
     .internal_digit_separator(true)
@@ -769,10 +630,9 @@ trait MakeNum {
     fn make_num(start: usize, slice: &[u8], kind: NumKind, typ: Option<NumType>) -> Result<Self::Output>;
 
     fn make_special(start: usize, special: NumSpecial) -> Result<Self::Output> {
-        let _ = start;
         let _ = special;
 
-        Error::raise_at(0, ErrorKind::InvalidNumber)
+        Error::raise_at(start, ErrorKind::InvalidNumber)
     }
 }
 
@@ -825,8 +685,9 @@ impl<'de> Parser<'de> {
         was_special: Option<NumSpecial>,
     ) -> Result<T::Output> {
         #![allow(non_upper_case_globals)]
+        #![allow(clippy::manual_is_ascii_check)]
         if let Some(special) = was_special {
-            return T::make_special(start, special);
+            return T::make_special(start, special).inspect_err(|_| self.corrupted = true);
         }
 
         const dec_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9');
@@ -891,7 +752,7 @@ impl<'de> Parser<'de> {
         self.bump(total_off);
         self.consume_whitespace_comment()?;
 
-        T::make_num(start, slice, kind, typ)
+        T::make_num(start, slice, kind, typ).inspect_err(|_| self.corrupted = true)
     }
 }
 

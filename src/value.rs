@@ -15,7 +15,33 @@ pub type ValueMap = BTreeMap<Value, Value>;
 pub type Struct = BTreeMap<Str, Value>;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Float(pub f64);
+pub struct Float32(pub f32);
+
+#[derive(Debug, Clone, Copy)]
+pub struct Float64(pub f64);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Number {
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    Int128(Box<i128>),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    UInt128(Box<u128>),
+    Float32(Float32),
+    Float64(Float64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NumberNoSuffix {
+    Int(i64),
+    UInt(u64),
+    Float(Float64),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value {
@@ -25,20 +51,11 @@ pub enum Value {
     /// Literal Unicode character.
     Char(char),
 
-    /// Literal 64-bit floating-point number.
-    Float(Float),
+    /// Literal number.
+    Number(Number),
 
-    /// Literal 64-bit unsigned integer.
-    UInt64(u64),
-    /// Literal 64-bit signed integer.
-    /// Guaranteed to be a non-positive number if this value is parsed by KEON.
-    SInt64(i64),
-
-    /// Literal 128-bit unsigned integer.
-    UInt128(Box<u128>),
-    /// Literal 128-bit signed integer.
-    /// Guaranteed to be a non-positive number if this value is parsed by KEON.
-    SInt128(Box<i128>),
+    /// Literal number with no suffix.
+    NumberNoSuffix(NumberNoSuffix),
 
     /// Literal string.
     String(Box<String>),
@@ -96,32 +113,49 @@ macro_rules! impl_into {
 
 impl_into!(v: bool    => Value::Bool(v));
 impl_into!(v: char    => Value::Char(v));
-impl_into!(v: f32     => Value::Float(v.into()));
-impl_into!(v: f64     => Value::Float(v.into()));
-impl_into!(v: u8      => Value::UInt64(v as _));
-impl_into!(v: u16     => Value::UInt64(v as _));
-impl_into!(v: u32     => Value::UInt64(v as _));
-impl_into!(v: u64     => Value::UInt64(v as _));
-impl_into!(v: u128    => Value::UInt128(Box::new(v)));
-impl_into!(v: i8      => Value::SInt64(v as _));
-impl_into!(v: i16     => Value::SInt64(v as _));
-impl_into!(v: i32     => Value::SInt64(v as _));
-impl_into!(v: i64     => Value::SInt64(v as _));
-impl_into!(v: i128    => Value::SInt128(Box::new(v)));
+impl_into!(v: f32     => Value::Number(v.into()));
+impl_into!(v: f64     => Value::Number(v.into()));
+impl_into!(v: i8      => Value::Number(v.into()));
+impl_into!(v: i16     => Value::Number(v.into()));
+impl_into!(v: i32     => Value::Number(v.into()));
+impl_into!(v: i64     => Value::Number(v.into()));
+impl_into!(v: i128    => Value::Number(v.into()));
+impl_into!(v: u8      => Value::Number(v.into()));
+impl_into!(v: u16     => Value::Number(v.into()));
+impl_into!(v: u32     => Value::Number(v.into()));
+impl_into!(v: u64     => Value::Number(v.into()));
+impl_into!(v: u128    => Value::Number(v.into()));
 impl_into!(v: String  => Value::String(Box::new(v)));
 impl_into!(v: &str    => Value::String(Box::new(v.into())));
 impl_into!(v: ByteBuf => Value::ByteBuf(Box::new(v)));
 impl_into!(v: &[u8]   => Value::ByteBuf(Box::new(v.into())));
 impl_into!(v: ()      => Value::Tuple(None));
 
+impl_into!(v: f32  => Number::Float32(v.into()));
+impl_into!(v: f64  => Number::Float64(v.into()));
+impl_into!(v: i8   => Number::Int8(v));
+impl_into!(v: i16  => Number::Int16(v));
+impl_into!(v: i32  => Number::Int32(v));
+impl_into!(v: i64  => Number::Int64(v));
+impl_into!(v: i128 => Number::Int128(Box::new(v)));
+impl_into!(v: u8   => Number::UInt8(v));
+impl_into!(v: u16  => Number::UInt16(v));
+impl_into!(v: u32  => Number::UInt32(v));
+impl_into!(v: u64  => Number::UInt64(v));
+impl_into!(v: u128 => Number::UInt128(Box::new(v)));
+
+impl_into!(v: i64  => NumberNoSuffix::Int(v));
+impl_into!(v: u64  => NumberNoSuffix::UInt(v));
+impl_into!(v: f64  => NumberNoSuffix::Float(v.into()));
+
+impl_into!(v: f32  => Float32(v));
+impl_into!(v: f64  => Float64(v));
+
 //------------------------------------------------------------------------------
 
-impl_into!(v: f32 => Float(v as _));
-impl_into!(v: f64 => Float(v as _));
+impl Eq for Float32 {}
 
-impl Eq for Float {}
-
-impl PartialEq for Float {
+impl PartialEq for Float32 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         let (x, y) = (self.0, other.0);
@@ -129,21 +163,52 @@ impl PartialEq for Float {
     }
 }
 
-impl Ord for Float {
+impl Ord for Float32 {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.total_cmp(&other.0)
     }
 }
 
-impl PartialOrd for Float {
+impl PartialOrd for Float32 {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Hash for Float {
+impl Hash for Float32 {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u32(self.0.to_bits());
+    }
+}
+
+impl Eq for Float64 {}
+
+impl PartialEq for Float64 {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        let (x, y) = (self.0, other.0);
+        x.is_nan() && y.is_nan() || x == y
+    }
+}
+
+impl Ord for Float64 {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for Float64 {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Hash for Float64 {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.0.to_bits());

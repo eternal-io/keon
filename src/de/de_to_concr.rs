@@ -74,13 +74,89 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
+macro_rules! impl_make_num_for_float {
+    ( $ty:ident, $ty_:ident, $ek:ident ) => {
+        impl MakeNum for $ty {
+            type Output = Self;
+
+            fn make_num(start: usize, slice: &[u8], kind: NumKind, typ: Option<NumType>) -> Result<Self::Output> {
+                if !matches!(typ, None | Some(NumType::$ty_)) {
+                    return Error::raise_at(start, ErrorKind::$ek);
+                }
+
+                let parse_fn = match kind {
+                    NumKind::Float => lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>,
+                    _ => return Error::raise_at(start, ErrorKind::$ek),
+                };
+
+                parse_fn(slice, &PARSE_FLOAT_OPTS).map_err(|e| {
+                    let mut e: Error = e.into();
+                    e.pos = start;
+                    e
+                })
+            }
+
+            fn make_special(_start: usize, special: NumSpecial) -> Result<Self::Output> {
+                match special {
+                    NumSpecial::Infinity => Ok($ty::INFINITY),
+                    NumSpecial::NegInfinity => Ok($ty::NEG_INFINITY),
+                    NumSpecial::NotANumber => Ok($ty::NAN),
+                }
+            }
+        }
+    };
+}
+
+impl_make_num_for_float!(f32, F32, ExpectedFloat32);
+impl_make_num_for_float!(f64, F64, ExpectedFloat64);
+
+macro_rules! impl_make_num_for_integer {
+    ( $ty:ident, $ty_:ident, $ek:ident ) => {
+        impl MakeNum for $ty {
+            type Output = Self;
+
+            fn make_num(start: usize, slice: &[u8], kind: NumKind, typ: Option<NumType>) -> Result<Self::Output> {
+                if !matches!(typ, None | Some(NumType::$ty_)) {
+                    return Error::raise_at(start, ErrorKind::$ek);
+                }
+
+                let parse_fn = match kind {
+                    NumKind::HexInt => lexical_core::parse_with_options::<$ty, NUMBER_FORMAT_HEX>,
+                    NumKind::OctInt => lexical_core::parse_with_options::<$ty, NUMBER_FORMAT_OCT>,
+                    NumKind::BinInt => lexical_core::parse_with_options::<$ty, NUMBER_FORMAT_BIN>,
+                    NumKind::IntOrFloat => lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>,
+                    _ => return Error::raise_at(start, ErrorKind::$ek),
+                };
+
+                parse_fn(slice, &PARSE_INTEGER_OPTS).map_err(|e| {
+                    let mut e: Error = e.into();
+                    e.pos = start;
+                    e
+                })
+            }
+        }
+    };
+}
+
+impl_make_num_for_integer!(i8, I8, ExpectedInt8);
+impl_make_num_for_integer!(i16, I16, ExpectedInt16);
+impl_make_num_for_integer!(i32, I32, ExpectedInt32);
+impl_make_num_for_integer!(i64, I64, ExpectedInt64);
+impl_make_num_for_integer!(i128, I128, ExpectedInt128);
+impl_make_num_for_integer!(u8, U8, ExpectedUInt8);
+impl_make_num_for_integer!(u16, U16, ExpectedUInt16);
+impl_make_num_for_integer!(u32, U32, ExpectedUInt32);
+impl_make_num_for_integer!(u64, U64, ExpectedUInt64);
+impl_make_num_for_integer!(u128, U128, ExpectedUInt128);
+
+//------------------------------------------------------------------------------
+
 macro_rules! deserialize_number {
-    ( $self:ident, $parse_fn:ident, $ty:ident, $visitor:ident, $visit_fn:ident $(, $expr:expr)? ) => {{
+    ( $self:ident, $ty:ident, $visitor:ident, $visit_fn:ident ) => {{
         $self.deserialize_guard()?;
-        $($expr;)?
 
         let start = $self.pos;
-        let num = $self.$parse_fn::<$ty>()?;
+        let num = $self.parse_number::<$ty>()?;
         let val = $self.watch_at(start, $visitor.$visit_fn(num))?;
 
         Ok(val)
@@ -129,57 +205,43 @@ impl<'de> Deserializer<'de> for &mut Parser<'de> {
 
             self.watch_at(start, res)
         } else {
-            deserialize_number!(self, parse_integer_unsigned, u8, vis, visit_u8)
+            deserialize_number!(self, u8, vis, visit_u8)
         }
     }
     fn deserialize_u16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_integer_unsigned, u16, vis, visit_u16)
+        deserialize_number!(self, u16, vis, visit_u16)
     }
     fn deserialize_u32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_integer_unsigned, u32, vis, visit_u32)
+        deserialize_number!(self, u32, vis, visit_u32)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_integer_unsigned, u64, vis, visit_u64)
+        deserialize_number!(self, u64, vis, visit_u64)
     }
     fn deserialize_u128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(
-            self,
-            parse_integer_unsigned,
-            u128,
-            vis,
-            visit_u128,
-            self.consume_ws_("long")?
-        )
+        deserialize_number!(self, u128, vis, visit_u128)
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_integer_signed, u8, vis, visit_i8)
+        deserialize_number!(self, i8, vis, visit_i8)
     }
     fn deserialize_i16<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_integer_signed, u16, vis, visit_i16)
+        deserialize_number!(self, i16, vis, visit_i16)
     }
     fn deserialize_i32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_integer_signed, u32, vis, visit_i32)
+        deserialize_number!(self, i32, vis, visit_i32)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_integer_signed, u64, vis, visit_i64)
+        deserialize_number!(self, i64, vis, visit_i64)
     }
     fn deserialize_i128<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(
-            self,
-            parse_integer_signed,
-            u128,
-            vis,
-            visit_i128,
-            self.consume_ws_("long")?
-        )
+        deserialize_number!(self, i128, vis, visit_i128)
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_float, f32, vis, visit_f32)
+        deserialize_number!(self, f32, vis, visit_f32)
     }
     fn deserialize_f64<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {
-        deserialize_number!(self, parse_float, f64, vis, visit_f64)
+        deserialize_number!(self, f64, vis, visit_f64)
     }
 
     fn deserialize_string<V: Visitor<'de>>(self, vis: V) -> Result<V::Value> {

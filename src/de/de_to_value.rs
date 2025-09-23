@@ -22,6 +22,52 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
+struct Unspecified;
+
+impl MakeNum for Unspecified {
+    type Output = Value;
+
+    fn make_num(start: usize, slice: &[u8], kind: NumKind, typ: Option<NumType>) -> Result<Self::Output> {
+        let num = match typ {
+            Some(typ) => match typ {
+                NumType::U8 => u8::make_num(start, slice, kind, None)?.into(),
+                NumType::U16 => u16::make_num(start, slice, kind, None)?.into(),
+                NumType::U32 => u32::make_num(start, slice, kind, None)?.into(),
+                NumType::U64 => u64::make_num(start, slice, kind, None)?.into(),
+                NumType::U128 => u128::make_num(start, slice, kind, None)?.into(),
+                NumType::I8 => i8::make_num(start, slice, kind, None)?.into(),
+                NumType::I16 => i16::make_num(start, slice, kind, None)?.into(),
+                NumType::I32 => i32::make_num(start, slice, kind, None)?.into(),
+                NumType::I64 => i64::make_num(start, slice, kind, None)?.into(),
+                NumType::I128 => i128::make_num(start, slice, kind, None)?.into(),
+                NumType::F32 => f32::make_num(start, slice, kind, None)?.into(),
+                NumType::F64 => f64::make_num(start, slice, kind, None)?.into(),
+            },
+            None => Value::NumberNoSuffix(if let NumKind::Float = kind {
+                f64::make_num(start, slice, kind, None)?.into()
+            } else if let Some(b'-') = slice.get(0) {
+                i64::make_num(start, slice, kind, None)?.into()
+            } else {
+                u64::make_num(start, slice, kind, None)?.into()
+            }),
+        };
+
+        Ok(num)
+    }
+
+    fn make_special(_start: usize, special: NumSpecial) -> Result<Self::Output> {
+        let special = match special {
+            NumSpecial::Infinity => f64::INFINITY,
+            NumSpecial::NegInfinity => f64::NEG_INFINITY,
+            NumSpecial::NotANumber => f64::NAN,
+        };
+
+        Ok(Value::NumberNoSuffix(special.into()))
+    }
+}
+
+//------------------------------------------------------------------------------
+
 impl Value {
     fn deserialize(der: &mut Parser, mut ttl: Option<u32>) -> Result<Value> {
         if der.is_corrupted() {
@@ -32,6 +78,7 @@ impl Value {
 
         der.consume_whitespace_comment_first()?;
 
+        let start = der.pos;
         let val = match der.lookahead()? {
             Kind::_Char => der.parse_char()?.into(),
             Kind::_Byte => der.parse_byte()?.into(),
@@ -39,11 +86,7 @@ impl Value {
             Kind::_StringOrParagraph => der.parse_string_or_paragraph()?.converge(),
 
             Kind::Bool(v) => v.into(),
-            Kind::SpecialFloat(v) => v.into(),
-
-            Kind::Float { neg } => der.parse_float_with_known::<f64>(neg)?.into(),
-            Kind::Int { neg } => der.parse_integer_either_with_known::<u64>(neg)?.converge(),
-            Kind::LongInt { neg } => der.parse_integer_either_with_known::<u128>(neg)?.converge(),
+            Kind::Number(was_special) => der.parse_number_with_known::<Unspecified>(start, was_special)?,
 
             Kind::Maybe => Self::deserialize_maybe(der, ttl)?,
             Kind::Tuple => Self::deserialize_tuple(der, ttl)?,
@@ -235,10 +278,7 @@ enum Kind {
     _Bytes,
     _StringOrParagraph,
     Bool(bool),
-    SpecialFloat(f64),
-    Int { neg: bool },
-    Float { neg: bool },
-    LongInt { neg: bool },
+    Number(Option<NumSpecial>),
     Maybe,
     Tuple,
     Seq,
@@ -267,7 +307,7 @@ impl Parser<'_> {
             return Ok(Kind::Map);
         }
 
-        let long_number = 'non_number: {
+        let mut num_special = 'non_number: {
             let kind = match self.rest_bytes() {
                 [b'\'', ..] => Kind::_Char,
 
@@ -280,15 +320,14 @@ impl Parser<'_> {
 
                 [b'"', ..] | [b'`', b'`' | b'"' | b'|', ..] => Kind::_StringOrParagraph,
 
-                [b'-' | b'0'..=b'9' | b'.', ..] => break 'non_number false,
+                [b'-' | b'0'..=b'9' | b'.', ..] => break 'non_number None,
 
                 [_, ..] => match self.consume_keyword_or_ident_or_underscore()? {
                     Token::Keyword(kw) => match kw {
-                        Keyword::Long => break 'non_number true,
                         Keyword::True => Kind::Bool(true),
                         Keyword::False => Kind::Bool(false),
-                        Keyword::Infinity => Kind::SpecialFloat(f64::INFINITY),
-                        Keyword::NotANumber => Kind::SpecialFloat(f64::NAN),
+                        Keyword::Infinity => break 'non_number Some(NumSpecial::Infinity),
+                        Keyword::NotANumber => break 'non_number Some(NumSpecial::NotANumber),
                     },
 
                     Token::Identifier(name) => {
@@ -302,7 +341,15 @@ impl Parser<'_> {
                         }
                     }
 
-                    Token::Underscore => Kind::NominalUnnamed,
+                    Token::Underscore => {
+                        if self.consume_ws_("::")? {
+                            let name = self.consume_ident()?.into();
+
+                            Kind::NominalStemOnly { name }
+                        } else {
+                            Kind::NominalUnnamed
+                        }
+                    }
                 },
 
                 [] => return self.raise(ErrorKind::ExpectedValue),
@@ -311,22 +358,15 @@ impl Parser<'_> {
             return Ok(kind);
         };
 
-        let neg = self.consume_ws_("-")?;
-        let kind = if long_number {
-            Kind::LongInt { neg }
-        } else if self.consume_ws_("inf")? {
-            Kind::SpecialFloat(f64::NEG_INFINITY)
-        } else if self.consume_ws_("NaN")? {
-            Kind::SpecialFloat(f64::NAN)
-        } else if let [b'0', b'x' | b'o' | b'b', ..] = self.rest_bytes() {
-            Kind::Int { neg }
-        } else if let Some(b'.' | b'e' | b'E') = self.rest_bytes().iter().find(|byte| !byte.is_ascii_digit()) {
-            Kind::Float { neg }
-        } else {
-            Kind::Int { neg }
-        };
+        if num_special.is_none() {
+            if self.consume_ws_("-inf")? {
+                num_special = Some(NumSpecial::NegInfinity);
+            } else if self.consume_ws_("-NaN")? {
+                num_special = Some(NumSpecial::NotANumber);
+            }
+        }
 
-        Ok(kind)
+        Ok(Kind::Number(num_special))
     }
 
     #[inline]
