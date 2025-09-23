@@ -12,7 +12,7 @@ pub type Str = Box<str>;
 pub type ByteBuf = Vec<u8>;
 pub type Values = Vec<Value>;
 pub type ValueMap = BTreeMap<Value, Value>;
-pub type Record = BTreeMap<Str, Value>;
+pub type Struct = BTreeMap<Str, Value>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Float(pub f64);
@@ -68,16 +68,16 @@ pub enum Value {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Nominal {
-    Unnamed { stru: Struct },
-    StemOnly { stru: Struct, name: Str },
-    FullNamed { stru: Struct, name: Str, parent: Str },
+    Unnamed { stru: NominalValue },
+    StemOnly { stru: NominalValue, name: Str },
+    FullNamed { stru: NominalValue, name: Str, parent: Str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Struct {
+pub enum NominalValue {
     Unit,
     Tuple(Values),
-    Record(Record),
+    Struct(Struct),
 }
 
 //------------------------------------------------------------------------------
@@ -154,11 +154,11 @@ impl Hash for Float {
 
 impl Nominal {
     #[inline]
-    pub fn set_struct(&mut self, stru: Struct) -> Struct {
+    pub fn set_struct(&mut self, stru: NominalValue) -> NominalValue {
         match self {
-            Nominal::Unnamed { stru: struct_ }
-            | Nominal::StemOnly { stru: struct_, .. }
-            | Nominal::FullNamed { stru: struct_, .. } => mem::replace(struct_, stru),
+            Nominal::Unnamed { stru: stru_ }
+            | Nominal::StemOnly { stru: stru_, .. }
+            | Nominal::FullNamed { stru: stru_, .. } => mem::replace(stru_, stru),
         }
     }
 }

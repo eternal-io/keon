@@ -146,8 +146,8 @@ impl Value {
                 prototype
             }
 
-            NominalKind::Record => {
-                prototype.set_struct(Self::deserialize_nominal_record(der, ttl)?);
+            NominalKind::Struct => {
+                prototype.set_struct(Self::deserialize_nominal_struct(der, ttl)?);
                 prototype
             }
         };
@@ -156,7 +156,7 @@ impl Value {
     }
 
     /// NOTE: The leading `(` has been consumed.
-    fn deserialize_nominal_tuple(der: &mut Parser, mut ttl: Option<u32>) -> Result<Struct> {
+    fn deserialize_nominal_tuple(der: &mut Parser, mut ttl: Option<u32>) -> Result<NominalValue> {
         ttl = der.recursion_guard(ttl)?;
 
         let mut seq = Values::new();
@@ -171,14 +171,14 @@ impl Value {
             return der.raise(ErrorKind::ExpectedSequenceClose);
         }
 
-        Ok(Struct::Tuple(seq))
+        Ok(NominalValue::Tuple(seq))
     }
 
     /// NOTE: The leading `{` has been consumed.
-    fn deserialize_nominal_record(der: &mut Parser, mut ttl: Option<u32>) -> Result<Struct> {
+    fn deserialize_nominal_struct(der: &mut Parser, mut ttl: Option<u32>) -> Result<NominalValue> {
         ttl = der.recursion_guard(ttl)?;
 
-        let mut map = Record::new();
+        let mut map = Struct::new();
         while !der.adjacent_to_delim() {
             let key = der.consume_ident()?.into();
             if !der.consume_ws_(":")? {
@@ -195,7 +195,7 @@ impl Value {
             return der.raise(ErrorKind::ExpectedBraceClose);
         }
 
-        Ok(Struct::Record(map))
+        Ok(NominalValue::Struct(map))
     }
 }
 
@@ -205,15 +205,17 @@ impl From<Kind> for Nominal {
     #[inline]
     fn from(value: Kind) -> Nominal {
         match value {
-            Kind::NominalUnnamed => Nominal::Unnamed { stru: Struct::Unit },
+            Kind::NominalUnnamed => Nominal::Unnamed {
+                stru: NominalValue::Unit,
+            },
 
             Kind::NominalStemOnly { name } => Nominal::StemOnly {
-                stru: Struct::Unit,
+                stru: NominalValue::Unit,
                 name,
             },
 
             Kind::NominalFullNamed { name, parent } => Nominal::FullNamed {
-                stru: Struct::Unit,
+                stru: NominalValue::Unit,
                 name,
                 parent,
             },
@@ -249,7 +251,7 @@ enum Kind {
 enum NominalKind {
     Unit,
     Tuple,
-    Record,
+    Struct,
 }
 
 impl Parser<'_> {
@@ -334,7 +336,7 @@ impl Parser<'_> {
         } else if self.consume_ws_("(")? {
             Ok(NominalKind::Tuple)
         } else if self.consume_ws_("{")? {
-            Ok(NominalKind::Record)
+            Ok(NominalKind::Struct)
         } else {
             self.raise(ErrorKind::ExpectedNominalValue)
         }
