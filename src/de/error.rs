@@ -30,6 +30,7 @@ pub enum ErrorKind {
     InvalidNumber,
     IntegerOverflow,
     IntegerUnderflow,
+    InvalidNumberSuffix,
     InvalidNumberType,
     InvalidEscape,
     InvalidByteEscape,

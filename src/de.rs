@@ -603,13 +603,23 @@ const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
     .internal_digit_separator(true)
     .trailing_digit_separator(true)
     .consecutive_digit_separator(true)
+    .no_special(true)
     .no_positive_mantissa_sign(true)
-    .case_sensitive_special(true)
+    .case_sensitive_base_prefix(true)
     .build();
 
-const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(16).build();
-const NUMBER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(8).build();
-const NUMBER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(2).build();
+const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+    .mantissa_radix(16)
+    .base_prefix(NonZeroU8::new(b'x'))
+    .build();
+const NUMBER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+    .mantissa_radix(8)
+    .base_prefix(NonZeroU8::new(b'o'))
+    .build();
+const NUMBER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+    .mantissa_radix(2)
+    .base_prefix(NonZeroU8::new(b'b'))
+    .build();
 
 const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
     .no_multi_digit(false)
@@ -619,8 +629,8 @@ const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
     .lossy(false)
     .exponent(b'e')
     .decimal_point(b'.')
-    .nan_string(Some(b"NaN"))
-    .inf_string(Some(b"inf"))
+    .nan_string(None)
+    .inf_string(None)
     .infinity_string(None)
     .build_unchecked();
 
@@ -690,11 +700,13 @@ impl<'de> Parser<'de> {
             return T::make_special(start, special).inspect_err(|_| self.corrupted = true);
         }
 
-        const dec_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9');
-        const hex_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f');
-        const oct_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'7');
-        const bin_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'1');
-        const float_chr: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'E' | b'e' | b'+' | b'-');
+        let start = self.pos;
+
+        const dec_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'_');
+        const hex_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'_' | b'A'..=b'F' | b'a'..=b'f');
+        const oct_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'7' | b'_');
+        const bin_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'1' | b'_');
+        const float_chr: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'_' | b'E' | b'e' | b'+' | b'-');
 
         let rest = self.rest_bytes();
         let (prefix_off, kind, predicate) = match rest {
@@ -738,11 +750,14 @@ impl<'de> Parser<'de> {
                     b"i128" => I128,
                     b"f32" => F32,
                     b"f64" => F64,
-                    _ => return self.raise(ErrorKind::InvalidNumberType),
+                    _ => return self.raise_at(start + suffix_off, ErrorKind::InvalidNumberSuffix),
                 };
 
-                if matches!(kind, NumKind::Float) && !matches!(typ, F32 | F64) {
-                    return self.raise(ErrorKind::InvalidNumberType);
+                if matches!(kind, NumKind::Float) && !matches!(typ, F32 | F64)
+                    || matches!(kind, /* NumKind::HexInt | */ NumKind::OctInt | NumKind::BinInt)
+                        && matches!(typ, F32 | F64)
+                {
+                    return self.raise_at(start + suffix_off, ErrorKind::InvalidNumberType);
                 }
 
                 Some(typ)

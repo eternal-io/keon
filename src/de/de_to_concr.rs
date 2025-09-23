@@ -85,7 +85,7 @@ macro_rules! impl_make_num_for_float {
                 }
 
                 let parse_fn = match kind {
-                    NumKind::Float => lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>,
+                    NumKind::Float | NumKind::IntOrFloat => lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>,
                     _ => return Error::raise_at(start, ErrorKind::$ek),
                 };
 
