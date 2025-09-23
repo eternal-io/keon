@@ -30,6 +30,7 @@ pub enum ErrorKind {
     InvalidNumber,
     IntegerOverflow,
     IntegerUnderflow,
+    InvalidNumberType,
     InvalidEscape,
     InvalidByteEscape,
     InvalidAsciiEscape,
@@ -50,22 +51,27 @@ pub enum ErrorKind {
     ExpectedNominalValue,
 
     /* syntactic integrity */
-    /// `'`
     ExpectedQuote,
-    /// `:`
     ExpectedColon,
-    /// `=>`
     ExpectedFatArrow,
-    /// `{`
     ExpectedBraceOpen,
-    /// `}`
     ExpectedBraceClose,
-    /// `)`
     ExpectedTupleClose,
-    /// `]`
     ExpectedSequenceClose,
 
     /* parsing with known types */
+    ExpectedUInt8,
+    ExpectedUInt16,
+    ExpectedUInt32,
+    ExpectedUInt64,
+    ExpectedUInt128,
+    ExpectedSInt8,
+    ExpectedSInt16,
+    ExpectedSInt32,
+    ExpectedSInt64,
+    ExpectedSInt128,
+    ExpectedFloat32,
+    ExpectedFloat64,
     ExpectedMaybe,
     ExpectedBoolean,
     ExpectedCharacter,
@@ -76,24 +82,12 @@ pub enum ErrorKind {
     ExpectedTuple,
     ExpectedMap,
     ExpectedUnit,
-    ExpectedUnitStruct {
-        name: &'static str,
-    },
-    ExpectedNewtypeStruct {
-        name: &'static str,
-    },
-    ExpectedTupleStruct {
-        name: &'static str,
-    },
-    ExpectedStruct {
-        name: &'static str,
-    },
-    ExpectedEnum {
-        name: &'static str,
-    },
-    ExpectedVariant {
-        variants: &'static [&'static str],
-    },
+    ExpectedUnitStruct { name: &'static str },
+    ExpectedNewtypeStruct { name: &'static str },
+    ExpectedTupleStruct { name: &'static str },
+    ExpectedStruct { name: &'static str },
+    ExpectedEnum { name: &'static str },
+    ExpectedVariant { variants: &'static [&'static str] },
     ExpectedUnitVariant,
     ExpectedNewtypeVariant,
     ExpectedTupleVariant,

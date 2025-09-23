@@ -601,32 +601,6 @@ impl<'de> Parser<'de> {
 
 //------------------------------------------------------------------------------
 
-const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
-    .digit_separator(NonZeroU8::new(b'_'))
-    .internal_digit_separator(true)
-    .trailing_digit_separator(true)
-    .consecutive_digit_separator(true)
-    .no_positive_mantissa_sign(true)
-    .case_sensitive_special(true)
-    .build();
-
-const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(16).build();
-const NUMBER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(8).build();
-const NUMBER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(2).build();
-
-const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
-    .no_multi_digit(false)
-    .build_unchecked();
-
-const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
-    .lossy(false)
-    .exponent(b'e')
-    .decimal_point(b'.')
-    .nan_string(Some(b"NaN"))
-    .inf_string(Some(b"inf"))
-    .infinity_string(None)
-    .build_unchecked();
-
 trait ToSigned {
     type Signed;
     fn to_signed(self, neg: bool) -> Result<Self::Signed, ErrorKind>;
@@ -758,6 +732,166 @@ impl<'de> Parser<'de> {
         self.consume_whitespace_comment()?;
 
         Ok(if neg { -num } else { num })
+    }
+}
+
+//------------------------------------------------------------------------------
+
+const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
+    .digit_separator(NonZeroU8::new(b'_'))
+    .internal_digit_separator(true)
+    .trailing_digit_separator(true)
+    .consecutive_digit_separator(true)
+    .no_positive_mantissa_sign(true)
+    .case_sensitive_special(true)
+    .build();
+
+const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(16).build();
+const NUMBER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(8).build();
+const NUMBER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT).mantissa_radix(2).build();
+
+const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
+    .no_multi_digit(false)
+    .build_unchecked();
+
+const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
+    .lossy(false)
+    .exponent(b'e')
+    .decimal_point(b'.')
+    .nan_string(Some(b"NaN"))
+    .inf_string(Some(b"inf"))
+    .infinity_string(None)
+    .build_unchecked();
+
+trait MakeNum {
+    type Output;
+
+    fn make_num(start: usize, slice: &[u8], kind: NumKind, typ: Option<NumType>) -> Result<Self::Output>;
+
+    fn make_special(start: usize, special: NumSpecial) -> Result<Self::Output> {
+        let _ = start;
+        let _ = special;
+
+        Error::raise_at(0, ErrorKind::InvalidNumber)
+    }
+}
+
+enum NumKind {
+    Float,
+    HexInt,
+    OctInt,
+    BinInt,
+    IntOrFloat,
+}
+
+#[rustfmt::skip]
+enum NumType {
+    U8, U16, U32, U64, U128,
+    I8, I16, I32, I64, I128,
+             F32, F64,
+}
+
+enum NumSpecial {
+    Infinity,
+    NegInfinity,
+    NotANumber,
+}
+
+impl<'de> Parser<'de> {
+    fn parse_number<T: MakeNum>(&mut self) -> Result<T::Output> {
+        let start = self.pos;
+        let was_special;
+
+        if let Some((off, special)) = match self.rest_bytes() {
+            [b'i', b'n', b'f', ..] => Some((3, NumSpecial::Infinity)),
+            [b'N', b'a', b'N', ..] => Some((3, NumSpecial::NotANumber)),
+            [b'-', b'i', b'n', b'f', ..] => Some((4, NumSpecial::NegInfinity)),
+            [b'-', b'N', b'a', b'N', ..] => Some((4, NumSpecial::NotANumber)),
+            [..] => None,
+        } {
+            self.bump(off);
+            self.consume_whitespace_comment()?;
+            was_special = Some(special);
+        } else {
+            was_special = None;
+        }
+
+        self.parse_number_with_known::<T>(start, was_special)
+    }
+
+    fn parse_number_with_known<T: MakeNum>(
+        &mut self,
+        start: usize,
+        was_special: Option<NumSpecial>,
+    ) -> Result<T::Output> {
+        #![allow(non_upper_case_globals)]
+        if let Some(special) = was_special {
+            return T::make_special(start, special);
+        }
+
+        const dec_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9');
+        const hex_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f');
+        const oct_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'7');
+        const bin_digit: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'1');
+        const float_chr: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'E' | b'e' | b'+' | b'-');
+
+        let rest = self.rest_bytes();
+        let (prefix_off, kind, predicate) = match rest {
+            [b'0', b'x', ..] => (2, NumKind::HexInt, hex_digit),
+            [b'0', b'o', ..] => (2, NumKind::OctInt, oct_digit),
+            [b'0', b'b', ..] => (2, NumKind::BinInt, bin_digit),
+
+            [b'-', b'0', b'x', ..] => (3, NumKind::HexInt, hex_digit),
+            [b'-', b'0', b'o', ..] => (3, NumKind::OctInt, oct_digit),
+            [b'-', b'0', b'b', ..] => (3, NumKind::BinInt, bin_digit),
+
+            [..] => match rest.iter().enumerate().find(|(_off, byte)| !byte.is_ascii_digit()) {
+                Some((off, b'.' | b'e' | b'E')) => (off + 1, NumKind::Float, float_chr),
+                Some((off, _)) => (off, NumKind::IntOrFloat, dec_digit),
+                None => (0, NumKind::IntOrFloat, dec_digit),
+            },
+        };
+
+        let suffix_off = prefix_off + rest[prefix_off..].iter().take_while(predicate).count();
+        let total_off = suffix_off
+            + rest[suffix_off..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_alphanumeric())
+                .count();
+
+        let slice = &rest[..suffix_off];
+        let typ = match &rest[suffix_off..total_off] {
+            [] => None,
+            [suffix @ ..] => {
+                use NumType::*;
+                let typ = match suffix {
+                    b"u8" => U8,
+                    b"u16" => U16,
+                    b"u32" => U32,
+                    b"u64" => U64,
+                    b"u128" => U128,
+                    b"i8" => I8,
+                    b"i16" => I16,
+                    b"i32" => I32,
+                    b"i64" => I64,
+                    b"i128" => I128,
+                    b"f32" => F32,
+                    b"f64" => F64,
+                    _ => return self.raise(ErrorKind::InvalidNumberType),
+                };
+
+                if matches!(kind, NumKind::Float) && !matches!(typ, F32 | F64) {
+                    return self.raise(ErrorKind::InvalidNumberType);
+                }
+
+                Some(typ)
+            }
+        };
+
+        self.bump(total_off);
+        self.consume_whitespace_comment()?;
+
+        T::make_num(start, slice, kind, typ)
     }
 }
 
