@@ -45,7 +45,7 @@ impl MakeNum for Unspecified {
             },
             None => Value::NumberNoSuffix(if let NumKind::Float = kind {
                 f64::make_num(start, slice, kind, None)?.into()
-            } else if let Some(b'-') = slice.get(0) {
+            } else if let Some(b'-') = slice.first() {
                 i64::make_num(start, slice, kind, None)?.into()
             } else {
                 u64::make_num(start, slice, kind, None)?.into()
