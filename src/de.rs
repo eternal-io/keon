@@ -695,7 +695,6 @@ impl<'de> Parser<'de> {
         was_special: Option<NumSpecial>,
     ) -> Result<T::Output> {
         #![allow(non_upper_case_globals)]
-        #![allow(clippy::manual_is_ascii_check)]
         if let Some(special) = was_special {
             return T::make_special(start, special).inspect_err(|_| self.corrupted = true);
         }
@@ -709,19 +708,20 @@ impl<'de> Parser<'de> {
         const float_chr: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'_' | b'E' | b'e' | b'+' | b'-');
 
         let rest = self.rest_bytes();
+        let (neg, rest) = if let Some(b'-') = rest.first() {
+            (true, &rest[1..])
+        } else {
+            (false, rest)
+        };
+
         let (prefix_off, kind, predicate) = match rest {
             [b'0', b'x', ..] => (2, NumKind::HexInt, hex_digit),
             [b'0', b'o', ..] => (2, NumKind::OctInt, oct_digit),
             [b'0', b'b', ..] => (2, NumKind::BinInt, bin_digit),
-
-            [b'-', b'0', b'x', ..] => (3, NumKind::HexInt, hex_digit),
-            [b'-', b'0', b'o', ..] => (3, NumKind::OctInt, oct_digit),
-            [b'-', b'0', b'b', ..] => (3, NumKind::BinInt, bin_digit),
-
-            [..] => match rest.iter().enumerate().find(|(_off, byte)| !byte.is_ascii_digit()) {
+            [..] => match rest.iter().enumerate().find(|(_off, byte)| !dec_digit(byte)) {
                 Some((off, b'.' | b'e' | b'E')) => (off + 1, NumKind::Float, float_chr),
                 Some((off, _)) => (off, NumKind::IntOrFloat, dec_digit),
-                None => (0, NumKind::IntOrFloat, dec_digit),
+                None => (rest.len(), NumKind::IntOrFloat, dec_digit),
             },
         };
 
@@ -732,10 +732,14 @@ impl<'de> Parser<'de> {
                 .take_while(|byte| byte.is_ascii_alphanumeric())
                 .count();
 
-        let slice = &rest[..suffix_off];
+        let slice = if neg {
+            &self.rest_bytes()[..suffix_off + 1]
+        } else {
+            &rest[..suffix_off]
+        };
         let typ = match &rest[suffix_off..total_off] {
             [] => None,
-            [suffix @ ..] => {
+            suffix => {
                 use NumType::*;
                 let typ = match suffix {
                     b"u8" => U8,
@@ -764,7 +768,7 @@ impl<'de> Parser<'de> {
             }
         };
 
-        self.bump(total_off);
+        self.bump(neg as usize + total_off);
         self.consume_whitespace_comment()?;
 
         T::make_num(start, slice, kind, typ).inspect_err(|_| self.corrupted = true)
