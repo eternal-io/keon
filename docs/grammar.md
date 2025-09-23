@@ -64,7 +64,6 @@ BLOCK_COMMENT ->
 
 /*== Keywords ==*/
 
-KW_LONG -> `long`
 KW_TRUE -> `true`
 KW_FALSE -> `false`
 KW_INFINITY -> `inf`
@@ -104,13 +103,16 @@ BOOLEAN_LITERAL ->
 
 // integer literals
 INTEGER_LITERAL ->
-    ( `long` WS )? ( `-` WS )?
-    ( DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL )
+    `-`? ( DEC_LITERAL | BIN_LITERAL | OCT_LITERAL | HEX_LITERAL ) INTEGER_SUFFIX?
+
+INTEGER_SUFFIX ->
+      `i8` | `i16` | `i32` | `i64` | `i128`
+    | `u8` | `u16` | `u32` | `u64` | `u128`
 
 DEC_LITERAL -> DEC_DIGIT ( `_` | DEC_DIGIT )*
-BIN_LITERAL -> `0b` BIN_DIGIT ( `_` | BIN_DIGIT )*
-OCT_LITERAL -> `0o` OCT_DIGIT ( `_` | OCT_DIGIT )*
-HEX_LITERAL -> `0x` HEX_DIGIT ( `_` | HEX_DIGIT )*
+BIN_LITERAL -> `0b` `_`* BIN_DIGIT ( `_` | BIN_DIGIT )*
+OCT_LITERAL -> `0o` `_`* OCT_DIGIT ( `_` | OCT_DIGIT )*
+HEX_LITERAL -> `0x` `_`* HEX_DIGIT ( `_` | HEX_DIGIT )*
 
 BIN_DIGIT -> [`0`-`1`]
 OCT_DIGIT -> [`0`-`7`]
@@ -119,11 +121,13 @@ HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 
 // float literals
 FLOAT_LITERAL ->
-    ( `-` WS )?
-    ( `inf` | `NaN` | DEC_LITERAL ( `.` DEC_LITERAL? )? FLOAT_EXPONENT? )
+    `-`? ( `inf` | `NaN` | DEC_LITERAL ( `.` DEC_LITERAL? )? FLOAT_EXPONENT? ) FLOAT_SUFFIX?
 
 FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
+
+FLOAT_SUFFIX ->
+    `f32` | `f64`
 
 NEWLINE ->
     <CR>? <LF>
