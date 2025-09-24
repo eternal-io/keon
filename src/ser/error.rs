@@ -1,15 +1,18 @@
 use super::*;
 
-pub type SeriaResult = ::core::result::Result<(), SeriaError>;
+pub type SeriaResult<T = ()> = ::core::result::Result<T, SeriaError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SeriaError;
+pub enum SeriaError {
+    Write,
+    Recursion,
+}
 
 impl core::error::Error for SeriaError {}
 
 impl serde::ser::Error for SeriaError {
     fn custom<T: fmt::Display>(_msg: T) -> Self {
-        Self
+        Self::Write
     }
 }
 

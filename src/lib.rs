@@ -15,7 +15,7 @@ mod format {
     use core::num::NonZeroU8;
     use lexical_core::{
         NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions,
-        ParseIntegerOptionsBuilder,
+        ParseIntegerOptionsBuilder, WriteIntegerOptions, WriteIntegerOptionsBuilder,
     };
 
     pub(crate) const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
@@ -52,4 +52,6 @@ mod format {
         .inf_string(Some(b"inf"))
         .infinity_string(None)
         .build_unchecked();
+
+    pub(crate) const WRITE_INTEGER_OPTS: WriteIntegerOptions = WriteIntegerOptionsBuilder::new().build_unchecked();
 }
