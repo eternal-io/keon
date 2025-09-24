@@ -1,10 +1,7 @@
 use self::error::*;
-use crate::value::*;
-use core::{cmp::Ordering, marker::PhantomData, num::NonZeroU8};
+use crate::{format::*, value::*};
+use core::{cmp::Ordering, marker::PhantomData};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
-use lexical_core::{
-    NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions, ParseIntegerOptionsBuilder,
-};
 
 pub mod de_to_concr;
 pub mod de_to_value;
@@ -575,7 +572,7 @@ impl<'de> Parser<'de> {
                 let chr = lexical_core::parse_with_options::<
                     u32,
                     {
-                        NumberFormatBuilder::rebuild(lexical_core::format::RUST_LITERAL)
+                        lexical_core::NumberFormatBuilder::rebuild(NUMBER_FORMAT)
                             .mantissa_radix(16)
                             .build()
                     },
@@ -597,42 +594,6 @@ impl<'de> Parser<'de> {
 }
 
 //------------------------------------------------------------------------------
-
-const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
-    .digit_separator(NonZeroU8::new(b'_'))
-    .internal_digit_separator(true)
-    .trailing_digit_separator(true)
-    .consecutive_digit_separator(true)
-    .no_special(true)
-    .no_positive_mantissa_sign(true)
-    .case_sensitive_base_prefix(true)
-    .build();
-
-const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
-    .mantissa_radix(16)
-    .base_prefix(NonZeroU8::new(b'x'))
-    .build();
-const NUMBER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
-    .mantissa_radix(8)
-    .base_prefix(NonZeroU8::new(b'o'))
-    .build();
-const NUMBER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
-    .mantissa_radix(2)
-    .base_prefix(NonZeroU8::new(b'b'))
-    .build();
-
-const PARSE_INTEGER_OPTS: ParseIntegerOptions = ParseIntegerOptionsBuilder::new()
-    .no_multi_digit(false)
-    .build_unchecked();
-
-const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
-    .lossy(false)
-    .exponent(b'e')
-    .decimal_point(b'.')
-    .nan_string(None)
-    .inf_string(None)
-    .infinity_string(None)
-    .build_unchecked();
 
 trait MakeNum {
     type Output;
