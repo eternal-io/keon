@@ -21,3 +21,10 @@ impl fmt::Display for SeriaError {
         todo!()
     }
 }
+
+#[doc(hidden)]
+impl From<fmt::Error> for SeriaError {
+    fn from(_: fmt::Error) -> Self {
+        Self::Write
+    }
+}

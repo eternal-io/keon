@@ -29,46 +29,46 @@ impl<W: Write> Serializer for &mut Serria<W> {
     type SerializeStructVariant = Compound;
 
     fn serialize_bool(self, v: bool) -> SeriaResult {
-        todo!()
+        self.write_bool(v)
     }
 
     fn serialize_i8(self, v: i8) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_i16(self, v: i16) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_i32(self, v: i32) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_i64(self, v: i64) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_i128(self, v: i128) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
 
     fn serialize_u8(self, v: u8) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_u16(self, v: u16) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_u32(self, v: u32) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_u64(self, v: u64) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
     fn serialize_u128(self, v: u128) -> SeriaResult {
-        todo!()
+        self.write_integer(v)
     }
 
     fn serialize_f32(self, v: f32) -> SeriaResult {
-        todo!()
+        self.write_float(v)
     }
     fn serialize_f64(self, v: f64) -> SeriaResult {
-        todo!()
+        self.write_float(v)
     }
 
     fn serialize_char(self, v: char) -> SeriaResult {
@@ -88,6 +88,16 @@ impl<W: Write> Serializer for &mut Serria<W> {
     where
         T: ?Sized + serde::Serialize,
     {
+        todo!()
+    }
+
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        todo!()
+    }
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        todo!()
+    }
+    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
         todo!()
     }
 
@@ -120,12 +130,6 @@ impl<W: Write> Serializer for &mut Serria<W> {
         todo!()
     }
 
-    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        todo!()
-    }
-    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        todo!()
-    }
     fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
         todo!()
     }
@@ -139,9 +143,6 @@ impl<W: Write> Serializer for &mut Serria<W> {
         todo!()
     }
 
-    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        todo!()
-    }
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         todo!()
     }
