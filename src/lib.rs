@@ -1,6 +1,9 @@
 pub mod de;
 pub mod ser;
+pub mod ser2;
 pub mod value;
+
+extern crate alloc;
 
 pub use crate::{
     de::{
