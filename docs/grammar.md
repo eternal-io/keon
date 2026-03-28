@@ -27,8 +27,8 @@ KeonPartial -> Value ( `;` | `;`? <EOF> )
 
 Value ->
       LITERAL
-    | Structural
-    | Nominal
+    | Structure
+    | NominalStructure
 
 
 /*== Whitespace ==*/
@@ -193,9 +193,9 @@ PARAGRAPH_LITERAL ->
                 //   to the same length as the first line, to keep it "correct".
 
 
-/*== Structurals ==*/
+/*== Structures ==*/
 
-Structural ->
+Structure ->
       MaybeValue
     | TupleValue
     | SeqValue
@@ -217,9 +217,9 @@ MapValue ->
     )? `}`
 
 
-/*== Nominals ==*/
+/*== Nominal Structures ==*/
 
-Nominal ->
+NominalStructure ->
     NominalPath ( TupleValue | StructValue )?
 
 NominalPath ->

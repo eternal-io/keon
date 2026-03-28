@@ -8,6 +8,7 @@ pub enum SeriaError {
     Recursion,
     InvalidEntryKind,
     TooManyEntries,
+    TooFewEntries,
 }
 
 impl core::error::Error for SeriaError {}
