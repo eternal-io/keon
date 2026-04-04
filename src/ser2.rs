@@ -1,4 +1,4 @@
-use self::error::*;
+use self::{error::Reason, private::Sealed};
 use alloc::collections::{vec_deque, VecDeque};
 use core::{
     fmt::{self, Write},
@@ -7,15 +7,37 @@ use core::{
 
 pub mod error;
 
-pub fn fast_seria<T: Seriable>(value: T) -> String {
+mod private {
+    pub trait Sealed {}
+}
+
+//==================================================================================================
+
+pub fn fast_seria<T: Serialize>(value: T) -> String {
     todo!()
 }
 
 //==================================================================================================
 
-#[doc(alias = "Serialize")]
-pub trait Seriable {
-    fn seria_with<W: Write>(&self, ser: &mut Serria<W>) -> SeriaResult;
+pub trait Serialize {
+    fn seria_with<'w, W: Write>(&self, ser: impl Serializer<'w>) -> fmt::Result;
+}
+
+pub trait Serializer<'w>: Sized + Sealed {
+    type SerializerVisitor: SerializerVisitor<'w>;
+
+    fn begin(&'w mut self) -> Result<Self::SerializerVisitor, fmt::Error>;
+}
+
+#[doc(hidden)]
+pub trait SerializerVisitor<'w>: Sized + Sealed {
+    fn style(&self) -> ! {
+        unimplemented!()
+    }
+
+    fn enter(&'w mut self, kind: CompoundKind) -> Result<Self, fmt::Error>;
+
+    fn push(&mut self, entry: String) -> fmt::Result;
 }
 
 //==================================================================================================
@@ -36,7 +58,7 @@ pub struct Serria<W: Write> {
     cfg: SerriaConfig,
     stack: Vec<CompoundTerm>,
     queue: VecDeque<String>,
-    deferred_err: Option<SeriaError>,
+    deferred_err: bool,
 }
 
 pub struct SerriaConfig {
@@ -46,23 +68,22 @@ pub struct SerriaConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LayoutControl {
-    Compressed,
+    Compact,
     Expanded,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-enum CompoundKind {
+pub enum CompoundKind {
     Maybe,
     Tuple,                 // (T, U, ...)
     Seq,                   // [T, T, ...]
     Map,                   // { K => V }
-    MapPair,               //   K
-    MapPairRhs,            //     => V
+    MapPair,               //   K => V
     NominalUnit(String),   // Name
     NominalTuple(String),  // Name(T)
     NominalStruct(String), // Name { field: T }
-    StructField,           //        field
-    StructFieldRhs,        //             : T
+    StructField,           //        field: T
 }
 
 struct CompoundTerm {
@@ -76,421 +97,347 @@ struct CompoundTerm {
     cumulative_width: usize,
 }
 
-impl<W: Write> Serria<W> {
-    pub fn seria<T: Seriable>(&mut self, value: &T) -> fmt::Result {
-        todo!()
-    }
+impl<W: Write> Sealed for &mut Serria<W> {}
 
-    fn begin(&mut self) -> SeriaResult<SerriaGuard<'_, W>> {
+impl<'w, W: Write> Serializer<'w> for &'w mut Serria<W> {
+    type SerializerVisitor = SerriaVisitor<'w, W>;
+
+    fn begin(&'w mut self) -> Result<Self::SerializerVisitor, fmt::Error> {
         self.flush_error()?;
         self.queue.make_contiguous();
-        Ok(SerriaGuard { serria: self })
+        Ok(SerriaVisitor { ser: self })
     }
+}
 
-    #[inline]
-    fn flush_error(&mut self) -> SeriaResult {
-        match self.deferred_err {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
-    }
+impl<W: Write> Sealed for SerriaVisitor<'_, W> {}
 
-    #[inline]
-    fn flush_layout(&mut self) -> SeriaResult {
-        if self.stack.last().unwrap().cumulative_width <= self.cfg.max_width {
-            return Ok(());
-        }
+impl<'w, W: Write> SerializerVisitor<'w> for SerriaVisitor<'w, W> {
+    fn enter(&'w mut self, kind: CompoundKind) -> Result<Self, fmt::Error> {
+        self.flush_error()?;
 
-        if self.stack.len() > 1 {
-            for i in 0..self.stack.len() - 1 {
-                let comp = &self.stack[i];
-                let comp_next = &self.stack[i + 1];
-
-                if comp.ctrl == LayoutControl::Expanded {
-                    continue;
+        if let Some(comp) = self.stack.last() {
+            if comp.ctrl == LayoutControl::Expanded {
+                match comp.kind {
+                    CompoundKind::MapPair => write!(self.dst, " => ")?,
+                    CompoundKind::StructField => write!(self.dst, ": ")?,
+                    _ => (),
                 }
-
-                let range_start = comp.queue_index;
-                let range_end = comp_next.queue_index;
-
-                self.expand(i, range_end - range_start)?;
             }
         }
 
-        self.expand(self.stack.len() - 1, self.queue.len())?;
+        let cumulative_width = self.stack.last().map(|comp| comp.cumulative_width).unwrap_or(0)
+            + match &kind {
+                CompoundKind::Maybe | CompoundKind::Tuple | CompoundKind::Seq | CompoundKind::Map => 1,
+                CompoundKind::NominalUnit(name) => name.chars().count(),
+                CompoundKind::NominalTuple(name) => name.chars().count() + 1,
+                CompoundKind::NominalStruct(name) => name.chars().count() + 2,
+                CompoundKind::MapPair | CompoundKind::StructField => 0,
+            };
+
+        let next_comp = CompoundTerm {
+            ctrl: LayoutControl::Compact,
+            kind,
+            queue_index: self.queue.len(),
+            cumulative_width,
+        };
+
+        self.stack.push(next_comp);
+
+        Ok(SerriaVisitor { ser: self.ser })
+    }
+
+    fn push(&mut self, entry: String) -> fmt::Result {
+        // self.flush_error()?;
+
+        // let dst = &mut self.dst;
+        // let write_indent = |dst: &mut W, depth| (0..self.cfg.indent_width * depth).try_for_each(|_| dst.write_str(" "));
+
+        // let Some(comp) = self.stack.last_mut() else {
+        //     todo!();
+        // };
+
+        // if comp.ctrl == LayoutControl::Expanded {
+        //     match comp.kind {
+        //         CompoundKind::MapPair => write!(dst, " => ")?,
+        //         CompoundKind::StructField => write!(dst, ": ")?,
+        //         _ => (),
+        //     }
+
+        //     write_indent(dst, self.stack.len())?;
+        // }
+
+        todo!()
+    }
+}
+
+impl<W: Write> Serria<W> {
+    pub fn seria<T: Serialize>(&mut self, value: &T) -> fmt::Result {
+        todo!()
+    }
+
+    #[inline]
+    fn flush_error(&mut self) -> fmt::Result {
+        match self.deferred_err {
+            true => Err(fmt::Error),
+            false => Ok(()),
+        }
+    }
+
+    #[inline]
+    fn flush_layout(&mut self) -> fmt::Result {
+        assert!(!self.stack.is_empty());
+
+        for i in 0..self.stack.len() - 1 {
+            let comp = &self.stack[i];
+            let comp_next = &self.stack[i + 1];
+
+            if comp.ctrl == LayoutControl::Expanded {
+                continue;
+            }
+
+            let range_start = comp.queue_index;
+            let range_end = comp_next.queue_index;
+
+            self.perform_expand(i, range_end - range_start)?;
+
+            if self.stack.last().unwrap().cumulative_width <= self.cfg.max_width {
+                return Ok(());
+            }
+        }
+
+        self.perform_expand(self.stack.len() - 1, self.queue.len())?;
 
         Ok(())
     }
 
     #[inline]
-    fn expand(&mut self, depth: usize, count: usize) -> SeriaResult {
+    fn perform_expand(&mut self, depth: usize, entries_count: usize) -> fmt::Result {
         let dst = &mut self.dst;
-        let indent_width = self.cfg.indent_width;
-        let write_indent = |dst: &mut W, depth: usize| -> SeriaResult {
-            (0..indent_width * depth)
-                .try_for_each(|_| dst.write_str(" "))
-                .map_err(Into::into)
-        };
-
-        let comp = &mut self.stack[depth];
-        let mut entries = self.queue.drain(..count);
-
-        debug_assert!(comp.ctrl == LayoutControl::Compressed);
-
-        comp.ctrl = LayoutControl::Expanded;
-        comp.cumulative_width = 0;
+        let write_indent = |dst: &mut W, depth| (0..self.cfg.indent_width * depth).try_for_each(|_| dst.write_str(" "));
 
         write_indent(dst, depth)?;
 
-        match &comp.kind {
-            CompoundKind::Seq => writeln!(dst, "[")?,
-            CompoundKind::Tuple => writeln!(dst, "(")?,
-            CompoundKind::Map => writeln!(dst, "{{")?,
-
-            CompoundKind::NominalTuple(name) => writeln!(dst, "{}(", name)?,
-            CompoundKind::NominalStruct(name) => writeln!(dst, "{} {{", name)?,
-
-            CompoundKind::NominalUnit(name) => {
-                write!(dst, "{}", name)?;
-
-                debug_assert!(entries.next().is_none(), "'nominal unit' accepts no entry");
-                return Ok(());
-            }
-
-            CompoundKind::Maybe => {
-                write!(dst, "? ")?; // It must be some if expand has been triggered.
-                if let Some(entry) = entries.next() {
-                    write!(dst, "{}", entry)?;
-                }
-                debug_assert!(entries.next().is_none(), "'maybe value' accepts at most one entry");
-                return Ok(());
-            }
-
-            pair => {
-                match entries.next() {
-                    None => debug_assert!(
-                        !matches!(pair, CompoundKind::StructField),
-                        "'struct field' left-hand side must be literal (identifier)"
-                    ),
-                    Some(entry) => match pair {
-                        CompoundKind::MapPair => write!(dst, "{} => ", entry)?,
-                        CompoundKind::MapPairRhs => (),
-                        CompoundKind::StructField => write!(dst, "{}: ", entry)?,
-                        CompoundKind::StructFieldRhs => (),
-                        _ => unreachable!(),
-                    },
-                }
-                debug_assert!(
-                    entries.next().is_none(),
-                    "'pair kind' accepts at most one entry while expanding"
-                );
-                return Ok(());
-            }
-        }
-
-        for entry in entries {
-            write_indent(dst, depth + 1)?;
-            writeln!(dst, "{},", entry)?;
-        }
-
-        Ok(())
-    }
-
-    fn compress(&mut self) -> SeriaResult {
-        let Some(comp) = self.stack.last() else {
-            return Ok(());
-        };
-
-        debug_assert!(comp.ctrl == LayoutControl::Compressed);
-
-        let mut entries = self.queue.drain(comp.queue_index..).peekable();
-        let mut stringified = String::new();
+        let comp = &mut self.stack[depth];
+        debug_assert!(comp.ctrl == LayoutControl::Compact);
+        comp.ctrl = LayoutControl::Expanded;
 
         'comma_joined: {
-            let non_empty = entries.peek().is_some();
-
+            let mut entries = self.queue.drain(..entries_count);
             match &comp.kind {
-                CompoundKind::Seq => write!(stringified, "[")?,
-                CompoundKind::Tuple => write!(stringified, "(")?,
-                CompoundKind::Map => {
-                    write!(stringified, "{{")?;
-                    if non_empty {
-                        write!(stringified, " ")?;
-                    }
-                }
-
-                CompoundKind::NominalTuple(name) => write!(stringified, "{}(", name)?,
-                CompoundKind::NominalStruct(name) => {
-                    write!(stringified, "{} {{", name)?;
-                    if non_empty {
-                        write!(stringified, " ")?;
-                    }
-                }
+                CompoundKind::Seq => writeln!(dst, "[")?,
+                CompoundKind::Tuple => writeln!(dst, "(")?,
+                CompoundKind::Map => writeln!(dst, "{{")?,
+                CompoundKind::NominalTuple(name) => writeln!(dst, "{}(", name)?,
+                CompoundKind::NominalStruct(name) => writeln!(dst, "{} {{", name)?,
                 CompoundKind::NominalUnit(name) => {
-                    write!(stringified, "{}", name)?;
-
-                    debug_assert!(entries.next().is_none(), "'nominal unit' accepts no entry");
+                    match entries_count {
+                        0 => write!(dst, "{}", name)?,
+                        _ => panic!("'nominal unit' accepts no entry"),
+                    }
                     break 'comma_joined;
                 }
-
                 CompoundKind::Maybe => {
-                    write!(stringified, "?")?;
-                    if let Some(entry) = entries.next() {
-                        write!(stringified, " {}", entry)?
+                    match entries_count {
+                        0 => panic!("'maybe value' must be some when expand has been triggered"),
+                        1 => write!(dst, "? {}", entries.next().unwrap())?,
+                        _ => panic!("'maybe value' accepts at most one entry"),
                     }
-                    debug_assert!(entries.next().is_none(), "'maybe value' accepts at most one entry");
                     break 'comma_joined;
                 }
-
-                CompoundKind::MapPair => unreachable!("'map pair' must not missing value"),
-                CompoundKind::MapPairRhs => {
-                    let k = entries.next().expect("map pair key");
-                    let v = entries.next().expect("map pair value");
-                    write!(stringified, "{} => {}", k, v)?;
-
-                    debug_assert!(entries.next().is_none(), "'map pair' accepts exactly two entries");
-                    break 'comma_joined;
-                }
-
-                CompoundKind::StructField => unreachable!("'struct field' must not missing value"),
-                CompoundKind::StructFieldRhs => {
-                    let f = entries.next().expect("struct field key");
-                    let v = entries.next().expect("struct field value");
-                    write!(stringified, "{}: {}", f, v)?;
-
-                    debug_assert!(entries.next().is_none(), "'struct field' accepts exactly two entries");
-                    break 'comma_joined;
-                }
-            }
-
-            while entries.peek().is_some() {
-                let entry = entries.next().unwrap();
-                write!(stringified, "{}, ", entry)?;
-            }
-            if let Some(entry) = entries.next() {
-                write!(stringified, "{}", entry)?;
-            }
-
-            match &comp.kind {
-                CompoundKind::Seq => write!(stringified, "]")?,
-                CompoundKind::Tuple | CompoundKind::NominalTuple(_) => write!(stringified, ")")?,
-                CompoundKind::Map | CompoundKind::NominalStruct(_) => {
-                    if non_empty {
-                        write!(stringified, " ")?;
+                CompoundKind::MapPair => {
+                    match entries_count {
+                        0 => panic!("'map pair' must not missing a key when expand has been triggered"),
+                        1 => write!(dst, "{} => ", entries.next().unwrap())?,
+                        2 => write!(dst, "{} => {}", entries.next().unwrap(), entries.next().unwrap())?,
+                        _ => panic!("'map pair' accepts exactly two entries"),
                     }
-                    write!(stringified, "}}")?;
+                    break 'comma_joined;
                 }
-                _ => unreachable!(),
+                CompoundKind::StructField => {
+                    match entries_count {
+                        0 => panic!("'struct field' must not missing a name when expand has been triggered"),
+                        1 => write!(dst, "{}: ", entries.next().unwrap())?,
+                        2 => write!(dst, "{}: {}", entries.next().unwrap(), entries.next().unwrap())?,
+                        _ => panic!("'struct field' accepts exactly two entries"),
+                    }
+                    break 'comma_joined;
+                }
+            }
+            for entry in entries {
+                write_indent(dst, depth + 1)?;
+                writeln!(dst, "{},", entry)?;
             }
         }
 
-        drop(entries);
-        self.queue.push_back(stringified);
+        let delta_width = comp.cumulative_width;
+        for nested_comp in &mut self.stack[depth..] {
+            nested_comp.cumulative_width -= delta_width;
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn direct_write(&mut self, entry: String) -> fmt::Result {
+        debug_assert!(!self.stack.is_empty());
+
+        let dst = &mut self.dst;
+        let write_indent =
+            |dst: &mut W| (0..self.cfg.indent_width * self.stack.len()).try_for_each(|_| dst.write_str(" "));
+
+        match self.stack.last().unwrap().kind {
+            CompoundKind::Tuple
+            | CompoundKind::Seq
+            | CompoundKind::Map
+            | CompoundKind::NominalTuple(_)
+            | CompoundKind::NominalStruct(_) => {
+                write_indent(dst)?;
+                writeln!(dst, "{},", entry)?;
+            }
+            CompoundKind::Maybe | CompoundKind::NominalUnit(_) => unreachable!(),
+            CompoundKind::MapPair | CompoundKind::StructField => (),
+        }
 
         Ok(())
     }
 }
 
-//------------------------------------------------------------------------------
-
-struct SerriaGuard<'w, W: Write> {
-    serria: &'w mut Serria<W>,
+#[doc(hidden)]
+pub struct SerriaVisitor<'w, W: Write> {
+    ser: &'w mut Serria<W>,
 }
 
-impl<W: Write> SerriaGuard<'_, W> {
-    fn push(&mut self, literal: String) -> SeriaResult {
-        self.flush_error()?;
-
-        let queue_len = self.queue.len();
-        if let Some(container) = self.stack.last_mut() {
-            let entries_count = queue_len.strict_sub(container.queue_index);
-
-            match container.kind {
-                CompoundKind::Maybe => match entries_count {
-                    0 => container.cumulative_width += 1 + literal.len(),
-                    _ => return Err(SeriaError::TooManyEntries),
-                },
-                CompoundKind::NominalUnit(_) => return Err(SeriaError::TooManyEntries),
-                CompoundKind::Seq | CompoundKind::NominalTuple(_) | CompoundKind::Tuple => match entries_count {
-                    0 => container.cumulative_width += literal.len(),
-                    _ => container.cumulative_width += 2 + literal.len(),
-                },
-                CompoundKind::Map | CompoundKind::NominalStruct(_) => match entries_count {
-                    0 => container.cumulative_width += 1 + literal.len() + 1,
-                    _ => container.cumulative_width += 2 + literal.len(),
-                },
-                CompoundKind::MapPair => match entries_count {
-                    0 => container.cumulative_width += literal.len(),
-                    1 => container.cumulative_width += 1 + 2 + 1 + literal.len(),
-                    _ => return Err(SeriaError::TooManyEntries),
-                },
-                CompoundKind::StructField => match entries_count {
-                    0 => container.cumulative_width += literal.len() + 1,
-                    1 => container.cumulative_width += 1 + literal.len(),
-                    _ => return Err(SeriaError::TooManyEntries),
-                },
-
-                CompoundKind::MapPairRhs => todo!(),
-                CompoundKind::StructFieldRhs => todo!(),
-            }
-
-            if container.cumulative_width > self.queue.len() {}
-        }
-
-        self.queue.push_back(literal);
-
-        Ok(())
-    }
-
-    fn enter(&mut self, kind: CompoundKind) -> SeriaResult<SerriaGuard<'_, W>> {
-        self.flush_error()?;
-
-        todo!()
-    }
-}
-
-impl<W: Write> Drop for SerriaGuard<'_, W> {
+impl<W: Write> Drop for SerriaVisitor<'_, W> {
     fn drop(&mut self) {
-        fn foo() {}
+        let mut deferred_err = false;
 
-        //------------------------------------------------------------------------------
+        if let Some(comp) = self.stack.pop() {
+            debug_assert!(comp.ctrl == LayoutControl::Compact);
 
-        let queue_len = self.queue.len();
-        let deferred_err = match self.stack.pop() {
-            None => {
-                let entries_count = queue_len;
-                match entries_count {
-                    1 => {
-                        let entry = self.queue.pop_back().unwrap();
-                        self.dst.write_str(&entry).err().map(Into::into)
+            let entries_count = self.queue.len() - comp.queue_index;
+            let mut entries = self.queue.drain(comp.queue_index..);
+            let mut stringified = String::new();
+
+            deferred_err |= || -> fmt::Result {
+                match &comp.kind {
+                    CompoundKind::Seq => write!(stringified, "[")?,
+                    CompoundKind::Tuple => write!(stringified, "(")?,
+                    CompoundKind::Map => {
+                        write!(stringified, "{{")?;
+                        if entries_count > 0 {
+                            write!(stringified, " ")?;
+                        }
                     }
-                    0 => Some(SeriaError::TooFewEntries),
-                    _ => Some(SeriaError::TooManyEntries),
+
+                    CompoundKind::NominalTuple(name) => write!(stringified, "{}(", name)?,
+                    CompoundKind::NominalStruct(name) => {
+                        write!(stringified, "{} {{", name)?;
+                        if entries_count > 0 {
+                            write!(stringified, " ")?;
+                        }
+                    }
+                    CompoundKind::NominalUnit(name) => {
+                        match entries_count {
+                            0 => write!(stringified, "{}", name)?,
+                            _ => panic!("'nominal unit' accepts no entry"),
+                        }
+                        return Ok(());
+                    }
+
+                    CompoundKind::Maybe => {
+                        match entries_count {
+                            0 => write!(stringified, "?")?,
+                            1 => write!(stringified, "? {}", entries.next().unwrap())?,
+                            _ => panic!("'maybe value' accepts at most one entry"),
+                        }
+                        return Ok(());
+                    }
+
+                    CompoundKind::MapPair => {
+                        match entries_count {
+                            0 => panic!("'map pair' must not missing a key"),
+                            1 => panic!("'map pair' must not missing a value"),
+                            2 => write!(
+                                stringified,
+                                "{} => {}",
+                                entries.next().unwrap(),
+                                entries.next().unwrap()
+                            )?,
+                            _ => panic!("'map pair' accepts exactly two entries"),
+                        }
+                        return Ok(());
+                    }
+
+                    CompoundKind::StructField => {
+                        match entries_count {
+                            0 => panic!("'struct field' must not missing a name"),
+                            1 => panic!("'struct field' must not missing a value"),
+                            2 => write!(
+                                stringified,
+                                "{}: {}", //
+                                entries.next().unwrap(),
+                                entries.next().unwrap()
+                            )?,
+                            _ => panic!("'struct field' accepts exactly two entries"),
+                        }
+                        return Ok(());
+                    }
                 }
-            }
-            Some(container) => {
-                todo!()
 
-                // match container.ctrl {
-                //     LayoutControl::Compact => {
-                //         let entries_count = queue_len.strict_sub(container.queue_index);
-                //         match container.kind {
-                //             ContainerKind::Maybe => match entries_count {
-                //                 0 => {
-                //                     self.queue.push(format!("?"));
-                //                     None
-                //                 }
-                //                 1 => {
-                //                     let entry = self.queue.pop().unwrap();
-                //                     self.queue.push(format!("? {}", entry));
-                //                     None
-                //                 }
-                //                 _ => Some(SeriaError::TooManyEntries),
-                //             },
+                for _ in 0..entries_count.saturating_sub(1) {
+                    write!(stringified, "{}, ", entries.next().unwrap())?;
+                }
+                if let Some(entry) = entries.next() {
+                    write!(stringified, "{}", entry)?;
+                }
 
-                //             ContainerKind::Tuple => {
-                //                 let mut stringified = String::new();
-                //                 {
-                //                     let mut entries = self.queue.drain(container.queue_index..).peekable();
+                match &comp.kind {
+                    CompoundKind::Seq => write!(stringified, "]")?,
+                    CompoundKind::Tuple | CompoundKind::NominalTuple(_) => write!(stringified, ")")?,
+                    CompoundKind::Map | CompoundKind::NominalStruct(_) => {
+                        if entries_count > 0 {
+                            write!(stringified, " ")?;
+                        }
+                        write!(stringified, "}}")?;
+                    }
+                    _ => unreachable!(),
+                }
 
-                //                     stringified.push_str("(");
+                drop(entries);
+                Ok(())
+            }()
+            .is_err();
 
-                //                     while entries.peek().is_some() {
-                //                         stringified.push_str(&entries.next().unwrap());
-                //                         stringified.push_str(", ");
-                //                     }
-                //                     if let Some(entry) = entries.next() {
-                //                         stringified.push_str(&entry);
-                //                     }
+            deferred_err |= self.push(stringified).is_err();
+        } else {
+            // match entries_count {
+            //     1 => {
+            //         let entry = self.queue.pop_back().unwrap();
+            //         self.dst.write_str(&entry).err().and(Some(Reason::Write))
+            //     }
+            //     0 => Some(Reason::TooFewEntries),
+            //     _ => Some(Reason::TooManyEntries),
+            // }
+            todo!()
+        }
 
-                //                     stringified.push_str(")");
-                //                 }
-                //                 self.queue.push(stringified);
-
-                //                 None
-                //             }
-
-                //             ContainerKind::Seq => todo!(),
-                //             ContainerKind::Map => todo!(),
-
-                //             ContainerKind::MapPair => match entries_count {
-                //                 2 => {
-                //                     let v = self.queue.pop().unwrap();
-                //                     let k = self.queue.pop().unwrap();
-                //                     self.queue.push(format!("{} => {}", k, v));
-                //                     None
-                //                 }
-                //                 1 | 0 => Some(SeriaError::TooFewEntries),
-                //                 _ => Some(SeriaError::TooManyEntries),
-                //             },
-
-                //             ContainerKind::NominalUnit => todo!(),
-                //             ContainerKind::NominalTuple(_) => todo!(),
-                //             ContainerKind::NominalStruct(_) => todo!(),
-
-                //             ContainerKind::StructPair => match entries_count {
-                //                 2 => {
-                //                     let v = self.queue.pop().unwrap();
-                //                     let k = self.queue.pop().unwrap();
-                //                     self.queue.push(format!("{}: {}", k, v));
-                //                     None
-                //                 }
-                //                 1 | 0 => Some(SeriaError::TooFewEntries),
-                //                 _ => Some(SeriaError::TooManyEntries),
-                //             },
-                //         }
-                //     }
-
-                //     LayoutControl::Expanded => match container.kind {
-                //         ContainerKind::Maybe => None,
-
-                //         ContainerKind::Tuple => writeln!(self.dst, ",")
-                //             .err()
-                //             .map(Into::into)
-                //             .or_else(|| self.write_indent().err())
-                //             .or_else(|| self.dst.write_str(")").err().map(Into::into)),
-
-                //         ContainerKind::Seq | ContainerKind::NominalTuple(_) => writeln!(self.dst, ",")
-                //             .err()
-                //             .map(Into::into)
-                //             .or_else(|| self.write_indent().err())
-                //             .or_else(|| self.dst.write_str("]").err().map(Into::into)),
-
-                //         ContainerKind::Map | ContainerKind::NominalStruct(_) => writeln!(self.dst, ",")
-                //             .err()
-                //             .map(Into::into)
-                //             .or_else(|| self.write_indent().err())
-                //             .or_else(|| self.dst.write_str("}").err().map(Into::into)),
-
-                //         ContainerKind::MapPair => None,
-
-                //         ContainerKind::NominalUnit => None,
-
-                //         ContainerKind::StructPair => None,
-                //     },
-                // }
-            }
-        };
-
-        self.deferred_err = self.deferred_err.or(deferred_err);
+        self.deferred_err |= deferred_err;
     }
 }
 
-impl<W: Write> Deref for SerriaGuard<'_, W> {
+impl<W: Write> Deref for SerriaVisitor<'_, W> {
     type Target = Serria<W>;
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.serria
+        self.ser
     }
 }
 
-impl<W: Write> DerefMut for SerriaGuard<'_, W> {
+impl<W: Write> DerefMut for SerriaVisitor<'_, W> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.serria
+        self.ser
     }
 }
-
-//------------------------------------------------------------------------------
 
 //------------------------------------------------------------------------------

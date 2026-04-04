@@ -44,14 +44,8 @@ pub enum Token {
 }
 
 enum ContainerTerm {
-    Compact {
-        kind: ContainerKind,
-        acc_width: usize,
-        queue_index: usize,
-    },
-    Expanded {
-        kind: ContainerKind,
-    },
+    Compact { acc_width: usize, queue_index: usize },
+    Expanded { kind: ContainerKind },
 }
 
 enum ContainerKind {
@@ -67,30 +61,22 @@ impl<W: Write> Serializer for &mut Serria<W> {
             |dst: &mut W, depth: usize| (0..self.cfg.indent_width * depth).try_for_each(|_| dst.write_str(" "));
 
         let enter_container = |stack: &mut Vec<ContainerTerm>, queue: &mut VecDeque<Token>, token: Token| {
-            let kind = match &token {
-                Token::Seq => ContainerKind::Seq,
-                Token::Map | Token::NominalStruct(_) => ContainerKind::MapLike,
-                Token::Tuple | Token::NominalTuple(_) => ContainerKind::TupleLike,
-                _ => unreachable!(),
-            };
-            let acc_width = stack
-                .last()
-                .map(|term| match term {
-                    ContainerTerm::Compact { acc_width, .. } => *acc_width,
-                    ContainerTerm::Expanded { .. } => 0,
-                })
-                .unwrap_or(0)
-                + match &token {
-                    Token::Tuple => 2,
-                    Token::Seq => 2,
-                    Token::Map => 4,
-                    Token::NominalTuple(name) => name.chars().count() + 2,
-                    Token::NominalStruct(name) => name.chars().count() + 3,
-                    _ => unreachable!(),
-                };
             stack.push(ContainerTerm::Compact {
-                kind,
-                acc_width,
+                acc_width: stack
+                    .last()
+                    .map(|term| match term {
+                        ContainerTerm::Compact { acc_width, .. } => *acc_width,
+                        ContainerTerm::Expanded { .. } => 0,
+                    })
+                    .unwrap_or(0)
+                    + match &token {
+                        Token::Tuple => 2,
+                        Token::Seq => 2,
+                        Token::Map => 4,
+                        Token::NominalTuple(name) => name.chars().count() + 2,
+                        Token::NominalStruct(name) => name.chars().count() + 3,
+                        _ => unreachable!(),
+                    },
                 queue_index: queue.len(),
             });
             queue.push_back(token);
@@ -116,16 +102,15 @@ impl<W: Write> Serializer for &mut Serria<W> {
                 Token::Comma => dst.write_str(",\n")?,
                 Token::Close => {
                     self.depth -= 1;
-                    match self.stack.pop().unwrap() {
-                        ContainerTerm::Compact { .. } => panic!(),
-                        ContainerTerm::Expanded { kind } => {
-                            write_indent(dst, self.depth)?;
-                            match kind {
-                                ContainerKind::Seq => dst.write_str(")")?,
-                                ContainerKind::MapLike => dst.write_str("}")?,
-                                ContainerKind::TupleLike => dst.write_str("]")?,
-                            }
-                        }
+                    let ContainerTerm::Expanded { kind } = self.stack.pop().unwrap() else {
+                        panic!()
+                    };
+
+                    write_indent(dst, self.depth)?;
+                    match kind {
+                        ContainerKind::Seq => dst.write_str(")")?,
+                        ContainerKind::MapLike => dst.write_str("}")?,
+                        ContainerKind::TupleLike => dst.write_str("]")?,
                     }
                 }
             }
@@ -136,18 +121,48 @@ impl<W: Write> Serializer for &mut Serria<W> {
                     return Ok(());
                 }
 
-                Token::Close => match self.stack.pop().unwrap() {
-                    ContainerTerm::Expanded { .. } => panic!(),
-                    ContainerTerm::Compact { queue_index, .. } => {
-                        let mut entries = self.queue.drain(queue_index..);
-                        let mut stringified = String::new();
-                        let indicator = entries.next().unwrap();
+                Token::Close => {
+                    let ContainerTerm::Compact { acc_width, queue_index } = self.stack.pop().unwrap() else {
+                        panic!()
+                    };
 
+                    let mut entries = self.queue.drain(queue_index..);
+                    let mut stringified = String::new();
+                    let indicator = entries.next().unwrap();
+
+                    match indicator {
+                        Token::Tuple => todo!(),
+                        Token::Seq => todo!(),
+                        Token::Map => todo!(),
+                        Token::NominalTuple(_) => todo!(),
+                        Token::NominalStruct(_) => todo!(),
+                        _ => unreachable!(),
+                    }
+
+                    todo!()
+                }
+
+                token => {
+                    let ContainerTerm::Compact { acc_width, queue_index } = self.stack.last_mut().unwrap() else {
+                        panic!()
+                    };
+
+                    *acc_width += match &token {
+                        Token::Stringified(s) | Token::NominalUnit(s) => s.len(),
+                        Token::MaybeNone => 1,
+                        Token::MaybeSome => 2,
+                        Token::FatArrow => 4,
+                        Token::Colon => 2,
+                        Token::Comma => 2,
+                        _ => unreachable!(),
+                    };
+
+                    self.queue.push_back(token);
+
+                    if *acc_width > self.cfg.compact_width {
                         todo!()
                     }
-                },
-
-                _ => self.queue.push_back(token),
+                }
             }
         }
 

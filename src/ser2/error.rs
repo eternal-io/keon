@@ -3,6 +3,14 @@ use super::*;
 pub type SeriaResult<T = ()> = ::core::result::Result<T, SeriaError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    Write,
+    Recursion,
+    TooFewEntries,
+    TooManyEntries,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeriaError {
     Write,
     Recursion,
