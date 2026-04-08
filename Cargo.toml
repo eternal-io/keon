@@ -16,6 +16,11 @@ keywords = ["serde", "serialization", "object-notation", "format", "parser"]
 categories = ["encoding"]
 
 
+[features]
+default = ["alloc"]
+alloc = []
+
+
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 memchr = "2.7.5"
