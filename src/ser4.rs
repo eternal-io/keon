@@ -1,10 +1,11 @@
-use self::private::Token;
+use self::{options::*, private::*};
 use crate::{
     format,
     value::{self, Float32, Float64},
 };
 use alloc::collections::VecDeque;
 use core::fmt::{self, Write};
+use either::Either;
 
 //==================================================================================================
 
@@ -25,8 +26,8 @@ mod private {
         Literal(Literal<'a>),
         Maybe,
         Sequence,
-        TupleLike(Option<Nominal<'a>>),
-        MapLike(Option<Nominal<'a>>),
+        TupleLike(Option<NominalPath<'a>>),
+        MapLike(Option<NominalPath<'a>>),
         End,
     }
 
@@ -38,10 +39,11 @@ mod private {
         Bytes(&'a [u8]),
     }
 
-    pub enum Nominal<'a> {
-        Unnamed,
-        StemOnly { name: &'a str },
-        FullNamed { name: &'a str, parent: &'a str },
+    #[derive(Clone, Copy)]
+    pub enum NominalPath<'a> {
+        Unspecified,
+        Single { name: &'a str },
+        Dual { name: &'a str, parent: &'a str },
     }
 }
 
@@ -126,21 +128,30 @@ impl CompoundKind {
 
     fn write_indicator(&self, dst: &mut impl Write) -> fmt::Result {
         match self {
-            CompoundKind::Maybe => write!(dst, "?"),
-            CompoundKind::Sequence => write!(dst, "["),
-            CompoundKind::TupleLike(None) => write!(dst, "("),
-            CompoundKind::TupleLike(Some(name)) => write!(dst, "{}(", name),
-            CompoundKind::MapLikeLhs(None) | CompoundKind::MapLikeRhs(None) => write!(dst, "{{"),
-            CompoundKind::MapLikeLhs(Some(name)) | CompoundKind::MapLikeRhs(Some(name)) => write!(dst, "{} {{", name),
+            CompoundKind::Maybe => dst.write_str("?"),
+            CompoundKind::Sequence => dst.write_str("["),
+            CompoundKind::TupleLike(name) => {
+                if let Some(name) = name {
+                    dst.write_str(name)?;
+                }
+                dst.write_str("(")
+            }
+            CompoundKind::MapLikeLhs(name) | CompoundKind::MapLikeRhs(name) => {
+                if let Some(name) = name {
+                    dst.write_str(name)?;
+                    dst.write_str(" ")?;
+                }
+                dst.write_str("{")
+            }
         }
     }
 
     fn write_terminator(&self, dst: &mut impl Write) -> fmt::Result {
         match self {
             CompoundKind::Maybe => Ok(()),
-            CompoundKind::Sequence => write!(dst, "]"),
-            CompoundKind::TupleLike(_) => write!(dst, ")"),
-            CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => write!(dst, "}}"),
+            CompoundKind::Sequence => dst.write_str("]"),
+            CompoundKind::TupleLike(_) => dst.write_str(")"),
+            CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => dst.write_str("}"),
         }
     }
 }
@@ -156,11 +167,11 @@ impl<W: Write> Serializer for &mut Serria<W> {
             |dst: &mut W, depth: usize, single_line_child: bool, kind: &CompoundKind| -> fmt::Result {
                 match single_line_child {
                     true => direct_write_indent(dst, depth)?,
-                    false => write!(dst, " ")?,
+                    false => dst.write_str(" ")?,
                 }
                 kind.write_indicator(dst)?;
                 match kind.is_collection() {
-                    true => write!(dst, "\n"),
+                    true => dst.write_str("\n"),
                     false => Ok(()),
                 }
             };
@@ -168,24 +179,24 @@ impl<W: Write> Serializer for &mut Serria<W> {
         let direct_write_entry = |dst: &mut W, depth: usize, kind: &mut CompoundKind, entry: &str| -> fmt::Result {
             match kind.single_line_child() {
                 true => direct_write_indent(dst, depth)?,
-                false => write!(dst, " ")?,
+                false => dst.write_str(" ")?,
             }
-            write!(dst, "{}", entry)?;
+            dst.write_str(entry)?;
             match kind {
                 CompoundKind::MapLikeLhs(name @ None) => {
                     *kind = CompoundKind::MapLikeRhs(name.take());
-                    write!(dst, " =>")
+                    dst.write_str(" =>")
                 }
                 CompoundKind::MapLikeLhs(name @ Some(_)) => {
                     *kind = CompoundKind::MapLikeRhs(name.take());
-                    write!(dst, ":")
+                    dst.write_str(":")
                 }
                 CompoundKind::MapLikeRhs(name) => {
                     *kind = CompoundKind::MapLikeLhs(name.take());
-                    write!(dst, ",\n")
+                    dst.write_str(",\n")
                 }
                 kind => match kind.is_collection() {
-                    true => write!(dst, ",\n"),
+                    true => dst.write_str(",\n"),
                     false => Ok(()),
                 },
             }
@@ -263,7 +274,10 @@ impl<W: Write> Serializer for &mut Serria<W> {
                             direct_write_entry(dst, depth, kind, &entry)?;
                         }
                     },
-                    None => write!(self.dst, "{};\n", entry)?,
+                    None => {
+                        dst.write_str(&entry)?;
+                        dst.write_str(";\n")?;
+                    }
                 }
             }
 
@@ -279,16 +293,17 @@ impl<W: Write> Serializer for &mut Serria<W> {
 
                     kind.write_indicator(&mut stringified)?;
                     if (kind.is_map_like() || !kind.is_collection()) && entries_count > 0 {
-                        write!(stringified, " ")?;
+                        dst.write_str(" ")?;
                     }
                     for _ in 0..entries_count.saturating_sub(1) {
-                        write!(stringified, "{}, ", entries.next().unwrap())?;
+                        dst.write_str(&entries.next().unwrap())?;
+                        dst.write_str(", ")?;
                     }
                     if let Some(entry) = entries.next() {
-                        write!(stringified, "{}", entry)?;
+                        dst.write_str(&entry)?;
                     }
                     if kind.is_map_like() && entries_count > 0 {
-                        write!(stringified, " ")?;
+                        dst.write_str(" ")?;
                     }
                     kind.write_terminator(&mut stringified)?;
                     drop(entries);
@@ -302,10 +317,10 @@ impl<W: Write> Serializer for &mut Serria<W> {
 
                     match self.compounds_stack.last() {
                         Some(comp) => match comp.kind().is_collection() {
-                            true => write!(dst, ",\n")?,
+                            true => dst.write_str(",\n")?,
                             false => (),
                         },
-                        None => write!(dst, ";\n")?,
+                        None => dst.write_str(";\n")?,
                     }
                 }
             },
@@ -348,39 +363,74 @@ impl<W: Write> Serializer for &mut Serria<W> {
 
 //==================================================================================================
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumberSuffix {
-    Explicit,
-    IntegerOnly,
-    #[default]
-    LongIntegerOnly,
+pub mod options {
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum NumericSuffix {
+        Always = 0,
+        IntegerOnly = 1,
+        #[default]
+        LongIntegerOnly = 2,
+    }
+
+    #[derive(Default, Debug, Clone, Copy)]
+    pub enum NominalPathPolicy {
+        #[default]
+        Full,
+        Named,
+        Minimal,
+    }
 }
 
-//==================================================================================================
+//------------------------------------------------------------------------------
 
-trait Number {
-    const SUFFIX: &str;
-    const BITS: usize;
+enum Numeric {
+    Int(i64),
+    UInt(u64),
+    LongInt(i128),
+    LongUInt(u128),
+    Float32(f32),
+    Float64(f64),
 }
 
-macro_rules! impl_number_for_primitive {
-    ( $( $ty:ident ),* $(,)? ) => { $(
-        impl Number for $ty {
-            const SUFFIX: &str = stringify!($ty);
-            const BITS: usize = size_of::<$ty>() * 8;
+impl From<&value::Number> for Numeric {
+    fn from(value: &value::Number) -> Self {
+        match value {
+            value::Number::Int8(x) => Numeric::Int(*x as _),
+            value::Number::Int16(x) => Numeric::Int(*x as _),
+            value::Number::Int32(x) => Numeric::Int(*x as _),
+            value::Number::Int64(x) => Numeric::Int(*x as _),
+            value::Number::Int128(x) => Numeric::LongInt(**x),
+            value::Number::UInt8(x) => Numeric::UInt(*x as _),
+            value::Number::UInt16(x) => Numeric::UInt(*x as _),
+            value::Number::UInt32(x) => Numeric::UInt(*x as _),
+            value::Number::UInt64(x) => Numeric::UInt(*x as _),
+            value::Number::UInt128(x) => Numeric::LongUInt(**x),
+            value::Number::Float32(Float32(x)) => Numeric::Float32(*x),
+            value::Number::Float64(Float64(x)) => Numeric::Float64(*x),
         }
-    )* };
+    }
 }
 
-impl_number_for_primitive! {
-    u8, u16, u32, u64, u128,
-    i8, i16, i32, i64, i128,
-             f32, f64,
+impl From<&value::NumberNoSuffix> for Numeric {
+    fn from(value: &value::NumberNoSuffix) -> Self {
+        match value {
+            value::NumberNoSuffix::Int(x) => Numeric::Int(*x),
+            value::NumberNoSuffix::UInt(x) => Numeric::UInt(*x),
+            value::NumberNoSuffix::Float(Float64(x)) => Numeric::Float64(*x),
+        }
+    }
 }
 
-macro_rules! write_concr_number {
-    ( $label:lifetime, $dst:ident, $variant:path, $number:ident, $buf:ident, $write_opts:path ) => {
-        if let $variant(x) = $number {
+macro_rules! write_number {
+    (
+        $label:lifetime,
+        $dst:ident,
+        $variant:path,
+        $numeric:ident,
+        $buf:ident,
+        $write_opts:path
+    ) => {
+        if let $variant(x) = $numeric {
             let sli =
                 ::lexical_core::write_with_options::<_, { $crate::format::NUMBER_FORMAT }>(x, &mut $buf, &$write_opts);
 
@@ -391,27 +441,88 @@ macro_rules! write_concr_number {
     };
 }
 
-fn write_number(mut dst: impl Write, number: value::Number, suffix_control: NumberSuffix) -> fmt::Result {
+fn write_number(
+    mut dst: impl Write,
+    number: Either<&value::Number, &value::NumberNoSuffix>,
+    suffix_control: NumericSuffix,
+) -> fmt::Result {
+    let numeric = number.either_into::<Numeric>();
     let mut buf = [0x00u8; lexical_core::BUFFER_SIZE];
 
     'switch: {
-        write_concr_number!('switch, dst, value::Number::Int8, number, buf, format::WRITE_INTEGER_OPTS);
-        write_concr_number!('switch, dst, value::Number::Int16, number, buf, format::WRITE_INTEGER_OPTS);
-        write_concr_number!('switch, dst, value::Number::Int32, number, buf, format::WRITE_INTEGER_OPTS);
-        write_concr_number!('switch, dst, value::Number::Int64, number, buf, format::WRITE_INTEGER_OPTS);
-        // write_concrete_number!('switch, dst, value::Number::Int128, number, buf, format::WRITE_INTEGER_OPTS);
-        write_concr_number!('switch, dst, value::Number::UInt8, number, buf, format::WRITE_INTEGER_OPTS);
-        write_concr_number!('switch, dst, value::Number::UInt16, number, buf, format::WRITE_INTEGER_OPTS);
-        write_concr_number!('switch, dst, value::Number::UInt32, number, buf, format::WRITE_INTEGER_OPTS);
-        write_concr_number!('switch, dst, value::Number::UInt64, number, buf, format::WRITE_INTEGER_OPTS);
-        // write_concrete_number!('switch, dst, value::Number::UInt128, number, buf, format::WRITE_INTEGER_OPTS);
-        // value::Number::Float32(Float32(_)) => todo!(),
-        // value::Number::Float64(Float64(_)) => todo!(),
+        write_number!('switch, dst, Numeric::Int,      numeric, buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::UInt,     numeric, buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::LongInt,  numeric, buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::LongUInt, numeric, buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::Float32,  numeric, buf, format::WRITE_FLOAT_OPTS);
+        write_number!('switch, dst, Numeric::Float64,  numeric, buf, format::WRITE_FLOAT_OPTS);
     }
 
-    todo!()
+    let Either::Left(number) = number else {
+        return Ok(());
+    };
+
+    match number {
+        value::Number::Int128(_) => dst.write_str("i128"),
+        value::Number::UInt128(_) => dst.write_str("u128"),
+
+        _ => match suffix_control <= NumericSuffix::IntegerOnly {
+            true => match number {
+                value::Number::Int8(_) => dst.write_str("i8"),
+                value::Number::Int16(_) => dst.write_str("i16"),
+                value::Number::Int32(_) => dst.write_str("i32"),
+                value::Number::Int64(_) => dst.write_str("i64"),
+                value::Number::UInt8(_) => dst.write_str("u8"),
+                value::Number::UInt16(_) => dst.write_str("u16"),
+                value::Number::UInt32(_) => dst.write_str("u32"),
+                value::Number::UInt64(_) => dst.write_str("u64"),
+
+                _ => match suffix_control <= NumericSuffix::Always {
+                    true => match number {
+                        value::Number::Float32(_) => dst.write_str("f32"),
+                        value::Number::Float64(_) => dst.write_str("f64"),
+                        _ => unreachable!(),
+                    },
+                    false => Ok(()),
+                },
+            },
+            false => Ok(()),
+        },
+    }
 }
 
-fn write_number_no_suffix(dst: impl Write, number: value::Number) -> fmt::Result {
-    todo!()
+//------------------------------------------------------------------------------
+
+fn write_nominal_path(
+    mut dst: impl Write,
+    path: NominalPath<'_>,
+    enum_kind: bool,
+    policy: NominalPathPolicy,
+) -> fmt::Result {
+    match path {
+        NominalPath::Dual { name, parent } => match policy {
+            NominalPathPolicy::Full => {
+                dst.write_str(parent)?;
+                dst.write_str("::")?;
+                dst.write_str(name)
+            }
+            NominalPathPolicy::Named => dst.write_str(name),
+            NominalPathPolicy::Minimal => match enum_kind {
+                true => dst.write_str(name),
+                false => dst.write_str("_"),
+            },
+        },
+        NominalPath::Single { name } => match policy {
+            NominalPathPolicy::Full => dst.write_str(name),
+            NominalPathPolicy::Named => dst.write_str(name),
+            NominalPathPolicy::Minimal => match enum_kind {
+                true => dst.write_str(name),
+                false => dst.write_str("_"),
+            },
+        },
+        NominalPath::Unspecified => match enum_kind {
+            true => panic!("missing enum name"),
+            false => dst.write_str("_"),
+        },
+    }
 }

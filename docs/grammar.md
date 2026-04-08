@@ -223,7 +223,9 @@ NominalStructure ->
     NominalPath ( TupleValue | StructValue )?
 
 NominalPath ->
-    ( `_` | IDENTIFIER ) ( `::` IDENTIFIER )?
+      `_`
+    | IDENTIFIER
+    | IDENTIFIER `::` IDENTIFIER
     // We could certainly support complex paths like `path::to::Foo::Bar`,
     // but this seemed to lack usefulness and is no longer provided.
 
