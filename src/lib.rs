@@ -22,13 +22,18 @@ mod format {
         WriteIntegerOptionsBuilder,
     };
 
+    // [1456789ABFGHIJKMN-_]
     pub(crate) const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
+        .required_digits(true)
+        .required_fraction_digits(false)
         .digit_separator(NonZeroU8::new(b'_'))
         .internal_digit_separator(true)
         .trailing_digit_separator(true)
         .consecutive_digit_separator(true)
+        .special_digit_separator(false)
         .no_positive_mantissa_sign(true)
         .case_sensitive_base_prefix(true)
+        .case_sensitive_special(true)
         .build();
 
     pub(crate) const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)

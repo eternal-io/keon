@@ -381,8 +381,6 @@ pub mod options {
     }
 }
 
-//------------------------------------------------------------------------------
-
 enum Numeric {
     Int(i64),
     UInt(u64),
@@ -431,10 +429,9 @@ macro_rules! write_number {
         $write_opts:path
     ) => {
         if let $variant(x) = $numeric {
-            let sli =
-                ::lexical_core::write_with_options::<_, { $crate::format::NUMBER_FORMAT }>(x, &mut $buf, &$write_opts);
+            let slice = lexical_core::write_with_options::<_, { format::NUMBER_FORMAT }>(x, &mut $buf, &$write_opts);
 
-            $dst.write_str(unsafe { ::core::str::from_utf8_unchecked(sli) })?;
+            $dst.write_str(unsafe { ::core::str::from_utf8_unchecked(slice) })?;
 
             break $label;
         }
@@ -491,7 +488,84 @@ fn write_number(
     }
 }
 
-//------------------------------------------------------------------------------
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextLiteralKind {
+    Char,
+    String,
+}
+
+#[inline(always)]
+fn write_escaped_byte(mut dst: impl Write, byte: u8, ctx: TextLiteralKind) -> fmt::Result {
+    match byte {
+        b'\0' => dst.write_str(r#"\0"#),
+        b'\n' => dst.write_str(r#"\n"#),
+        b'\t' => dst.write_str(r#"\t"#),
+        b'\r' => dst.write_str(r#"\r"#),
+        b'\'' if ctx == TextLiteralKind::Char => dst.write_str(r#"\'"#),
+        b'\"' if ctx == TextLiteralKind::String => dst.write_str(r#"\""#),
+        0x20..=0x7e => dst.write_char(byte.into()),
+        _ => {
+            dst.write_str(r#"\x"#)?;
+            write_u8_fmt_02_hex(dst, byte)
+        }
+    }
+}
+
+#[inline(always)]
+fn write_escaped_char(mut dst: impl Write, ch: char, ctx: TextLiteralKind) -> fmt::Result {
+    match ch {
+        '\0' => dst.write_str(r#"\0"#),
+        '\n' => dst.write_str(r#"\n"#),
+        '\t' => dst.write_str(r#"\t"#),
+        '\r' => dst.write_str(r#"\r"#),
+        '\'' if ctx == TextLiteralKind::Char => dst.write_str(r#"\'"#),
+        '\"' if ctx == TextLiteralKind::String => dst.write_str(r#"\""#),
+        '\x01'..='\x19' | '\x7f' => {
+            dst.write_str(r#"\x"#)?;
+            write_u8_fmt_02_hex(dst, ch as u8)
+        }
+        _ => dst.write_char(ch),
+    }
+}
+
+#[inline(always)]
+fn write_u8_fmt_02_hex(mut dst: impl Write, byte: u8) -> fmt::Result {
+    const NUMBER_FORMAT_HEX_NO_PREFIX: u128 = lexical_core::NumberFormatBuilder::rebuild(format::NUMBER_FORMAT)
+        .mantissa_radix(16)
+        .build();
+
+    let mut buf = [b'0'; 2];
+
+    lexical_core::write_with_options::<u8, NUMBER_FORMAT_HEX_NO_PREFIX>(
+        byte,
+        &mut buf[(byte < 0x10) as usize..],
+        &format::WRITE_INTEGER_OPTS,
+    );
+
+    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(&buf) })
+}
+
+fn write_quoted_char(mut dst: impl Write, ch: char) -> fmt::Result {
+    dst.write_str("'")?;
+    write_escaped_char(&mut dst, ch, TextLiteralKind::Char)?;
+    dst.write_str("'")
+}
+
+fn write_quoted_string(mut dst: impl Write, s: &str) -> fmt::Result {
+    dst.write_str("\"")?;
+    s.chars()
+        .try_for_each(|ch| write_escaped_char(&mut dst, ch, TextLiteralKind::String))?;
+    dst.write_str("\"")
+}
+
+fn write_quoted_bytes(mut dst: impl Write, bytes: &[u8]) -> fmt::Result {
+    dst.write_str("b\"")?;
+    bytes
+        .into_iter()
+        .try_for_each(|&byte| write_escaped_byte(&mut dst, byte, TextLiteralKind::String))?;
+    dst.write_str("\"")
+}
 
 fn write_nominal_path(
     mut dst: impl Write,
@@ -499,30 +573,39 @@ fn write_nominal_path(
     enum_kind: bool,
     policy: NominalPathPolicy,
 ) -> fmt::Result {
+    use {NominalPath as Path, NominalPathPolicy as Policy};
+
     match path {
-        NominalPath::Dual { name, parent } => match policy {
-            NominalPathPolicy::Full => {
+        Path::Dual { name, parent } => match policy {
+            Policy::Full => {
                 dst.write_str(parent)?;
                 dst.write_str("::")?;
                 dst.write_str(name)
             }
-            NominalPathPolicy::Named => dst.write_str(name),
-            NominalPathPolicy::Minimal => match enum_kind {
+            Policy::Named => dst.write_str(name),
+            Policy::Minimal => match enum_kind {
                 true => dst.write_str(name),
                 false => dst.write_str("_"),
             },
         },
-        NominalPath::Single { name } => match policy {
-            NominalPathPolicy::Full => dst.write_str(name),
-            NominalPathPolicy::Named => dst.write_str(name),
-            NominalPathPolicy::Minimal => match enum_kind {
+        Path::Single { name } => match policy {
+            Policy::Full | Policy::Named => dst.write_str(name),
+            Policy::Minimal => match enum_kind {
                 true => dst.write_str(name),
                 false => dst.write_str("_"),
             },
         },
-        NominalPath::Unspecified => match enum_kind {
+        Path::Unspecified => match enum_kind {
             true => panic!("missing enum name"),
             false => dst.write_str("_"),
         },
+    }
+}
+
+#[inline]
+fn write_bool(mut dst: impl Write, b: bool) -> fmt::Result {
+    match b {
+        true => dst.write_str("true"),
+        false => dst.write_str("false"),
     }
 }
