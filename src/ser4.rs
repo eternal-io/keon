@@ -13,6 +13,7 @@ pub trait Serialize {
     fn seria_with(&self, ser: impl Serializer) -> fmt::Result;
 }
 
+#[doc(hidden)]
 pub trait Serializer {
     fn push(&mut self, token: Token<'_>) -> fmt::Result;
 }
@@ -24,11 +25,24 @@ mod private {
         #[cfg(feature = "alloc")]
         Stringified(String),
         Literal(Literal<'a>),
+
         Maybe,
         Sequence,
-        TupleLike(Option<NominalPath<'a>>),
-        MapLike(Option<NominalPath<'a>>),
-        End,
+        Tuple,
+        TupleStruct {
+            path: NominalPath<'a>,
+            kind: NominalKind,
+        },
+        Map,
+        MapStruct {
+            path: NominalPath<'a>,
+            kind: NominalKind,
+        },
+
+        MaybeEnd,
+        SequenceEnd,
+        TupleLikeEnd,
+        MapLikeEnd,
     }
 
     pub enum Literal<'a> {
@@ -39,11 +53,69 @@ mod private {
         Bytes(&'a [u8]),
     }
 
-    #[derive(Clone, Copy)]
     pub enum NominalPath<'a> {
         Unspecified,
         Single { name: &'a str },
         Dual { name: &'a str, parent: &'a str },
+    }
+
+    pub enum NominalKind {
+        Unknown,
+        Nominal,
+        Structural,
+    }
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    pub numeric_suffix: NumericSuffix,
+    pub nominal_path_style: NominalPathStyle,
+
+    pub indentor: Indentor,
+    pub map_like_inline_entries: u8,
+}
+
+pub mod options {
+    use super::*;
+    use core::num::NonZeroU8;
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum Indentor {
+        Tab,
+        Space(NonZeroU8),
+    }
+
+    impl Indentor {
+        #[inline(always)]
+        pub(super) fn write_to(&self, dst: &mut impl Write) -> fmt::Result {
+            match self {
+                Indentor::Tab => dst.write_str("\t"),
+                Indentor::Space(k) => (0..k.get()).try_for_each(|_| dst.write_str(" ")),
+            }
+        }
+    }
+
+    impl Default for Indentor {
+        fn default() -> Self {
+            Indentor::Space(NonZeroU8::new(4).unwrap())
+        }
+    }
+
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum NumericSuffix {
+        Always = 0,
+        IntegerOnly = 1,
+        #[default]
+        LongIntegerOnly = 2,
+    }
+
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum NominalPathStyle {
+        #[default]
+        Full = 0,
+        Named = 1,
+        Minimal = 2,
     }
 }
 
@@ -52,26 +124,31 @@ mod private {
 #[doc(alias = "Serializer")]
 pub struct FastSerria<W: Write> {
     dst: W,
-    cfg: FastSerriaConfig,
+    cfg: Config,
 }
 
-pub struct FastSerriaConfig {}
+impl<W: Write> Serializer for &mut FastSerria<W> {
+    fn push(&mut self, token: Token<'_>) -> fmt::Result {
+        match token {
+            #[cfg(feature = "alloc")]
+            Token::Stringified(_) => panic!(),
+            _ => todo!(),
+        }
+    }
+}
 
 //==================================================================================================
 
 #[doc(alias = "Serializer")]
+#[cfg(feature = "alloc")]
 pub struct Serria<W: Write> {
     dst: W,
-    cfg: SerriaConfig,
+    cfg: Config,
     compounds_stack: Vec<Compound>,
     inline_entries: VecDeque<String>,
 }
 
-pub struct SerriaConfig {
-    indent_width: u8,
-    map_like_inline_entries: u8,
-}
-
+#[cfg(feature = "alloc")]
 enum Compound {
     Compact {
         kind: CompoundKind,
@@ -83,6 +160,7 @@ enum Compound {
     },
 }
 
+#[cfg(feature = "alloc")]
 impl Compound {
     fn kind(&self) -> &CompoundKind {
         match self {
@@ -91,6 +169,7 @@ impl Compound {
     }
 }
 
+#[cfg(feature = "alloc")]
 enum CompoundKind {
     Maybe,
     Sequence,
@@ -99,8 +178,9 @@ enum CompoundKind {
     MapLikeRhs(Option<String>),
 }
 
+#[cfg(feature = "alloc")]
 impl CompoundKind {
-    fn single_line_child(&self) -> bool {
+    fn new_line_child(&self) -> bool {
         !matches!(self, CompoundKind::Maybe | CompoundKind::MapLikeRhs(_))
     }
 
@@ -120,25 +200,25 @@ impl CompoundKind {
         match self {
             CompoundKind::Maybe => CompoundKind::Maybe,
             CompoundKind::Sequence => CompoundKind::Sequence,
-            CompoundKind::TupleLike(name) => CompoundKind::TupleLike(name.take()),
-            CompoundKind::MapLikeLhs(name) => CompoundKind::MapLikeLhs(name.take()),
-            CompoundKind::MapLikeRhs(name) => CompoundKind::MapLikeRhs(name.take()),
+            CompoundKind::TupleLike(head) => CompoundKind::TupleLike(head.take()),
+            CompoundKind::MapLikeLhs(head) => CompoundKind::MapLikeLhs(head.take()),
+            CompoundKind::MapLikeRhs(head) => CompoundKind::MapLikeRhs(head.take()),
         }
     }
 
-    fn write_indicator(&self, dst: &mut impl Write) -> fmt::Result {
+    fn write_indicator_to(&self, dst: &mut impl Write) -> fmt::Result {
         match self {
             CompoundKind::Maybe => dst.write_str("?"),
             CompoundKind::Sequence => dst.write_str("["),
-            CompoundKind::TupleLike(name) => {
-                if let Some(name) = name {
-                    dst.write_str(name)?;
+            CompoundKind::TupleLike(head) => {
+                if let Some(head) = head {
+                    dst.write_str(head)?;
                 }
                 dst.write_str("(")
             }
-            CompoundKind::MapLikeLhs(name) | CompoundKind::MapLikeRhs(name) => {
-                if let Some(name) = name {
-                    dst.write_str(name)?;
+            CompoundKind::MapLikeLhs(head) | CompoundKind::MapLikeRhs(head) => {
+                if let Some(head) = head {
+                    dst.write_str(head)?;
                     dst.write_str(" ")?;
                 }
                 dst.write_str("{")
@@ -146,7 +226,7 @@ impl CompoundKind {
         }
     }
 
-    fn write_terminator(&self, dst: &mut impl Write) -> fmt::Result {
+    fn write_terminator_to(&self, dst: &mut impl Write) -> fmt::Result {
         match self {
             CompoundKind::Maybe => Ok(()),
             CompoundKind::Sequence => dst.write_str("]"),
@@ -156,20 +236,21 @@ impl CompoundKind {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<W: Write> Serializer for &mut Serria<W> {
     fn push(&mut self, token: Token) -> fmt::Result {
         let dst = &mut self.dst;
-        let direct_write_indent = |dst: &mut W, depth: usize| -> fmt::Result {
-            (0..self.cfg.indent_width as usize * depth).try_for_each(|_| dst.write_str(" "))
-        };
+        let cfg = &self.cfg;
+        let direct_write_indent =
+            |dst: &mut W, depth: usize| -> fmt::Result { (0..depth).try_for_each(|_| cfg.indentor.write_to(dst)) };
 
         let direct_write_indicator =
-            |dst: &mut W, depth: usize, single_line_child: bool, kind: &CompoundKind| -> fmt::Result {
-                match single_line_child {
+            |dst: &mut W, depth: usize, new_line_child: bool, kind: &CompoundKind| -> fmt::Result {
+                match new_line_child {
                     true => direct_write_indent(dst, depth)?,
                     false => dst.write_str(" ")?,
                 }
-                kind.write_indicator(dst)?;
+                kind.write_indicator_to(dst)?;
                 match kind.is_collection() {
                     true => dst.write_str("\n"),
                     false => Ok(()),
@@ -177,22 +258,22 @@ impl<W: Write> Serializer for &mut Serria<W> {
             };
 
         let direct_write_entry = |dst: &mut W, depth: usize, kind: &mut CompoundKind, entry: &str| -> fmt::Result {
-            match kind.single_line_child() {
+            match kind.new_line_child() {
                 true => direct_write_indent(dst, depth)?,
                 false => dst.write_str(" ")?,
             }
             dst.write_str(entry)?;
             match kind {
-                CompoundKind::MapLikeLhs(name @ None) => {
-                    *kind = CompoundKind::MapLikeRhs(name.take());
+                CompoundKind::MapLikeLhs(head @ None) => {
+                    *kind = CompoundKind::MapLikeRhs(head.take());
                     dst.write_str(" =>")
                 }
-                CompoundKind::MapLikeLhs(name @ Some(_)) => {
-                    *kind = CompoundKind::MapLikeRhs(name.take());
+                CompoundKind::MapLikeLhs(head @ Some(_)) => {
+                    *kind = CompoundKind::MapLikeRhs(head.take());
                     dst.write_str(":")
                 }
-                CompoundKind::MapLikeRhs(name) => {
-                    *kind = CompoundKind::MapLikeLhs(name.take());
+                CompoundKind::MapLikeRhs(head) => {
+                    *kind = CompoundKind::MapLikeLhs(head.take());
                     dst.write_str(",\n")
                 }
                 kind => match kind.is_collection() {
@@ -206,16 +287,16 @@ impl<W: Write> Serializer for &mut Serria<W> {
             |dst: &mut W, compounds_stack: &mut Vec<Compound>, inline_entries: &mut VecDeque<String>| -> fmt::Result {
                 /* The force-compact check is performed externally; if it is true, this closure is not called. */
                 let compounds_count = compounds_stack.len();
-                let mut single_line_child;
+                let mut new_line_child;
                 for i in 0..compounds_count {
                     if let Compound::Expanded { .. } = compounds_stack[i] {
                         continue;
                     }
 
-                    single_line_child = i
+                    new_line_child = i
                         .checked_sub(1)
-                        .map(|i| compounds_stack[i].kind().single_line_child())
-                        .unwrap_or(false);
+                        .map(|i| compounds_stack[i].kind().new_line_child())
+                        .unwrap_or(true);
 
                     let range_end = match compounds_stack.get(i + 1) {
                         Some(Compound::Compact {
@@ -232,7 +313,7 @@ impl<W: Write> Serializer for &mut Serria<W> {
                         unreachable!()
                     };
 
-                    direct_write_indicator(dst, i, single_line_child, kind)?;
+                    direct_write_indicator(dst, i, new_line_child, kind)?;
                     inline_entries
                         .drain(..range_end - range_start)
                         .try_for_each(|entry| direct_write_entry(dst, i + 1, kind, &entry))?;
@@ -243,8 +324,16 @@ impl<W: Write> Serializer for &mut Serria<W> {
             };
 
         match token {
-            Token::Literal(_) => todo!(),
-            Token::Stringified(entry) => {
+            Token::Stringified(_) | Token::Literal(_) => {
+                let entry = match token {
+                    Token::Stringified(entry) => entry,
+                    Token::Literal(literal) => {
+                        let mut stringified = String::with_capacity(256);
+                        write_literal(&mut stringified, literal, cfg.numeric_suffix)?;
+                        stringified
+                    }
+                    _ => unreachable!(),
+                };
                 match self.compounds_stack.last() {
                     Some(comp) => match comp {
                         Compound::Compact {
@@ -252,7 +341,7 @@ impl<W: Write> Serializer for &mut Serria<W> {
                             force_compact,
                             inline_entries_index,
                         } => {
-                            self.inline_entries.push_back(entry.to_owned());
+                            self.inline_entries.push_back(entry);
                             if !*force_compact
                                 && if kind.is_map_like() {
                                     /* conditionally expand `{}` */
@@ -281,60 +370,79 @@ impl<W: Write> Serializer for &mut Serria<W> {
                 }
             }
 
-            Token::End => match self.compounds_stack.pop().unwrap() {
-                Compound::Compact {
-                    kind,
-                    inline_entries_index,
-                    ..
-                } => {
-                    let entries_count = self.inline_entries.len() - inline_entries_index;
-                    let mut entries = self.inline_entries.drain(inline_entries_index..);
-                    let mut stringified = String::new();
+            Token::MaybeEnd | Token::SequenceEnd | Token::TupleLikeEnd | Token::MapLikeEnd => {
+                let debug_assert_matches = |token: &Token<'_>, kind: &CompoundKind| match kind {
+                    CompoundKind::Maybe => debug_assert!(matches!(token, Token::MaybeEnd)),
+                    CompoundKind::Sequence => debug_assert!(matches!(token, Token::SequenceEnd)),
+                    CompoundKind::TupleLike(_) => debug_assert!(matches!(token, Token::TupleLikeEnd)),
+                    CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => {
+                        debug_assert!(matches!(token, Token::MapLikeEnd))
+                    }
+                };
+                match self.compounds_stack.pop().unwrap() {
+                    Compound::Compact {
+                        kind,
+                        inline_entries_index,
+                        ..
+                    } => {
+                        debug_assert_matches(&token, &kind);
 
-                    kind.write_indicator(&mut stringified)?;
-                    if (kind.is_map_like() || !kind.is_collection()) && entries_count > 0 {
-                        dst.write_str(" ")?;
-                    }
-                    for _ in 0..entries_count.saturating_sub(1) {
-                        dst.write_str(&entries.next().unwrap())?;
-                        dst.write_str(", ")?;
-                    }
-                    if let Some(entry) = entries.next() {
-                        dst.write_str(&entry)?;
-                    }
-                    if kind.is_map_like() && entries_count > 0 {
-                        dst.write_str(" ")?;
-                    }
-                    kind.write_terminator(&mut stringified)?;
-                    drop(entries);
+                        let entries_count = self.inline_entries.len() - inline_entries_index;
+                        let mut entries = self.inline_entries.drain(inline_entries_index..);
+                        let mut stringified = String::with_capacity(256);
 
-                    self.push(Token::Stringified(stringified))?;
+                        kind.write_indicator_to(&mut stringified)?;
+                        if (kind.is_map_like() || !kind.is_collection()) && entries_count > 0 {
+                            dst.write_str(" ")?;
+                        }
+                        for _ in 0..entries_count.saturating_sub(1) {
+                            dst.write_str(&entries.next().unwrap())?;
+                            dst.write_str(", ")?;
+                        }
+                        if let Some(entry) = entries.next() {
+                            dst.write_str(&entry)?;
+                        }
+                        if kind.is_map_like() && entries_count > 0 {
+                            dst.write_str(" ")?;
+                        }
+                        kind.write_terminator_to(&mut stringified)?;
+                        drop(entries);
+
+                        self.push(Token::Stringified(stringified))?;
+                    }
+                    Compound::Expanded { kind } => {
+                        debug_assert_matches(&token, &kind);
+
+                        direct_write_indent(dst, self.compounds_stack.len())?;
+
+                        kind.write_terminator_to(dst)?;
+
+                        match self.compounds_stack.last() {
+                            Some(comp) => match comp.kind().is_collection() {
+                                true => dst.write_str(",\n")?,
+                                false => (),
+                            },
+                            None => dst.write_str(";\n")?,
+                        }
+                    }
                 }
-                Compound::Expanded { kind } => {
-                    direct_write_indent(dst, self.compounds_stack.len())?;
-
-                    kind.write_terminator(dst)?;
-
-                    match self.compounds_stack.last() {
-                        Some(comp) => match comp.kind().is_collection() {
-                            true => dst.write_str(",\n")?,
-                            false => (),
-                        },
-                        None => dst.write_str(";\n")?,
-                    }
-                }
-            },
+            }
 
             token => {
+                let head = |path: NominalPath, kind: NominalKind| -> Result<String, fmt::Error> {
+                    let mut stringified = String::with_capacity(64);
+                    write_nominal_path(&mut stringified, path, kind, cfg.nominal_path_style)?;
+                    Ok(stringified)
+                };
                 let kind = match token {
                     Token::Maybe => CompoundKind::Maybe,
                     Token::Sequence => CompoundKind::Sequence,
-                    // Token::TupleLike(name) => CompoundKind::TupleLike(name.map(ToOwned::to_owned)),
-                    // Token::MapLike(name) => CompoundKind::MapLikeLhs(name.map(ToOwned::to_owned)),
-                    // _ => unreachable!(),
-                    _ => todo!(),
+                    Token::Tuple => CompoundKind::TupleLike(None),
+                    Token::TupleStruct { path, kind } => CompoundKind::TupleLike(Some(head(path, kind)?)),
+                    Token::Map => CompoundKind::MapLikeLhs(None),
+                    Token::MapStruct { path, kind } => CompoundKind::MapLikeLhs(Some(head(path, kind)?)),
+                    _ => unreachable!(),
                 };
-
                 let force_compact = match self.compounds_stack.last() {
                     Some(comp) => match comp {
                         Compound::Compact { force_compact, .. } => *force_compact,
@@ -343,12 +451,10 @@ impl<W: Write> Serializer for &mut Serria<W> {
                     },
                     None => false,
                 };
-
                 if !force_compact {
                     /* conditionally expand parent while pushing compound */
                     break_and_flush(dst, &mut self.compounds_stack, &mut self.inline_entries)?;
                 }
-
                 self.compounds_stack.push(Compound::Compact {
                     kind,
                     force_compact,
@@ -362,24 +468,6 @@ impl<W: Write> Serializer for &mut Serria<W> {
 }
 
 //==================================================================================================
-
-pub mod options {
-    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-    pub enum NumericSuffix {
-        Always = 0,
-        IntegerOnly = 1,
-        #[default]
-        LongIntegerOnly = 2,
-    }
-
-    #[derive(Default, Debug, Clone, Copy)]
-    pub enum NominalPathPolicy {
-        #[default]
-        Full,
-        Named,
-        Minimal,
-    }
-}
 
 enum Numeric {
     Int(i64),
@@ -439,7 +527,7 @@ macro_rules! write_number {
 }
 
 fn write_number(
-    mut dst: impl Write,
+    dst: &mut impl Write,
     number: Either<&value::Number, &value::NumberNoSuffix>,
     suffix_control: NumericSuffix,
 ) -> fmt::Result {
@@ -488,22 +576,24 @@ fn write_number(
     }
 }
 
+//------------------------------------------------------------------------------
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TextLiteralKind {
+enum TextualKind {
     Char,
     String,
 }
 
 #[inline(always)]
-fn write_escaped_byte(mut dst: impl Write, byte: u8, ctx: TextLiteralKind) -> fmt::Result {
+fn write_escaped_byte(dst: &mut impl Write, byte: u8, ctx: TextualKind) -> fmt::Result {
     match byte {
         b'\0' => dst.write_str(r#"\0"#),
         b'\n' => dst.write_str(r#"\n"#),
         b'\t' => dst.write_str(r#"\t"#),
         b'\r' => dst.write_str(r#"\r"#),
-        b'\'' if ctx == TextLiteralKind::Char => dst.write_str(r#"\'"#),
-        b'\"' if ctx == TextLiteralKind::String => dst.write_str(r#"\""#),
+        b'\'' if ctx == TextualKind::Char => dst.write_str(r#"\'"#),
+        b'\"' if ctx == TextualKind::String => dst.write_str(r#"\""#),
         0x20..=0x7e => dst.write_char(byte.into()),
         _ => {
             dst.write_str(r#"\x"#)?;
@@ -513,14 +603,14 @@ fn write_escaped_byte(mut dst: impl Write, byte: u8, ctx: TextLiteralKind) -> fm
 }
 
 #[inline(always)]
-fn write_escaped_char(mut dst: impl Write, ch: char, ctx: TextLiteralKind) -> fmt::Result {
+fn write_escaped_char(dst: &mut impl Write, ch: char, ctx: TextualKind) -> fmt::Result {
     match ch {
         '\0' => dst.write_str(r#"\0"#),
         '\n' => dst.write_str(r#"\n"#),
         '\t' => dst.write_str(r#"\t"#),
         '\r' => dst.write_str(r#"\r"#),
-        '\'' if ctx == TextLiteralKind::Char => dst.write_str(r#"\'"#),
-        '\"' if ctx == TextLiteralKind::String => dst.write_str(r#"\""#),
+        '\'' if ctx == TextualKind::Char => dst.write_str(r#"\'"#),
+        '\"' if ctx == TextualKind::String => dst.write_str(r#"\""#),
         '\x01'..='\x19' | '\x7f' => {
             dst.write_str(r#"\x"#)?;
             write_u8_fmt_02_hex(dst, ch as u8)
@@ -530,7 +620,7 @@ fn write_escaped_char(mut dst: impl Write, ch: char, ctx: TextLiteralKind) -> fm
 }
 
 #[inline(always)]
-fn write_u8_fmt_02_hex(mut dst: impl Write, byte: u8) -> fmt::Result {
+fn write_u8_fmt_02_hex(dst: &mut impl Write, byte: u8) -> fmt::Result {
     const NUMBER_FORMAT_HEX_NO_PREFIX: u128 = lexical_core::NumberFormatBuilder::rebuild(format::NUMBER_FORMAT)
         .mantissa_radix(16)
         .build();
@@ -546,66 +636,75 @@ fn write_u8_fmt_02_hex(mut dst: impl Write, byte: u8) -> fmt::Result {
     dst.write_str(unsafe { ::core::str::from_utf8_unchecked(&buf) })
 }
 
-fn write_quoted_char(mut dst: impl Write, ch: char) -> fmt::Result {
+fn write_quoted_char(dst: &mut impl Write, ch: char) -> fmt::Result {
     dst.write_str("'")?;
-    write_escaped_char(&mut dst, ch, TextLiteralKind::Char)?;
+    write_escaped_char(dst, ch, TextualKind::Char)?;
     dst.write_str("'")
 }
 
-fn write_quoted_string(mut dst: impl Write, s: &str) -> fmt::Result {
+fn write_quoted_string(dst: &mut impl Write, s: &str) -> fmt::Result {
     dst.write_str("\"")?;
     s.chars()
-        .try_for_each(|ch| write_escaped_char(&mut dst, ch, TextLiteralKind::String))?;
+        .try_for_each(|ch| write_escaped_char(dst, ch, TextualKind::String))?;
     dst.write_str("\"")
 }
 
-fn write_quoted_bytes(mut dst: impl Write, bytes: &[u8]) -> fmt::Result {
+fn write_quoted_bytes(dst: &mut impl Write, bytes: &[u8]) -> fmt::Result {
     dst.write_str("b\"")?;
     bytes
         .into_iter()
-        .try_for_each(|&byte| write_escaped_byte(&mut dst, byte, TextLiteralKind::String))?;
+        .try_for_each(|&byte| write_escaped_byte(dst, byte, TextualKind::String))?;
     dst.write_str("\"")
 }
 
+//------------------------------------------------------------------------------
+
 fn write_nominal_path(
-    mut dst: impl Write,
+    dst: &mut impl Write,
     path: NominalPath<'_>,
-    enum_kind: bool,
-    policy: NominalPathPolicy,
+    kind: NominalKind,
+    style: NominalPathStyle,
 ) -> fmt::Result {
-    use {NominalPath as Path, NominalPathPolicy as Policy};
+    use {NominalKind as Kind, NominalPath as Path, NominalPathStyle as Style};
 
     match path {
-        Path::Dual { name, parent } => match policy {
-            Policy::Full => {
+        Path::Dual { name, parent } => {
+            if matches!(kind, Kind::Unknown) || style <= Style::Full {
                 dst.write_str(parent)?;
                 dst.write_str("::")?;
                 dst.write_str(name)
+            } else if matches!(kind, Kind::Nominal) || style <= Style::Named {
+                dst.write_str(name)
+            } else {
+                dst.write_str("_")
             }
-            Policy::Named => dst.write_str(name),
-            Policy::Minimal => match enum_kind {
-                true => dst.write_str(name),
-                false => dst.write_str("_"),
-            },
-        },
-        Path::Single { name } => match policy {
-            Policy::Full | Policy::Named => dst.write_str(name),
-            Policy::Minimal => match enum_kind {
-                true => dst.write_str(name),
-                false => dst.write_str("_"),
-            },
-        },
-        Path::Unspecified => match enum_kind {
-            true => panic!("missing enum name"),
-            false => dst.write_str("_"),
-        },
+        }
+        Path::Single { name } => {
+            if matches!(kind, Kind::Unknown | Kind::Nominal) || style <= Style::Named {
+                dst.write_str(name)
+            } else {
+                dst.write_str("_")
+            }
+        }
+        Path::Unspecified => {
+            if matches!(kind, Kind::Unknown | Kind::Structural) {
+                dst.write_str("_")
+            } else {
+                panic!("missing nominal name")
+            }
+        }
     }
 }
 
-#[inline]
-fn write_bool(mut dst: impl Write, b: bool) -> fmt::Result {
-    match b {
-        true => dst.write_str("true"),
-        false => dst.write_str("false"),
+fn write_literal(dst: &mut impl Write, literal: Literal<'_>, suffix_control: NumericSuffix) -> fmt::Result {
+    match literal {
+        Literal::Bool(b) => match b {
+            true => dst.write_str("true"),
+            false => dst.write_str("false"),
+        },
+        Literal::Char(ch) => write_quoted_char(dst, ch),
+        Literal::Num(number) => write_number(dst, Either::Left(&number), suffix_control),
+        Literal::Str(s) => write_quoted_string(dst, s),
+        Literal::Bytes(bytes) => write_quoted_bytes(dst, bytes),
     }
 }
