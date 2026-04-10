@@ -3,29 +3,58 @@ use crate::{
     format,
     value::{self, Float32, Float64},
 };
-use alloc::collections::VecDeque;
 use core::fmt::{self, Write};
 use either::Either;
 
-//==================================================================================================
+#[cfg(feature = "alloc")]
+use alloc::collections::VecDeque;
+
+pub mod ser_concr;
+pub mod ser_value;
 
 pub trait Serialize {
-    fn seria_with(&self, ser: impl Serializer) -> fmt::Result;
+    fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut Serializer<Impl>) -> fmt::Result;
 }
 
-#[doc(hidden)]
-pub trait Serializer {
+pub trait SerializerImpl {
     fn push(&mut self, token: Token<'_>) -> fmt::Result;
 }
 
+pub struct Serializer<Impl: SerializerImpl>(Impl);
+
+impl<W: Write> Serializer<FastImpl<W>> {
+    pub fn new_fast(dst: W) -> Self {
+        Serializer(FastImpl {
+            dst,
+            ctr: 0,
+            cfg: Default::default(),
+        })
+    }
+}
+
+impl<Impl: SerializerImpl> Serializer<Impl> {
+    pub fn serialize<T: Serialize>(&mut self, value: &T) -> fmt::Result {
+        value.serialize_with(self)
+    }
+}
+
+#[test]
+fn foo() {
+    let mut s = String::new();
+    let mut ser = Serializer::new_fast(&mut s);
+    ser.serialize(&666i128).unwrap();
+    println!("{}", s);
+}
+
+//==================================================================================================
+
 mod private {
-    use crate::value::Number;
+    use crate::value::{Number2, NumberNoSuffix2};
 
     pub enum Token<'a> {
         #[cfg(feature = "alloc")]
         Stringified(String),
         Literal(Literal<'a>),
-
         Maybe,
         Sequence,
         Tuple,
@@ -38,21 +67,20 @@ mod private {
             path: NominalPath<'a>,
             kind: NominalKind,
         },
-
-        FatArrow,
-        Colon,
-        Comma,
-
         MaybeEnd,
         SequenceEnd,
         TupleLikeEnd,
         MapLikeEnd,
+        FatArrow,
+        Colon,
+        Comma,
     }
 
     pub enum Literal<'a> {
         Bool(bool),
         Char(char),
-        Num(Number),
+        Number(Number2),
+        NumberNoSuffix(NumberNoSuffix2),
         Str(&'a str),
         Bytes(&'a [u8]),
     }
@@ -78,6 +106,17 @@ pub struct Config {
 
     pub indentor: Indentor,
     pub map_like_inline_entries: u8,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            numeric_suffix: Default::default(),
+            nominal_path_style: Default::default(),
+            indentor: Default::default(),
+            map_like_inline_entries: 3,
+        }
+    }
 }
 
 pub mod options {
@@ -126,13 +165,13 @@ pub mod options {
 //==================================================================================================
 
 #[doc(alias = "Serializer")]
-pub struct FastSerria<W: Write> {
+pub struct FastImpl<W: Write> {
     dst: W,
     ctr: usize,
     cfg: Config,
 }
 
-impl<W: Write> Serializer for &mut FastSerria<W> {
+impl<W: Write> SerializerImpl for FastImpl<W> {
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
         let dst = &mut self.dst;
         let ctr = &mut self.ctr;
@@ -161,7 +200,6 @@ impl<W: Write> Serializer for &mut FastSerria<W> {
             #[cfg(feature = "alloc")]
             Token::Stringified(_) => panic!("FastSerria does not rely on alloc"),
             Token::Literal(literal) => write_literal(dst, literal, cfg.numeric_suffix)?,
-
             Token::Maybe => dst.write_str("?")?,
             Token::Sequence => dst.write_str("[")?,
             Token::Tuple | Token::TupleStruct { .. } => {
@@ -176,15 +214,13 @@ impl<W: Write> Serializer for &mut FastSerria<W> {
                 }
                 dst.write_str("{")?;
             }
-
-            Token::FatArrow => dst.write_str("=>")?,
-            Token::Colon => dst.write_str(":")?,
-            Token::Comma => dst.write_str(",")?,
-
             Token::MaybeEnd => (),
             Token::SequenceEnd => dst.write_str("]")?,
             Token::TupleLikeEnd => dst.write_str(")")?,
             Token::MapLikeEnd => dst.write_str("}")?,
+            Token::FatArrow => dst.write_str("=>")?,
+            Token::Colon => dst.write_str(":")?,
+            Token::Comma => dst.write_str(",")?,
         }
 
         if *ctr == 0 {
@@ -199,7 +235,7 @@ impl<W: Write> Serializer for &mut FastSerria<W> {
 
 #[cfg(feature = "alloc")]
 #[doc(alias = "Serializer")]
-pub struct Serria<W: Write> {
+pub struct StandardImpl<W: Write> {
     dst: W,
     cfg: Config,
     compounds_stack: Vec<Compound>,
@@ -295,7 +331,7 @@ impl CompoundKind {
 }
 
 #[cfg(feature = "alloc")]
-impl<W: Write> Serializer for &mut Serria<W> {
+impl<W: Write> SerializerImpl for StandardImpl<W> {
     fn push(&mut self, token: Token) -> fmt::Result {
         let dst = &mut self.dst;
         let cfg = &self.cfg;
@@ -532,37 +568,37 @@ impl<W: Write> Serializer for &mut Serria<W> {
 enum Numeric {
     Int(i64),
     UInt(u64),
-    LongInt(i128),
-    LongUInt(u128),
     Float32(f32),
     Float64(f64),
+    LongInt { lo: u64, hi: i64 },
+    LongUInt { lo: u64, hi: u64 },
 }
 
-impl From<&value::Number> for Numeric {
-    fn from(value: &value::Number) -> Self {
+impl From<value::Number2> for Numeric {
+    fn from(value: value::Number2) -> Self {
         match value {
-            value::Number::Int8(x) => Numeric::Int(*x as _),
-            value::Number::Int16(x) => Numeric::Int(*x as _),
-            value::Number::Int32(x) => Numeric::Int(*x as _),
-            value::Number::Int64(x) => Numeric::Int(*x as _),
-            value::Number::Int128(x) => Numeric::LongInt(**x),
-            value::Number::UInt8(x) => Numeric::UInt(*x as _),
-            value::Number::UInt16(x) => Numeric::UInt(*x as _),
-            value::Number::UInt32(x) => Numeric::UInt(*x as _),
-            value::Number::UInt64(x) => Numeric::UInt(*x as _),
-            value::Number::UInt128(x) => Numeric::LongUInt(**x),
-            value::Number::Float32(Float32(x)) => Numeric::Float32(*x),
-            value::Number::Float64(Float64(x)) => Numeric::Float64(*x),
+            value::Number2::Int8(x) => Numeric::Int(x as _),
+            value::Number2::Int16(x) => Numeric::Int(x as _),
+            value::Number2::Int32(x) => Numeric::Int(x as _),
+            value::Number2::Int64(x) => Numeric::Int(x as _),
+            value::Number2::Int128 { lo, hi } => Numeric::LongInt { lo, hi },
+            value::Number2::UInt8(x) => Numeric::UInt(x as _),
+            value::Number2::UInt16(x) => Numeric::UInt(x as _),
+            value::Number2::UInt32(x) => Numeric::UInt(x as _),
+            value::Number2::UInt64(x) => Numeric::UInt(x as _),
+            value::Number2::UInt128 { lo, hi } => Numeric::LongUInt { lo, hi },
+            value::Number2::Float32(Float32(x)) => Numeric::Float32(x),
+            value::Number2::Float64(Float64(x)) => Numeric::Float64(x),
         }
     }
 }
 
-impl From<&value::NumberNoSuffix> for Numeric {
-    fn from(value: &value::NumberNoSuffix) -> Self {
+impl From<value::NumberNoSuffix2> for Numeric {
+    fn from(value: value::NumberNoSuffix2) -> Self {
         match value {
-            value::NumberNoSuffix::Int(x) => Numeric::Int(*x),
-            value::NumberNoSuffix::UInt(x) => Numeric::UInt(*x),
-            value::NumberNoSuffix::Float(Float64(x)) => Numeric::Float64(*x),
+            value::NumberNoSuffix2::Int(x) => Numeric::Int(x),
+            value::NumberNoSuffix2::UInt(x) => Numeric::UInt(x),
+            value::NumberNoSuffix2::Float(Float64(x)) => Numeric::Float64(x),
         }
     }
 }
@@ -571,13 +607,14 @@ macro_rules! write_number {
     (
         $label:lifetime,
         $dst:ident,
-        $variant:path,
+        $variant:pat,
         $numeric:ident,
+        $x:expr,
         $buf:ident,
         $write_opts:path
     ) => {
-        if let $variant(x) = $numeric {
-            let slice = lexical_core::write_with_options::<_, { format::NUMBER_FORMAT }>(x, &mut $buf, &$write_opts);
+        if let $variant = $numeric {
+            let slice = lexical_core::write_with_options::<_, { format::NUMBER_FORMAT }>($x, &mut $buf, &$write_opts);
 
             $dst.write_str(unsafe { ::core::str::from_utf8_unchecked(slice) })?;
 
@@ -588,19 +625,19 @@ macro_rules! write_number {
 
 fn write_number(
     dst: &mut impl Write,
-    number: Either<&value::Number, &value::NumberNoSuffix>,
+    number: Either<value::Number2, value::NumberNoSuffix2>,
     suffix_control: NumericSuffix,
 ) -> fmt::Result {
     let numeric = number.either_into::<Numeric>();
     let mut buf = [0x00u8; lexical_core::BUFFER_SIZE];
 
     'switch: {
-        write_number!('switch, dst, Numeric::Int,      numeric, buf, format::WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::UInt,     numeric, buf, format::WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::LongInt,  numeric, buf, format::WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::LongUInt, numeric, buf, format::WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::Float32,  numeric, buf, format::WRITE_FLOAT_OPTS);
-        write_number!('switch, dst, Numeric::Float64,  numeric, buf, format::WRITE_FLOAT_OPTS);
+        write_number!('switch, dst, Numeric::Int(x),           numeric, x,                               buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::UInt(x),          numeric, x,                               buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::Float32(x),       numeric, x,                               buf, format::WRITE_FLOAT_OPTS);
+        write_number!('switch, dst, Numeric::Float64(x),       numeric, x,                               buf, format::WRITE_FLOAT_OPTS);
+        write_number!('switch, dst, Numeric::LongInt{lo, hi},  numeric, (hi as i128) << 64 | lo as i128, buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::LongUInt{lo, hi}, numeric, (hi as u128) << 64 | lo as u128, buf, format::WRITE_INTEGER_OPTS);
     }
 
     let Either::Left(number) = number else {
@@ -608,24 +645,24 @@ fn write_number(
     };
 
     match number {
-        value::Number::Int128(_) => dst.write_str("i128"),
-        value::Number::UInt128(_) => dst.write_str("u128"),
+        value::Number2::Int128 { .. } => dst.write_str("i128"),
+        value::Number2::UInt128 { .. } => dst.write_str("u128"),
 
         _ => match suffix_control <= NumericSuffix::IntegerOnly {
             true => match number {
-                value::Number::Int8(_) => dst.write_str("i8"),
-                value::Number::Int16(_) => dst.write_str("i16"),
-                value::Number::Int32(_) => dst.write_str("i32"),
-                value::Number::Int64(_) => dst.write_str("i64"),
-                value::Number::UInt8(_) => dst.write_str("u8"),
-                value::Number::UInt16(_) => dst.write_str("u16"),
-                value::Number::UInt32(_) => dst.write_str("u32"),
-                value::Number::UInt64(_) => dst.write_str("u64"),
+                value::Number2::Int8(_) => dst.write_str("i8"),
+                value::Number2::Int16(_) => dst.write_str("i16"),
+                value::Number2::Int32(_) => dst.write_str("i32"),
+                value::Number2::Int64(_) => dst.write_str("i64"),
+                value::Number2::UInt8(_) => dst.write_str("u8"),
+                value::Number2::UInt16(_) => dst.write_str("u16"),
+                value::Number2::UInt32(_) => dst.write_str("u32"),
+                value::Number2::UInt64(_) => dst.write_str("u64"),
 
                 _ => match suffix_control <= NumericSuffix::Always {
                     true => match number {
-                        value::Number::Float32(_) => dst.write_str("f32"),
-                        value::Number::Float64(_) => dst.write_str("f64"),
+                        value::Number2::Float32(_) => dst.write_str("f32"),
+                        value::Number2::Float64(_) => dst.write_str("f64"),
                         _ => unreachable!(),
                     },
                     false => Ok(()),
@@ -763,7 +800,8 @@ fn write_literal(dst: &mut impl Write, literal: Literal<'_>, suffix_control: Num
             false => dst.write_str("false"),
         },
         Literal::Char(ch) => write_quoted_char(dst, ch),
-        Literal::Num(number) => write_number(dst, Either::Left(&number), suffix_control),
+        Literal::Number(num) => write_number(dst, Either::Left(num), suffix_control),
+        Literal::NumberNoSuffix(num) => write_number(dst, Either::Right(num), suffix_control),
         Literal::Str(s) => write_quoted_string(dst, s),
         Literal::Bytes(bytes) => write_quoted_bytes(dst, bytes),
     }
