@@ -39,6 +39,10 @@ mod private {
             kind: NominalKind,
         },
 
+        FatArrow,
+        Colon,
+        Comma,
+
         MaybeEnd,
         SequenceEnd,
         TupleLikeEnd,
@@ -124,23 +128,77 @@ pub mod options {
 #[doc(alias = "Serializer")]
 pub struct FastSerria<W: Write> {
     dst: W,
+    ctr: usize,
     cfg: Config,
 }
 
 impl<W: Write> Serializer for &mut FastSerria<W> {
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
+        let dst = &mut self.dst;
+        let ctr = &mut self.ctr;
+        let cfg = &self.cfg;
+
+        if matches!(
+            token,
+            Token::Maybe
+                | Token::Sequence
+                | Token::Tuple
+                | Token::TupleStruct { .. }
+                | Token::Map
+                | Token::MapStruct { .. }
+        ) {
+            *ctr += 1;
+        }
+
+        if matches!(
+            token,
+            Token::MaybeEnd | Token::SequenceEnd | Token::TupleLikeEnd | Token::MapLikeEnd
+        ) {
+            *ctr -= 1;
+        }
+
         match token {
             #[cfg(feature = "alloc")]
-            Token::Stringified(_) => panic!(),
-            _ => todo!(),
+            Token::Stringified(_) => panic!("FastSerria does not rely on alloc"),
+            Token::Literal(literal) => write_literal(dst, literal, cfg.numeric_suffix)?,
+
+            Token::Maybe => dst.write_str("?")?,
+            Token::Sequence => dst.write_str("[")?,
+            Token::Tuple | Token::TupleStruct { .. } => {
+                if let Token::TupleStruct { path, kind } = token {
+                    write_nominal_path(dst, path, kind, cfg.nominal_path_style)?;
+                }
+                dst.write_str("(")?;
+            }
+            Token::Map | Token::MapStruct { .. } => {
+                if let Token::TupleStruct { path, kind } = token {
+                    write_nominal_path(dst, path, kind, cfg.nominal_path_style)?;
+                }
+                dst.write_str("{")?;
+            }
+
+            Token::FatArrow => dst.write_str("=>")?,
+            Token::Colon => dst.write_str(":")?,
+            Token::Comma => dst.write_str(",")?,
+
+            Token::MaybeEnd => (),
+            Token::SequenceEnd => dst.write_str("]")?,
+            Token::TupleLikeEnd => dst.write_str(")")?,
+            Token::MapLikeEnd => dst.write_str("}")?,
         }
+
+        if *ctr == 0 {
+            dst.write_str(";")?;
+        }
+
+        Ok(())
     }
 }
 
 //==================================================================================================
 
-#[doc(alias = "Serializer")]
 #[cfg(feature = "alloc")]
+#[doc(alias = "Serializer")]
 pub struct Serria<W: Write> {
     dst: W,
     cfg: Config,
@@ -324,6 +382,8 @@ impl<W: Write> Serializer for &mut Serria<W> {
             };
 
         match token {
+            Token::FatArrow | Token::Colon | Token::Comma => (),
+
             Token::Stringified(_) | Token::Literal(_) => {
                 let entry = match token {
                     Token::Stringified(entry) => entry,

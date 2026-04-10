@@ -14,9 +14,11 @@ pub type Values = Vec<Value>;
 pub type ValueMap = BTreeMap<Value, Value>;
 pub type Struct = BTreeMap<Str, Value>;
 
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 pub struct Float32(pub f32);
 
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 pub struct Float64(pub f64);
 
@@ -93,6 +95,54 @@ pub enum Nominal {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NominalValue {
     Unit,
+    Tuple(Values),
+    Struct(Struct),
+}
+
+//------------------------------------------------------------------------------
+
+pub type Values2 = Vec<Value2>;
+pub type ValueMap2 = BTreeMap<Value2, Value2>;
+pub type Struct2 = BTreeMap<Str, Value2>;
+
+pub enum Value2 {
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    Int128(Box<i128>),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    UInt128(Box<u128>),
+    Float32(Float32),
+    Float64(Float64),
+
+    IntNoSuffix(i64),
+    UIntNoSuffix(u64),
+    FloatNoSuffix(Float64),
+
+    Bool(bool),
+    Char(char),
+    String(Box<String>),
+    ByteBuf(Box<ByteBuf>),
+
+    Maybe(Option<Box<Value2>>),
+    Sequence(Box<Values2>),
+    Tuple(Option<Box<Values2>>),
+    TupleStruct(Box<(NominalPath2, Values2)>),
+    Map(Option<Box<ValueMap2>>),
+    MapStruct(Box<(NominalPath2, ValueMap2)>),
+}
+
+pub enum NominalPath2 {
+    Unspecified,
+    Single { name: Str },
+    Dual { name: Str, parent: Str },
+}
+
+pub enum NominalValue2 {
     Tuple(Values),
     Struct(Struct),
 }
