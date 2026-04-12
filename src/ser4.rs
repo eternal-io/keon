@@ -23,6 +23,7 @@ pub trait SerializerImpl {
 pub struct Serializer<Impl: SerializerImpl>(Impl);
 
 impl<W: Write> Serializer<FastImpl<W>> {
+    // TODO!
     pub fn new_fast(dst: W) -> Self {
         Serializer(FastImpl {
             dst,
@@ -33,8 +34,14 @@ impl<W: Write> Serializer<FastImpl<W>> {
 }
 
 impl<Impl: SerializerImpl> Serializer<Impl> {
-    pub fn serialize<T: Serialize>(&mut self, value: &T) -> fmt::Result {
+    #[inline(always)]
+    pub fn serialize<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
         value.serialize_with(self)
+    }
+
+    #[inline(always)]
+    fn push(&mut self, token: Token<'_>) -> fmt::Result {
+        self.0.push(token)
     }
 }
 
@@ -42,19 +49,26 @@ impl<Impl: SerializerImpl> Serializer<Impl> {
 fn foo() {
     let mut s = String::new();
     let mut ser = Serializer::new_fast(&mut s);
-    ser.serialize(&666i128).unwrap();
+    ser.serialize(&(1i32, 2i64, 3i128)).unwrap();
     println!("{}", s);
 }
 
 //==================================================================================================
 
 mod private {
-    use crate::value::{Number2, NumberNoSuffix2};
+    use crate::value::{self, Number2, NumberNoSuffix2};
 
     pub enum Token<'a> {
         #[cfg(feature = "alloc")]
         Stringified(String),
         Literal(Literal<'a>),
+        Ident(&'a str),
+        Unit,
+        UnitStruct {
+            path: NominalPath<'a>,
+            kind: NominalKind,
+        },
+
         Maybe,
         Sequence,
         Tuple,
@@ -67,10 +81,12 @@ mod private {
             path: NominalPath<'a>,
             kind: NominalKind,
         },
+
         MaybeEnd,
         SequenceEnd,
         TupleLikeEnd,
         MapLikeEnd,
+
         FatArrow,
         Colon,
         Comma,
@@ -93,8 +109,22 @@ mod private {
 
     pub enum NominalKind {
         Unknown,
-        Nominal,
-        Structural,
+        Variant,
+        Struct,
+    }
+
+    impl<'a> From<&'a value::NominalPath2> for NominalPath<'a> {
+        #[inline(always)]
+        fn from(value: &'a value::NominalPath2) -> Self {
+            match value {
+                value::NominalPath2::Unspecified => NominalPath::Unspecified,
+                value::NominalPath2::Single { name } => NominalPath::Single { name: name.as_ref() },
+                value::NominalPath2::Dual { name, parent } => NominalPath::Dual {
+                    name: name.as_ref(),
+                    parent: parent.as_ref(),
+                },
+            }
+        }
     }
 }
 
@@ -200,6 +230,10 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
             #[cfg(feature = "alloc")]
             Token::Stringified(_) => panic!("FastSerria does not rely on alloc"),
             Token::Literal(literal) => write_literal(dst, literal, cfg.numeric_suffix)?,
+            Token::Ident(ident) => dst.write_str(ident)?,
+            Token::Unit => dst.write_str("()")?,
+            Token::UnitStruct { path, kind } => write_nominal_path(dst, path, kind, cfg.nominal_path_style)?,
+
             Token::Maybe => dst.write_str("?")?,
             Token::Sequence => dst.write_str("[")?,
             Token::Tuple | Token::TupleStruct { .. } => {
@@ -214,10 +248,12 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
                 }
                 dst.write_str("{")?;
             }
+
             Token::MaybeEnd => (),
             Token::SequenceEnd => dst.write_str("]")?,
             Token::TupleLikeEnd => dst.write_str(")")?,
             Token::MapLikeEnd => dst.write_str("}")?,
+
             Token::FatArrow => dst.write_str("=>")?,
             Token::Colon => dst.write_str(":")?,
             Token::Comma => dst.write_str(",")?,
@@ -417,17 +453,26 @@ impl<W: Write> SerializerImpl for StandardImpl<W> {
                 Ok(())
             };
 
-        match token {
-            Token::FatArrow | Token::Colon | Token::Comma => (),
+        let literal_to_string = |literal: Literal<'_>| -> Result<String, fmt::Error> {
+            let mut stringified = String::with_capacity(256);
+            write_literal(&mut stringified, literal, cfg.numeric_suffix)?;
+            Ok(stringified)
+        };
 
-            Token::Stringified(_) | Token::Literal(_) => {
+        let nominal_path_to_string = |path: NominalPath, kind: NominalKind| -> Result<String, fmt::Error> {
+            let mut stringified = String::with_capacity(64);
+            write_nominal_path(&mut stringified, path, kind, cfg.nominal_path_style)?;
+            Ok(stringified)
+        };
+
+        match token {
+            Token::Stringified(_) | Token::Literal(_) | Token::Ident(_) | Token::Unit | Token::UnitStruct { .. } => {
                 let entry = match token {
                     Token::Stringified(entry) => entry,
-                    Token::Literal(literal) => {
-                        let mut stringified = String::with_capacity(256);
-                        write_literal(&mut stringified, literal, cfg.numeric_suffix)?;
-                        stringified
-                    }
+                    Token::Literal(literal) => literal_to_string(literal)?,
+                    Token::Ident(ident) => ident.to_string(),
+                    Token::Unit => "()".to_string(),
+                    Token::UnitStruct { path, kind } => nominal_path_to_string(path, kind)?,
                     _ => unreachable!(),
                 };
                 match self.compounds_stack.last() {
@@ -524,19 +569,20 @@ impl<W: Write> SerializerImpl for StandardImpl<W> {
                 }
             }
 
+            Token::FatArrow | Token::Colon | Token::Comma => (),
+
             token => {
-                let head = |path: NominalPath, kind: NominalKind| -> Result<String, fmt::Error> {
-                    let mut stringified = String::with_capacity(64);
-                    write_nominal_path(&mut stringified, path, kind, cfg.nominal_path_style)?;
-                    Ok(stringified)
-                };
                 let kind = match token {
                     Token::Maybe => CompoundKind::Maybe,
                     Token::Sequence => CompoundKind::Sequence,
                     Token::Tuple => CompoundKind::TupleLike(None),
-                    Token::TupleStruct { path, kind } => CompoundKind::TupleLike(Some(head(path, kind)?)),
+                    Token::TupleStruct { path, kind } => {
+                        CompoundKind::TupleLike(Some(nominal_path_to_string(path, kind)?))
+                    }
                     Token::Map => CompoundKind::MapLikeLhs(None),
-                    Token::MapStruct { path, kind } => CompoundKind::MapLikeLhs(Some(head(path, kind)?)),
+                    Token::MapStruct { path, kind } => {
+                        CompoundKind::MapLikeLhs(Some(nominal_path_to_string(path, kind)?))
+                    }
                     _ => unreachable!(),
                 };
                 let force_compact = match self.compounds_stack.last() {
@@ -770,24 +816,24 @@ fn write_nominal_path(
                 dst.write_str(parent)?;
                 dst.write_str("::")?;
                 dst.write_str(name)
-            } else if matches!(kind, Kind::Nominal) || style <= Style::Named {
+            } else if matches!(kind, Kind::Variant) || style <= Style::Named {
                 dst.write_str(name)
             } else {
                 dst.write_str("_")
             }
         }
         Path::Single { name } => {
-            if matches!(kind, Kind::Unknown | Kind::Nominal) || style <= Style::Named {
+            if matches!(kind, Kind::Unknown | Kind::Variant) || style <= Style::Named {
                 dst.write_str(name)
             } else {
                 dst.write_str("_")
             }
         }
         Path::Unspecified => {
-            if matches!(kind, Kind::Unknown | Kind::Structural) {
+            if matches!(kind, Kind::Unknown | Kind::Struct) {
                 dst.write_str("_")
             } else {
-                panic!("missing nominal name")
+                panic!("missing variant name")
             }
         }
     }

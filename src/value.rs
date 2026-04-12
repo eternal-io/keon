@@ -169,7 +169,7 @@ impl_into!(v: f32  => Number2::Float32(v.into()));
 impl_into!(v: f64  => Number2::Float64(v.into()));
 
 pub type Values2 = Vec<Value2>;
-pub type ValueMap2 = BTreeMap<Value2, Value2>;
+pub type ValuesMap2 = BTreeMap<Value2, Value2>;
 pub type Struct2 = BTreeMap<Str, Value2>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -198,21 +198,20 @@ pub enum NumberNoSuffix2 {
 pub enum Value2 {
     /// Literal Boolean value.
     Bool(bool),
-
     /// Literal Unicode character.
     Char(char),
-
     /// Literal number.
     Number(Number2),
-
     /// Literal number with no suffix.
     NumberNoSuffix(NumberNoSuffix2),
-
     /// Literal string.
     String(Box<str>),
-
     /// Literal byte string.
     ByteBuf(Box<[u8]>),
+    /// Structural unit.
+    Unit,
+    /// Nominal unit.
+    UnitStruct(Box<NominalPath2>),
 
     /// Maybe value, either [`Some`] or [`None`].
     ///
@@ -223,27 +222,20 @@ pub enum Value2 {
     Sequence(Box<Values2>),
 
     /// Structural tuple.
-    Tuple(Option<Box<Values2>>),
-
+    Tuple(Box<Values2>),
     /// Nominal tuple.
     TupleStruct(Box<(NominalPath2, Values2)>),
 
     /// Structural map.
-    Map(Box<ValueMap2>),
-
+    Map(Box<ValuesMap2>),
     /// Nominal map (`struct`).
-    MapStruct(Box<(NominalPath2, ValueMap2)>),
+    MapStruct(Box<(NominalPath2, Struct2)>),
 }
 
 pub enum NominalPath2 {
     Unspecified,
     Single { name: Str },
     Dual { name: Str, parent: Str },
-}
-
-pub enum NominalValue2 {
-    Tuple(Values),
-    Struct(Struct),
 }
 
 //------------------------------------------------------------------------------

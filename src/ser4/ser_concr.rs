@@ -8,13 +8,12 @@ use serde::{
     Serialize, Serializer,
 };
 
-impl<T: Serialize> super::Serialize for T {
+impl<T: ?Sized + Serialize> super::Serialize for T {
+    #[inline(always)]
     fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut super::Serializer<Impl>) -> fmt::Result {
         self.serialize(ser)
     }
 }
-
-//==================================================================================================
 
 impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     type Ok = ();
@@ -27,47 +26,66 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     type SerializeStruct = Self;
     type SerializeStructVariant = Self;
 
-    #[rustfmt::skip]    fn serialize_bool  (self, v: bool ) -> fmt::Result { self.0.push(Token::Literal(Literal::Bool(v)))          }
-    #[rustfmt::skip]    fn serialize_char  (self, v: char ) -> fmt::Result { self.0.push(Token::Literal(Literal::Char(v)))          }
-    #[rustfmt::skip]    fn serialize_i8    (self, v: i8   ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_i16   (self, v: i16  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_i32   (self, v: i32  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_i64   (self, v: i64  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_i128  (self, v: i128 ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_u8    (self, v: u8   ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_u16   (self, v: u16  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_u32   (self, v: u32  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_u64   (self, v: u64  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_u128  (self, v: u128 ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_f32   (self, v: f32  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_f64   (self, v: f64  ) -> fmt::Result { self.0.push(Token::Literal(Literal::Number(v.into()))) }
-    #[rustfmt::skip]    fn serialize_str   (self, v: &str ) -> fmt::Result { self.0.push(Token::Literal(Literal::Str(v)))           }
-    #[rustfmt::skip]    fn serialize_bytes (self, v: &[u8]) -> fmt::Result { self.0.push(Token::Literal(Literal::Bytes(v)))         }
-
-    fn serialize_none(self) -> fmt::Result {
-        todo!()
-    }
-
-    fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> fmt::Result {
-        todo!()
-    }
+    #[rustfmt::skip]    fn serialize_bool  (self, v: bool ) -> fmt::Result { self.push(Token::Literal(Literal::Bool(v)))          }
+    #[rustfmt::skip]    fn serialize_char  (self, v: char ) -> fmt::Result { self.push(Token::Literal(Literal::Char(v)))          }
+    #[rustfmt::skip]    fn serialize_i8    (self, v: i8   ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_i16   (self, v: i16  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_i32   (self, v: i32  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_i64   (self, v: i64  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_i128  (self, v: i128 ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_u8    (self, v: u8   ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_u16   (self, v: u16  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_u32   (self, v: u32  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_u64   (self, v: u64  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_u128  (self, v: u128 ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_f32   (self, v: f32  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_f64   (self, v: f64  ) -> fmt::Result { self.push(Token::Literal(Literal::Number(v.into()))) }
+    #[rustfmt::skip]    fn serialize_str   (self, v: &str ) -> fmt::Result { self.push(Token::Literal(Literal::Str(v)))           }
+    #[rustfmt::skip]    fn serialize_bytes (self, v: &[u8]) -> fmt::Result { self.push(Token::Literal(Literal::Bytes(v)))         }
 
     fn serialize_unit(self) -> fmt::Result {
-        todo!()
+        self.push(Token::Unit)
     }
-
     fn serialize_unit_struct(self, name: &'static str) -> fmt::Result {
-        todo!()
+        self.push(Token::UnitStruct {
+            path: NominalPath::Single { name },
+            kind: NominalKind::Struct,
+        })
+    }
+    fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> fmt::Result {
+        let _ = variant_index;
+        self.push(Token::UnitStruct {
+            path: NominalPath::Dual {
+                name: variant,
+                parent: name,
+            },
+            kind: NominalKind::Variant,
+        })
     }
 
-    fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> fmt::Result {
-        todo!()
+    fn serialize_none(self) -> fmt::Result {
+        self.push(Token::Maybe)?;
+        self.push(Token::MaybeEnd)
+    }
+    fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> fmt::Result {
+        self.push(Token::Maybe)?;
+        self.serialize(value)?;
+        self.push(Token::MaybeEnd)
+    }
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        let _ = len;
+        self.push(Token::Sequence)?;
+        Ok(self)
     }
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> fmt::Result {
-        todo!()
+        self.push(Token::TupleStruct {
+            path: NominalPath::Single { name },
+            kind: NominalKind::Struct,
+        })?;
+        self.serialize(value)?;
+        self.push(Token::TupleLikeEnd)
     }
-
     fn serialize_newtype_variant<T: ?Sized + Serialize>(
         self,
         name: &'static str,
@@ -75,21 +93,31 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         variant: &'static str,
         value: &T,
     ) -> fmt::Result {
-        todo!()
-    }
-
-    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        todo!()
+        let _ = variant_index;
+        self.push(Token::TupleStruct {
+            path: NominalPath::Dual {
+                name: variant,
+                parent: name,
+            },
+            kind: NominalKind::Variant,
+        })?;
+        self.serialize(value)?;
+        self.push(Token::TupleLikeEnd)
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        todo!()
+        let _ = len;
+        self.push(Token::Tuple)?;
+        Ok(self)
     }
-
     fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        todo!()
+        let _ = len;
+        self.push(Token::TupleStruct {
+            path: NominalPath::Single { name },
+            kind: NominalKind::Struct,
+        })?;
+        Ok(self)
     }
-
     fn serialize_tuple_variant(
         self,
         name: &'static str,
@@ -97,17 +125,31 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        todo!()
+        let _ = len;
+        let _ = variant_index;
+        self.push(Token::TupleStruct {
+            path: NominalPath::Dual {
+                name: variant,
+                parent: name,
+            },
+            kind: NominalKind::Variant,
+        })?;
+        Ok(self)
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        todo!()
+        let _ = len;
+        self.push(Token::Map)?;
+        Ok(self)
     }
-
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
-        todo!()
+        let _ = len;
+        self.push(Token::MapStruct {
+            path: NominalPath::Single { name },
+            kind: NominalKind::Struct,
+        })?;
+        Ok(self)
     }
-
     fn serialize_struct_variant(
         self,
         name: &'static str,
@@ -115,93 +157,103 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        todo!()
+        let _ = len;
+        let _ = variant_index;
+        self.push(Token::MapStruct {
+            path: NominalPath::Dual {
+                name: variant,
+                parent: name,
+            },
+            kind: NominalKind::Variant,
+        })?;
+        Ok(self)
     }
 }
 
 impl<Impl: SerializerImpl> SerializeSeq for &mut super::Serializer<Impl> {
     type Ok = ();
     type Error = fmt::Error;
-
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        todo!()
+        self.serialize(value)?;
+        self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        todo!()
+        self.push(Token::SequenceEnd)
     }
 }
 
 impl<Impl: SerializerImpl> SerializeTuple for &mut super::Serializer<Impl> {
     type Ok = ();
     type Error = fmt::Error;
-
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        todo!()
+        self.serialize(value)?;
+        self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        todo!()
+        self.push(Token::TupleLikeEnd)
     }
 }
-
 impl<Impl: SerializerImpl> SerializeTupleStruct for &mut super::Serializer<Impl> {
     type Ok = ();
     type Error = fmt::Error;
-
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        todo!()
+        self.serialize(value)?;
+        self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        todo!()
+        self.push(Token::TupleLikeEnd)
     }
 }
-
 impl<Impl: SerializerImpl> SerializeTupleVariant for &mut super::Serializer<Impl> {
     type Ok = ();
     type Error = fmt::Error;
-
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        todo!()
+        self.serialize(value)?;
+        self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        todo!()
+        self.push(Token::TupleLikeEnd)
     }
 }
 
 impl<Impl: SerializerImpl> SerializeMap for &mut super::Serializer<Impl> {
     type Ok = ();
     type Error = fmt::Error;
-
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> fmt::Result {
-        todo!()
+        self.serialize(key)?;
+        self.push(Token::FatArrow)
     }
     fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        todo!()
+        self.serialize(value)?;
+        self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        todo!()
+        self.push(Token::MapLikeEnd)
     }
 }
-
 impl<Impl: SerializerImpl> SerializeStruct for &mut super::Serializer<Impl> {
     type Ok = ();
     type Error = fmt::Error;
-
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> fmt::Result {
-        todo!()
+        self.push(Token::Ident(key))?;
+        self.push(Token::Colon)?;
+        self.serialize(value)?;
+        self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        todo!()
+        self.push(Token::MapLikeEnd)
     }
 }
-
 impl<Impl: SerializerImpl> SerializeStructVariant for &mut super::Serializer<Impl> {
     type Ok = ();
     type Error = fmt::Error;
-
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> fmt::Result {
-        todo!()
+        self.push(Token::Ident(key))?;
+        self.push(Token::Colon)?;
+        self.serialize(value)?;
+        self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        todo!()
+        self.push(Token::MapLikeEnd)
     }
 }

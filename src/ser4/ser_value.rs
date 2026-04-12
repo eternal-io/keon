@@ -4,20 +4,80 @@ use core::fmt;
 
 impl super::Serialize for Value2 {
     fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut super::Serializer<Impl>) -> fmt::Result {
-        match self {
-            Value2::Bool(b) => ser.0.push(Token::Literal(Literal::Bool(*b))),
-            Value2::Char(ch) => ser.0.push(Token::Literal(Literal::Char(*ch))),
-            Value2::Number(num) => ser.0.push(Token::Literal(Literal::Number(*num))),
-            Value2::NumberNoSuffix(num) => ser.0.push(Token::Literal(Literal::NumberNoSuffix(*num))),
-            Value2::String(s) => ser.0.push(Token::Literal(Literal::Str(s.as_ref()))),
-            Value2::ByteBuf(bytes) => ser.0.push(Token::Literal(Literal::Bytes(bytes.as_ref()))),
+        let ser_values = |ser: &mut super::Serializer<Impl>, values: &[Value2]| -> fmt::Result {
+            for value in values {
+                ser.serialize(value)?;
+                ser.push(Token::Comma)?;
+            }
+            Ok(())
+        };
 
-            Value2::Maybe(value2) => todo!(),
-            Value2::Sequence(value2s) => todo!(),
-            Value2::Tuple(value2s) => todo!(),
-            Value2::TupleStruct(_) => todo!(),
-            Value2::Map(btree_map) => todo!(),
-            Value2::MapStruct(_) => todo!(),
+        match self {
+            Value2::Bool(b) => ser.push(Token::Literal(Literal::Bool(*b))),
+            Value2::Char(ch) => ser.push(Token::Literal(Literal::Char(*ch))),
+            Value2::Number(num) => ser.push(Token::Literal(Literal::Number(*num))),
+            Value2::NumberNoSuffix(num) => ser.push(Token::Literal(Literal::NumberNoSuffix(*num))),
+            Value2::String(s) => ser.push(Token::Literal(Literal::Str(s.as_ref()))),
+            Value2::ByteBuf(bytes) => ser.push(Token::Literal(Literal::Bytes(bytes.as_ref()))),
+            Value2::Unit => ser.push(Token::Unit),
+            Value2::UnitStruct(path) => ser.push(Token::UnitStruct {
+                path: path.as_ref().into(),
+                kind: NominalKind::Unknown,
+            }),
+
+            Value2::Maybe(maybe) => {
+                ser.push(Token::Maybe)?;
+                if let Some(value) = maybe.as_ref() {
+                    ser.serialize(value.as_ref())?;
+                }
+                ser.push(Token::MaybeEnd)
+            }
+
+            Value2::Sequence(values) => {
+                ser.push(Token::Sequence)?;
+                ser_values(ser, values.as_ref())?;
+                ser.push(Token::SequenceEnd)
+            }
+
+            Value2::Tuple(values) => {
+                ser.push(Token::Tuple)?;
+                ser_values(ser, values.as_ref())?;
+                ser.push(Token::TupleLikeEnd)
+            }
+            Value2::TupleStruct(path_values) => {
+                let (path, values) = path_values.as_ref();
+                ser.push(Token::TupleStruct {
+                    path: path.into(),
+                    kind: NominalKind::Unknown,
+                })?;
+                ser_values(ser, values.as_ref())?;
+                ser.push(Token::TupleLikeEnd)
+            }
+
+            Value2::Map(values_map) => {
+                ser.push(Token::Map)?;
+                for (key, value) in values_map.iter() {
+                    ser.serialize(key)?;
+                    ser.push(Token::FatArrow)?;
+                    ser.serialize(value)?;
+                    ser.push(Token::Comma)?;
+                }
+                ser.push(Token::MapLikeEnd)
+            }
+            Value2::MapStruct(path_values_map) => {
+                let (path, values_map) = path_values_map.as_ref();
+                ser.push(Token::MapStruct {
+                    path: path.into(),
+                    kind: NominalKind::Unknown,
+                })?;
+                for (key, value) in values_map.iter() {
+                    ser.push(Token::Ident(key.as_ref()))?;
+                    ser.push(Token::Colon)?;
+                    ser.serialize(value)?;
+                    ser.push(Token::Comma)?;
+                }
+                ser.push(Token::MapLikeEnd)
+            }
         }
     }
 }
