@@ -1,5 +1,6 @@
 pub mod de;
-pub mod ser;
+#[cfg(feature = "alloc")]
+pub mod de4;
 pub mod ser4;
 pub mod value;
 
@@ -10,7 +11,7 @@ pub use crate::{
         error::{Error, ErrorKind},
         parse, parse_limited, parse_many, parse_many_limited,
     },
-    ser::{custom_seria, pretty_seria, seria, seria_many},
+    ser4::{stringify, stringify_pretty, SerializeConfig, Serializer},
     value::Value,
 };
 

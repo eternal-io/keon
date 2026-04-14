@@ -17,7 +17,8 @@ categories = ["encoding"]
 
 
 [features]
-default = ["alloc"]
+default = ["std", "alloc"]
+std = []
 alloc = []
 
 

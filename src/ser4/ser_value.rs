@@ -22,7 +22,7 @@ impl super::Serialize for Value2 {
             Value2::Unit => ser.push(Token::Unit),
             Value2::UnitStruct(path) => ser.push(Token::UnitStruct {
                 path: path.as_ref().into(),
-                kind: NominalKind::Unknown,
+                kind: NominalKind::Preserve,
             }),
 
             Value2::Maybe(maybe) => {
@@ -48,7 +48,7 @@ impl super::Serialize for Value2 {
                 let (path, values) = path_values.as_ref();
                 ser.push(Token::TupleStruct {
                     path: path.into(),
-                    kind: NominalKind::Unknown,
+                    kind: NominalKind::Preserve,
                 })?;
                 ser_values(ser, values.as_ref())?;
                 ser.push(Token::TupleLikeEnd)
@@ -68,7 +68,7 @@ impl super::Serialize for Value2 {
                 let (path, values_map) = path_values_map.as_ref();
                 ser.push(Token::MapStruct {
                     path: path.into(),
-                    kind: NominalKind::Unknown,
+                    kind: NominalKind::Preserve,
                 })?;
                 for (key, value) in values_map.iter() {
                     ser.push(Token::Ident(key.as_ref()))?;

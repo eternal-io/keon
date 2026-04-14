@@ -1,56 +1,156 @@
-use self::{options::*, private::*};
+use self::private::*;
 use crate::{
     format,
     value::{self, Float32, Float64},
 };
-use core::fmt::{self, Write};
+use core::{
+    fmt::{self, Write},
+    num::NonZeroU8,
+};
 use either::Either;
 
 #[cfg(feature = "alloc")]
 use alloc::collections::VecDeque;
 
-pub mod ser_concr;
-pub mod ser_value;
+mod ser_concr;
+mod ser_value;
+
+#[cfg(feature = "alloc")]
+pub fn stringify<T: Serialize>(value: &T) -> String {
+    let mut stringified = String::with_capacity(256);
+    /* writing a string is unlikely to return an error */
+    Serializer::new(&mut stringified, SerializeConfig::minimal())
+        .serialize(value)
+        .unwrap();
+    stringified
+}
+
+#[cfg(feature = "alloc")]
+pub fn stringify_pretty<T: Serialize>(value: &T, cfg: SerializeConfig) -> String {
+    let mut stringified = String::with_capacity(256);
+    /* writing a string is unlikely to return an error */
+    Serializer::new_pretty(&mut stringified, cfg).serialize(value).unwrap();
+    stringified
+}
+
+//------------------------------------------------------------------------------
 
 pub trait Serialize {
     fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut Serializer<Impl>) -> fmt::Result;
 }
 
+#[doc(hidden)]
 pub trait SerializerImpl {
     fn push(&mut self, token: Token<'_>) -> fmt::Result;
 }
 
-pub struct Serializer<Impl: SerializerImpl>(Impl);
+pub struct Serializer<Impl>(Impl);
 
 impl<W: Write> Serializer<FastImpl<W>> {
-    // TODO!
-    pub fn new_fast(dst: W) -> Self {
-        Serializer(FastImpl {
-            dst,
-            ctr: 0,
-            cfg: Default::default(),
-        })
+    pub fn new(dst: W, cfg: SerializeConfig) -> Self {
+        Self(FastImpl::new(dst, cfg))
+    }
+}
+
+impl<W: Write> Serializer<PrettyImpl<W>> {
+    pub fn new_pretty(dst: W, cfg: SerializeConfig) -> Self {
+        Self(PrettyImpl::new(dst, cfg))
     }
 }
 
 impl<Impl: SerializerImpl> Serializer<Impl> {
     #[inline(always)]
-    pub fn serialize<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        value.serialize_with(self)
-    }
-
-    #[inline(always)]
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
         self.0.push(token)
     }
+
+    #[inline(always)]
+    pub fn serialize<T>(&mut self, value: &T) -> fmt::Result
+    where
+        T: ?Sized + Serialize,
+    {
+        value.serialize_with(self)
+    }
+
+    #[inline]
+    pub fn serialize_many<T>(&mut self, values: impl IntoIterator<Item: AsRef<T>>) -> fmt::Result
+    where
+        T: ?Sized + Serialize,
+    {
+        values
+            .into_iter()
+            .try_for_each(|value| value.as_ref().serialize_with(self))
+    }
 }
 
-#[test]
-fn foo() {
-    let mut s = String::new();
-    let mut ser = Serializer::new_fast(&mut s);
-    ser.serialize(&(1i32, 2i64, 3i128)).unwrap();
-    println!("{}", s);
+//------------------------------------------------------------------------------
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub struct SerializeConfig {
+    pub indentor: Indentor,
+    pub numeric_suffix: NumericSuffix,
+    pub nominal_path_style: NominalPathStyle,
+    pub map_like_inline_entries: u8,
+}
+
+impl SerializeConfig {
+    pub const fn minimal() -> Self {
+        Self {
+            indentor: Indentor::Tab,
+            numeric_suffix: NumericSuffix::LongIntegerOnly,
+            nominal_path_style: NominalPathStyle::Minimal,
+            map_like_inline_entries: 3,
+        }
+    }
+}
+
+impl Default for SerializeConfig {
+    fn default() -> Self {
+        Self {
+            indentor: Indentor::space(4),
+            numeric_suffix: NumericSuffix::LongIntegerOnly,
+            nominal_path_style: NominalPathStyle::Full,
+            map_like_inline_entries: 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Indentor {
+    Tab,
+    Space(NonZeroU8),
+}
+
+impl Indentor {
+    pub const fn space(n_or_tab: u8) -> Self {
+        match n_or_tab {
+            0 => Self::Tab,
+            n => Self::Space(NonZeroU8::new(n).unwrap()),
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn write_to(&self, dst: &mut impl Write) -> fmt::Result {
+        match self {
+            Indentor::Tab => dst.write_str("\t"),
+            Indentor::Space(k) => (0..k.get()).try_for_each(|_| dst.write_str(" ")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NumericSuffix {
+    Always = 0,
+    IntegerOnly = 1,
+    LongIntegerOnly = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NominalPathStyle {
+    Full = 0,
+    Named = 1,
+    Minimal = 2,
 }
 
 //==================================================================================================
@@ -107,12 +207,6 @@ mod private {
         Dual { name: &'a str, parent: &'a str },
     }
 
-    pub enum NominalKind {
-        Unknown,
-        Variant,
-        Struct,
-    }
-
     impl<'a> From<&'a value::NominalPath2> for NominalPath<'a> {
         #[inline(always)]
         fn from(value: &'a value::NominalPath2) -> Self {
@@ -126,86 +220,40 @@ mod private {
             }
         }
     }
-}
 
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy)]
-pub struct Config {
-    pub numeric_suffix: NumericSuffix,
-    pub nominal_path_style: NominalPathStyle,
-
-    pub indentor: Indentor,
-    pub map_like_inline_entries: u8,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            numeric_suffix: Default::default(),
-            nominal_path_style: Default::default(),
-            indentor: Default::default(),
-            map_like_inline_entries: 3,
-        }
+    pub enum NominalKind {
+        Preserve,
+        Variant,
+        Struct,
     }
 }
 
-pub mod options {
-    use super::*;
-    use core::num::NonZeroU8;
+//------------------------------------------------------------------------------
 
-    #[derive(Debug, Clone, Copy)]
-    pub enum Indentor {
-        Tab,
-        Space(NonZeroU8),
-    }
-
-    impl Indentor {
-        #[inline(always)]
-        pub(super) fn write_to(&self, dst: &mut impl Write) -> fmt::Result {
-            match self {
-                Indentor::Tab => dst.write_str("\t"),
-                Indentor::Space(k) => (0..k.get()).try_for_each(|_| dst.write_str(" ")),
-            }
-        }
-    }
-
-    impl Default for Indentor {
-        fn default() -> Self {
-            Indentor::Space(NonZeroU8::new(4).unwrap())
-        }
-    }
-
-    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-    pub enum NumericSuffix {
-        Always = 0,
-        IntegerOnly = 1,
-        #[default]
-        LongIntegerOnly = 2,
-    }
-
-    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-    pub enum NominalPathStyle {
-        #[default]
-        Full = 0,
-        Named = 1,
-        Minimal = 2,
-    }
-}
-
-//==================================================================================================
-
-#[doc(alias = "Serializer")]
-pub struct FastImpl<W: Write> {
+#[doc(hidden)]
+pub struct FastImpl<W> {
     dst: W,
+    cfg: SerializeConfig,
     ctr: usize,
-    cfg: Config,
+}
+
+impl<W> FastImpl<W> {
+    fn new(dst: W, cfg: SerializeConfig) -> Self {
+        Self { dst, cfg, ctr: 0 }
+    }
+}
+
+impl<W> Drop for FastImpl<W> {
+    fn drop(&mut self) {
+        debug_assert!(self.ctr == 0);
+    }
 }
 
 impl<W: Write> SerializerImpl for FastImpl<W> {
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
         let dst = &mut self.dst;
-        let ctr = &mut self.ctr;
         let cfg = &self.cfg;
+        let ctr = &mut self.ctr;
 
         if matches!(
             token,
@@ -228,7 +276,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
 
         match token {
             #[cfg(feature = "alloc")]
-            Token::Stringified(_) => panic!("FastSerria does not rely on alloc"),
+            Token::Stringified(_) => panic!("FastImpl does not rely on alloc"),
             Token::Literal(literal) => write_literal(dst, literal, cfg.numeric_suffix)?,
             Token::Ident(ident) => dst.write_str(ident)?,
             Token::Unit => dst.write_str("()")?,
@@ -267,15 +315,35 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
     }
 }
 
-//==================================================================================================
+//------------------------------------------------------------------------------
 
+#[doc(hidden)]
 #[cfg(feature = "alloc")]
-#[doc(alias = "Serializer")]
-pub struct StandardImpl<W: Write> {
+pub struct PrettyImpl<W> {
     dst: W,
-    cfg: Config,
+    cfg: SerializeConfig,
     compounds_stack: Vec<Compound>,
     inline_entries: VecDeque<String>,
+}
+
+#[cfg(feature = "alloc")]
+impl<W> PrettyImpl<W> {
+    fn new(dst: W, cfg: SerializeConfig) -> Self {
+        Self {
+            dst,
+            cfg,
+            compounds_stack: Vec::new(),
+            inline_entries: VecDeque::new(),
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<W> Drop for PrettyImpl<W> {
+    fn drop(&mut self) {
+        debug_assert!(self.compounds_stack.is_empty());
+        debug_assert!(self.inline_entries.is_empty());
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -367,7 +435,7 @@ impl CompoundKind {
 }
 
 #[cfg(feature = "alloc")]
-impl<W: Write> SerializerImpl for StandardImpl<W> {
+impl<W: Write> SerializerImpl for PrettyImpl<W> {
     fn push(&mut self, token: Token) -> fmt::Result {
         let dst = &mut self.dst;
         let cfg = &self.cfg;
@@ -780,24 +848,24 @@ fn write_u8_fmt_02_hex(dst: &mut impl Write, byte: u8) -> fmt::Result {
 }
 
 fn write_quoted_char(dst: &mut impl Write, ch: char) -> fmt::Result {
-    dst.write_str("'")?;
+    dst.write_str(r#"'"#)?;
     write_escaped_char(dst, ch, TextualKind::Char)?;
-    dst.write_str("'")
+    dst.write_str(r#"'"#)
 }
 
 fn write_quoted_string(dst: &mut impl Write, s: &str) -> fmt::Result {
-    dst.write_str("\"")?;
+    dst.write_str(r#"""#)?;
     s.chars()
         .try_for_each(|ch| write_escaped_char(dst, ch, TextualKind::String))?;
-    dst.write_str("\"")
+    dst.write_str(r#"""#)
 }
 
 fn write_quoted_bytes(dst: &mut impl Write, bytes: &[u8]) -> fmt::Result {
-    dst.write_str("b\"")?;
+    dst.write_str(r#"b""#)?;
     bytes
         .into_iter()
         .try_for_each(|&byte| write_escaped_byte(dst, byte, TextualKind::String))?;
-    dst.write_str("\"")
+    dst.write_str(r#"""#)
 }
 
 //------------------------------------------------------------------------------
@@ -812,7 +880,7 @@ fn write_nominal_path(
 
     match path {
         Path::Dual { name, parent } => {
-            if matches!(kind, Kind::Unknown) || style <= Style::Full {
+            if matches!(kind, Kind::Preserve) || style <= Style::Full {
                 dst.write_str(parent)?;
                 dst.write_str("::")?;
                 dst.write_str(name)
@@ -823,14 +891,14 @@ fn write_nominal_path(
             }
         }
         Path::Single { name } => {
-            if matches!(kind, Kind::Unknown | Kind::Variant) || style <= Style::Named {
+            if matches!(kind, Kind::Preserve | Kind::Variant) || style <= Style::Named {
                 dst.write_str(name)
             } else {
                 dst.write_str("_")
             }
         }
         Path::Unspecified => {
-            if matches!(kind, Kind::Unknown | Kind::Struct) {
+            if matches!(kind, Kind::Preserve | Kind::Struct) {
                 dst.write_str("_")
             } else {
                 panic!("missing variant name")
