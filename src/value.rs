@@ -233,9 +233,29 @@ pub enum Value2 {
 }
 
 pub enum NominalPath2 {
-    Unspecified,
+    Underscore,
     Single { name: Str },
     Dual { name: Str, parent: Str },
+}
+
+pub enum NominalPathRef<'a> {
+    Underscore,
+    Single { name: &'a str },
+    Dual { name: &'a str, parent: &'a str },
+}
+
+impl<'a> From<&'a NominalPath2> for NominalPathRef<'a> {
+    #[inline(always)]
+    fn from(value: &'a NominalPath2) -> Self {
+        match value {
+            NominalPath2::Underscore => NominalPathRef::Underscore,
+            NominalPath2::Single { name } => NominalPathRef::Single { name: name.as_ref() },
+            NominalPath2::Dual { name, parent } => NominalPathRef::Dual {
+                name: name.as_ref(),
+                parent: parent.as_ref(),
+            },
+        }
+    }
 }
 
 //------------------------------------------------------------------------------

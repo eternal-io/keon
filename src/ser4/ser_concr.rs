@@ -48,14 +48,14 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     }
     fn serialize_unit_struct(self, name: &'static str) -> fmt::Result {
         self.push(Token::UnitStruct {
-            path: NominalPath::Single { name },
+            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
         })
     }
     fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> fmt::Result {
         let _ = variant_index;
         self.push(Token::UnitStruct {
-            path: NominalPath::Dual {
+            path: NominalPathRef::Dual {
                 name: variant,
                 parent: name,
             },
@@ -80,7 +80,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> fmt::Result {
         self.push(Token::TupleStruct {
-            path: NominalPath::Single { name },
+            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
         })?;
         self.serialize(value)?;
@@ -95,7 +95,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     ) -> fmt::Result {
         let _ = variant_index;
         self.push(Token::TupleStruct {
-            path: NominalPath::Dual {
+            path: NominalPathRef::Dual {
                 name: variant,
                 parent: name,
             },
@@ -113,7 +113,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
         let _ = len;
         self.push(Token::TupleStruct {
-            path: NominalPath::Single { name },
+            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
         })?;
         Ok(self)
@@ -128,7 +128,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         let _ = len;
         let _ = variant_index;
         self.push(Token::TupleStruct {
-            path: NominalPath::Dual {
+            path: NominalPathRef::Dual {
                 name: variant,
                 parent: name,
             },
@@ -145,7 +145,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         let _ = len;
         self.push(Token::MapStruct {
-            path: NominalPath::Single { name },
+            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
         })?;
         Ok(self)
@@ -160,7 +160,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         let _ = len;
         let _ = variant_index;
         self.push(Token::MapStruct {
-            path: NominalPath::Dual {
+            path: NominalPathRef::Dual {
                 name: variant,
                 parent: name,
             },

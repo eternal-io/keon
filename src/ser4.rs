@@ -1,7 +1,7 @@
 use self::private::*;
 use crate::{
     format,
-    value::{self, Float32, Float64},
+    value::{Float32, Float64},
 };
 use core::{
     fmt::{self, Write},
@@ -156,7 +156,7 @@ pub enum NominalPathStyle {
 //==================================================================================================
 
 mod private {
-    use crate::value::{self, Number2, NumberNoSuffix2};
+    pub use crate::value::{NominalPathRef, Number2, NumberNoSuffix2};
 
     pub enum Token<'a> {
         #[cfg(feature = "alloc")]
@@ -165,7 +165,7 @@ mod private {
         Ident(&'a str),
         Unit,
         UnitStruct {
-            path: NominalPath<'a>,
+            path: NominalPathRef<'a>,
             kind: NominalKind,
         },
 
@@ -173,12 +173,12 @@ mod private {
         Sequence,
         Tuple,
         TupleStruct {
-            path: NominalPath<'a>,
+            path: NominalPathRef<'a>,
             kind: NominalKind,
         },
         Map,
         MapStruct {
-            path: NominalPath<'a>,
+            path: NominalPathRef<'a>,
             kind: NominalKind,
         },
 
@@ -199,26 +199,6 @@ mod private {
         NumberNoSuffix(NumberNoSuffix2),
         Str(&'a str),
         Bytes(&'a [u8]),
-    }
-
-    pub enum NominalPath<'a> {
-        Unspecified,
-        Single { name: &'a str },
-        Dual { name: &'a str, parent: &'a str },
-    }
-
-    impl<'a> From<&'a value::NominalPath2> for NominalPath<'a> {
-        #[inline(always)]
-        fn from(value: &'a value::NominalPath2) -> Self {
-            match value {
-                value::NominalPath2::Unspecified => NominalPath::Unspecified,
-                value::NominalPath2::Single { name } => NominalPath::Single { name: name.as_ref() },
-                value::NominalPath2::Dual { name, parent } => NominalPath::Dual {
-                    name: name.as_ref(),
-                    parent: parent.as_ref(),
-                },
-            }
-        }
     }
 
     pub enum NominalKind {
@@ -527,7 +507,7 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
             Ok(stringified)
         };
 
-        let nominal_path_to_string = |path: NominalPath, kind: NominalKind| -> Result<String, fmt::Error> {
+        let nominal_path_to_string = |path: NominalPathRef, kind: NominalKind| -> Result<String, fmt::Error> {
             let mut stringified = String::with_capacity(64);
             write_nominal_path(&mut stringified, path, kind, cfg.nominal_path_style)?;
             Ok(stringified)
@@ -688,31 +668,31 @@ enum Numeric {
     LongUInt { lo: u64, hi: u64 },
 }
 
-impl From<value::Number2> for Numeric {
-    fn from(value: value::Number2) -> Self {
+impl From<Number2> for Numeric {
+    fn from(value: Number2) -> Self {
         match value {
-            value::Number2::Int8(x) => Numeric::Int(x as _),
-            value::Number2::Int16(x) => Numeric::Int(x as _),
-            value::Number2::Int32(x) => Numeric::Int(x as _),
-            value::Number2::Int64(x) => Numeric::Int(x as _),
-            value::Number2::Int128 { lo, hi } => Numeric::LongInt { lo, hi },
-            value::Number2::UInt8(x) => Numeric::UInt(x as _),
-            value::Number2::UInt16(x) => Numeric::UInt(x as _),
-            value::Number2::UInt32(x) => Numeric::UInt(x as _),
-            value::Number2::UInt64(x) => Numeric::UInt(x as _),
-            value::Number2::UInt128 { lo, hi } => Numeric::LongUInt { lo, hi },
-            value::Number2::Float32(Float32(x)) => Numeric::Float32(x),
-            value::Number2::Float64(Float64(x)) => Numeric::Float64(x),
+            Number2::Int8(x) => Numeric::Int(x as _),
+            Number2::Int16(x) => Numeric::Int(x as _),
+            Number2::Int32(x) => Numeric::Int(x as _),
+            Number2::Int64(x) => Numeric::Int(x as _),
+            Number2::Int128 { lo, hi } => Numeric::LongInt { lo, hi },
+            Number2::UInt8(x) => Numeric::UInt(x as _),
+            Number2::UInt16(x) => Numeric::UInt(x as _),
+            Number2::UInt32(x) => Numeric::UInt(x as _),
+            Number2::UInt64(x) => Numeric::UInt(x as _),
+            Number2::UInt128 { lo, hi } => Numeric::LongUInt { lo, hi },
+            Number2::Float32(Float32(x)) => Numeric::Float32(x),
+            Number2::Float64(Float64(x)) => Numeric::Float64(x),
         }
     }
 }
 
-impl From<value::NumberNoSuffix2> for Numeric {
-    fn from(value: value::NumberNoSuffix2) -> Self {
+impl From<NumberNoSuffix2> for Numeric {
+    fn from(value: NumberNoSuffix2) -> Self {
         match value {
-            value::NumberNoSuffix2::Int(x) => Numeric::Int(x),
-            value::NumberNoSuffix2::UInt(x) => Numeric::UInt(x),
-            value::NumberNoSuffix2::Float(Float64(x)) => Numeric::Float64(x),
+            NumberNoSuffix2::Int(x) => Numeric::Int(x),
+            NumberNoSuffix2::UInt(x) => Numeric::UInt(x),
+            NumberNoSuffix2::Float(Float64(x)) => Numeric::Float64(x),
         }
     }
 }
@@ -739,7 +719,7 @@ macro_rules! write_number {
 
 fn write_number(
     dst: &mut impl Write,
-    number: Either<value::Number2, value::NumberNoSuffix2>,
+    number: Either<Number2, NumberNoSuffix2>,
     suffix_control: NumericSuffix,
 ) -> fmt::Result {
     let numeric = number.either_into::<Numeric>();
@@ -759,24 +739,24 @@ fn write_number(
     };
 
     match number {
-        value::Number2::Int128 { .. } => dst.write_str("i128"),
-        value::Number2::UInt128 { .. } => dst.write_str("u128"),
+        Number2::Int128 { .. } => dst.write_str("i128"),
+        Number2::UInt128 { .. } => dst.write_str("u128"),
 
         _ => match suffix_control <= NumericSuffix::IntegerOnly {
             true => match number {
-                value::Number2::Int8(_) => dst.write_str("i8"),
-                value::Number2::Int16(_) => dst.write_str("i16"),
-                value::Number2::Int32(_) => dst.write_str("i32"),
-                value::Number2::Int64(_) => dst.write_str("i64"),
-                value::Number2::UInt8(_) => dst.write_str("u8"),
-                value::Number2::UInt16(_) => dst.write_str("u16"),
-                value::Number2::UInt32(_) => dst.write_str("u32"),
-                value::Number2::UInt64(_) => dst.write_str("u64"),
+                Number2::Int8(_) => dst.write_str("i8"),
+                Number2::Int16(_) => dst.write_str("i16"),
+                Number2::Int32(_) => dst.write_str("i32"),
+                Number2::Int64(_) => dst.write_str("i64"),
+                Number2::UInt8(_) => dst.write_str("u8"),
+                Number2::UInt16(_) => dst.write_str("u16"),
+                Number2::UInt32(_) => dst.write_str("u32"),
+                Number2::UInt64(_) => dst.write_str("u64"),
 
                 _ => match suffix_control <= NumericSuffix::Always {
                     true => match number {
-                        value::Number2::Float32(_) => dst.write_str("f32"),
-                        value::Number2::Float64(_) => dst.write_str("f64"),
+                        Number2::Float32(_) => dst.write_str("f32"),
+                        Number2::Float64(_) => dst.write_str("f64"),
                         _ => unreachable!(),
                     },
                     false => Ok(()),
@@ -872,11 +852,11 @@ fn write_quoted_bytes(dst: &mut impl Write, bytes: &[u8]) -> fmt::Result {
 
 fn write_nominal_path(
     dst: &mut impl Write,
-    path: NominalPath<'_>,
+    path: NominalPathRef<'_>,
     kind: NominalKind,
     style: NominalPathStyle,
 ) -> fmt::Result {
-    use {NominalKind as Kind, NominalPath as Path, NominalPathStyle as Style};
+    use {NominalKind as Kind, NominalPathRef as Path, NominalPathStyle as Style};
 
     match path {
         Path::Dual { name, parent } => {
@@ -897,7 +877,7 @@ fn write_nominal_path(
                 dst.write_str("_")
             }
         }
-        Path::Unspecified => {
+        Path::Underscore => {
             if matches!(kind, Kind::Preserve | Kind::Struct) {
                 dst.write_str("_")
             } else {
