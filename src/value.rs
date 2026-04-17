@@ -1,9 +1,10 @@
-use std::{
+use alloc::collections::BTreeMap;
+use core::{
     cmp::Ordering,
-    collections::BTreeMap,
     hash::{Hash, Hasher},
     mem,
 };
+use either::Either;
 
 pub mod concr_to_value;
 pub mod value_to_concr;
@@ -230,6 +231,11 @@ pub enum Value2 {
     Map(Box<ValuesMap2>),
     /// Nominal map (`struct`).
     MapStruct(Box<(NominalPath2, Struct2)>),
+
+    Nominal {
+        path: Box<NominalPath2>,
+        stru: Option<Box<Either<Vec<Value2>, BTreeMap<Str, Value2>>>>,
+    },
 }
 
 pub enum NominalPath2 {
@@ -244,6 +250,7 @@ pub enum NominalPathRef<'a> {
     Dual { name: &'a str, parent: &'a str },
 }
 
+// TODO: impl Borrow and ToOwned.
 impl<'a> From<&'a NominalPath2> for NominalPathRef<'a> {
     #[inline(always)]
     fn from(value: &'a NominalPath2) -> Self {

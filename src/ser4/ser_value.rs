@@ -78,6 +78,8 @@ impl super::Serialize for Value2 {
                 }
                 ser.push(Token::MapLikeEnd)
             }
+
+            Value2::Nominal { path, stru } => todo!(),
         }
     }
 }
