@@ -12,29 +12,48 @@ pub mod source;
 pub const DEFAULT_RECURSION_LIMIT: isize = 160;
 
 pub trait Deserialize<'de>: Sized {
-    fn deserialize_with<R: Source<'de>>(der: &mut Deserializer<R>) -> Result<Self>;
+    fn deserialize_with<R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Self>;
 }
 
 pub struct Deserializer<R> {
     src: R,
     ttl: isize,
     buf: Vec<u8>,
-    stack: Vec<PunctStart>,
 }
 
-impl<'de, R: Source<'de>> Deserializer<R> {
+impl<R> Deserializer<R> {
     pub fn new(src: R) -> Self {
         Self {
             src,
             ttl: DEFAULT_RECURSION_LIMIT,
             buf: Vec::new(),
-            stack: Vec::new(),
         }
     }
 
-    pub fn parse<T>(&mut self) -> Result<T> {
+    fn ttl_enter(&mut self) -> ResultKind {
+        self.ttl -= 1;
+        if self.ttl < 0 {
+            Err(ErrorKind::ExceededRecursionLimit)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ttl_leave(&mut self) {
+        self.ttl += 1;
+    }
+}
+
+impl<'de, R: Source<'de>> Deserializer<R> {
+    pub fn deserialize<T: Deserialize<'de>>(&mut self) -> Result<T> {
         if self.ttl < 0 {
             return Err(todo!("previous errored"));
+        }
+
+        let res = T::deserialize_with(self);
+
+        if res.is_err() {
+            self.ttl = -1; // !!
         }
 
         todo!()

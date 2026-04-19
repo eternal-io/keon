@@ -13,12 +13,8 @@ pub enum Indicator<'de> {
     NominalPath(NominalPathRef<'de>),
 }
 
-pub enum Punctuation {
-    Start(PunctStart),
-    Delim(PunctDelim),
-}
-
 #[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PunctStart {
     /** `(` */ Paren,
     /** `[` */ Brack,
@@ -26,6 +22,7 @@ pub enum PunctStart {
 }
 
 #[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PunctDelim {
     /** `)` */ Paren,
     /** `]` */ Brack,
@@ -33,6 +30,35 @@ pub enum PunctDelim {
     /** `,` */ Comma,
     /** `=>`*/ FatArrow,
     /** `;` */ Semicolon,
+               EOF,
+}
+
+impl PunctStart {
+    pub(crate) fn expect(&self, punct: Self) -> ResultKind {
+        (*self == punct).then_some(()).ok_or_else(|| match punct {
+            PunctStart::Paren => todo!(),
+            PunctStart::Brack => todo!(),
+            PunctStart::Brace => todo!(),
+        })
+    }
+}
+
+impl PunctDelim {
+    pub(crate) fn expect(&self, punct: Self) -> ResultKind {
+        (*self == punct).then_some(()).ok_or_else(|| match punct {
+            PunctDelim::Paren => todo!(),
+            PunctDelim::Brack => todo!(),
+            PunctDelim::Brace => todo!(),
+            PunctDelim::Comma => todo!(),
+            PunctDelim::FatArrow => todo!(),
+            PunctDelim::Semicolon => todo!(),
+            PunctDelim::EOF => todo!(),
+        })
+    }
+
+    pub(crate) fn expects(&self, puncts: &[Self], reason: ErrorKind) -> ResultKind {
+        puncts.contains(self).then_some(()).ok_or(reason)
+    }
 }
 
 pub enum NumberKind {
@@ -69,7 +95,8 @@ macro_rules! parse_concr {
 }
 
 /*
-    Implementor methods that start with `begin_`, `seek_` must `eat_ws` first, and then `set_position`.
+    Implementor methods that start with `begin_`, `seek_` must `eat_delim` first,
+    and then `eat_ws`, and then `set_position` before consume leading content.
 */
 pub trait Source<'de>: Sealed {
     fn set_position(&mut self);
@@ -104,11 +131,18 @@ pub trait Source<'de>: Sealed {
     /// Consume the leading whitespace and comments.
     fn eat_ws(&mut self) -> ResultKind;
 
-    /// Discard the seeked `punct`. Only takes effect after `seek_punct`.
-    fn eat_punct(&mut self);
+    /// Discard the seeked 'delim'. Only takes effect after `seek_delim`.
+    ///
+    /// TODO: Should we panic if `begin_*` or `parse_*` is called before `eat_delim`?
+    fn eat_delim(&mut self);
 
-    /// Seek the next `punct` without consume it. Returns `None` if EOF encountered.
-    fn seek_punct(&mut self) -> ResultKind<Option<Punctuation>>;
+    /// Seek the next 'delim' without consume it. Returns `None` if not found.
+    fn seek_delim(&mut self) -> ResultKind<Option<PunctDelim>>;
+
+    /// Seek the next 'delim' without consume it. Returns `Err` if not found.
+    fn seek_delim_expected(&mut self) -> ResultKind<PunctDelim> {
+        self.seek_delim()?.ok_or(ErrorKind::ExpectedDelimiter)
+    }
 
     parse_concr!(parse_char, char);
     parse_concr!(parse_byte, u8);

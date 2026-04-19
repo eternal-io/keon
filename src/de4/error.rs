@@ -21,6 +21,8 @@ pub enum ErrorKind {
     Corrupted,
     WontImplement,
     ExceededRecursionLimit,
+
+    ExpectedDelimiter,
 }
 
 impl core::error::Error for ErrorKind {}

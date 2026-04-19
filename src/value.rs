@@ -250,7 +250,19 @@ pub enum NominalPathRef<'a> {
     Dual { name: &'a str, parent: &'a str },
 }
 
-// TODO: impl Borrow and ToOwned.
+impl From<NominalPathRef<'_>> for NominalPath2 {
+    fn from(value: NominalPathRef<'_>) -> Self {
+        match value {
+            NominalPathRef::Underscore => NominalPath2::Underscore,
+            NominalPathRef::Single { name } => NominalPath2::Single { name: name.into() },
+            NominalPathRef::Dual { name, parent } => NominalPath2::Dual {
+                name: name.into(),
+                parent: parent.into(),
+            },
+        }
+    }
+}
+
 impl<'a> From<&'a NominalPath2> for NominalPathRef<'a> {
     #[inline(always)]
     fn from(value: &'a NominalPath2) -> Self {
