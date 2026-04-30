@@ -1,8 +1,9 @@
 use super::{error::*, source::*};
+use crate::value::NominalPathRef;
 use core::ops::{Deref, DerefMut};
 use either::Either;
 use serde::{
-    de::{DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
+    de::{value::StrDeserializer, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
     Deserialize, Deserializer,
 };
 
@@ -129,44 +130,58 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         }
     }
 
+    fn deserialize_tuple<V: Visitor<'de>>(mut self, len: usize, visitor: V) -> ResultKind<V::Value> {
+        let _ = len;
+        self.ttl_enter()?;
+        self.begin_tuple()?;
+        let val = visitor.visit_seq(self.reborrow())?;
+        self.seek_delim_expected()?.expect(PunctDelim::Paren)?;
+        self.eat_delim();
+        self.ttl_leave();
+        Ok(val)
+    }
     fn deserialize_seq<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
         self.ttl_enter()?;
         self.begin_sequence()?;
         let val = visitor.visit_seq(self.reborrow())?;
         self.seek_delim_expected()?.expect(PunctDelim::Brack)?;
+        self.eat_delim();
         self.ttl_leave();
         Ok(val)
     }
-
-    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, visitor: V) -> ResultKind<V::Value> {
-        todo!()
+    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+        self.deserialize_map_like::<V, false>(visitor)
     }
 
-    fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
-        todo!()
+    fn deserialize_unit_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
+        self.deserialize_struct_name(name)?;
+        visitor.visit_unit()
     }
-    fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
-        todo!()
+    fn deserialize_newtype_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
+        self.deserialize_struct_name(name)?;
+        self.ttl_enter()?;
+        let val = visitor.visit_newtype_struct(self.reborrow())?;
+        self.ttl_leave();
+        Ok(val)
     }
     fn deserialize_tuple_struct<V: Visitor<'de>>(
-        self,
+        mut self,
         name: &'static str,
         len: usize,
         visitor: V,
     ) -> ResultKind<V::Value> {
-        todo!()
+        self.deserialize_struct_name(name)?;
+        self.deserialize_tuple(len, visitor)
     }
     fn deserialize_struct<V: Visitor<'de>>(
-        self,
+        mut self,
         name: &'static str,
         fields: &'static [&'static str],
         visitor: V,
     ) -> ResultKind<V::Value> {
-        todo!()
-    }
-
-    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
-        todo!()
+        let _ = fields;
+        self.deserialize_struct_name(name)?;
+        self.deserialize_struct_body(visitor)
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
@@ -175,11 +190,43 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         variants: &'static [&'static str],
         visitor: V,
     ) -> ResultKind<V::Value> {
-        todo!()
+        let _ = variants;
+        visitor.visit_enum(EnumAccessor(name, self))
     }
 
+    // NOTE: This method is called when deserialize struct field name.
     fn deserialize_identifier<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
-        todo!()
+        visitor.visit_str(self.0.src.begin_identifier(&mut self.0.buf)?)
+    }
+}
+
+impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
+    #[inline]
+    fn deserialize_struct_name(&mut self, name: &'static str) -> ResultKind {
+        if let NominalPathRef::Single { name: name_parsed } | NominalPathRef::Dual { name: name_parsed, .. } =
+            self.0.src.begin_nominal(&mut self.0.buf)?
+        {
+            if name_parsed != name {
+                return Err(ErrorKind::ExpectedAnotherStruct { name });
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn deserialize_struct_body<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+        self.deserialize_map_like::<V, true>(visitor)
+    }
+
+    #[inline]
+    fn deserialize_map_like<V: Visitor<'de>, const STRUCT_MODE: bool>(mut self, visitor: V) -> ResultKind<V::Value> {
+        self.ttl_enter()?;
+        self.begin_map()?;
+        let val = visitor.visit_map(MapAccessor::<R, STRUCT_MODE>(self.reborrow()))?;
+        self.seek_delim_expected()?.expect(PunctDelim::Brace)?;
+        self.eat_delim();
+        self.ttl_leave();
+        Ok(val)
     }
 }
 
@@ -200,5 +247,85 @@ impl<'de, R: Source<'de>> SeqAccess<'de> for DeserializerWrapper<'_, R> {
         }
 
         Ok(Some(val))
+    }
+}
+
+struct MapAccessor<'a, R, const STRUCT_MODE: bool>(DeserializerWrapper<'a, R>);
+
+impl<'a, 'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'_, R, STRUCT_MODE> {
+    type Error = ErrorKind;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+        if let Some(PunctDelim::Brace) = self.0.seek_delim()? {
+            return Ok(None);
+        }
+
+        let val = seed.deserialize(self.0.reborrow())?;
+
+        if STRUCT_MODE {
+            self.0.seek_delim_expected()?.expect(PunctDelim::Colon)?;
+        } else {
+            self.0.seek_delim_expected()?.expect(PunctDelim::FatArrow)?;
+        }
+        self.0.eat_delim();
+
+        Ok(Some(val))
+    }
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+        let val = seed.deserialize(self.0.reborrow())?;
+
+        if let PunctDelim::Comma = self.0.seek_delim_expected()? {
+            self.0.eat_delim();
+        }
+
+        Ok(val)
+    }
+}
+
+struct EnumAccessor<'a, R>(&'static str, DeserializerWrapper<'a, R>);
+
+impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'a, R> {
+    type Error = ErrorKind;
+    type Variant = DeserializerWrapper<'a, R>;
+
+    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
+        let EnumAccessor(parent, der) = self;
+        let name = match der.0.src.begin_nominal(&mut der.0.buf)? {
+            NominalPathRef::Underscore => return Err(ErrorKind::ExpectedVariantName),
+            NominalPathRef::Single { name } => name,
+            NominalPathRef::Dual {
+                name,
+                parent: parent_parsed,
+            } => {
+                if parent_parsed != parent {
+                    return Err(ErrorKind::ExpectedAnotherEnum { name: parent });
+                }
+                name
+            }
+        };
+
+        Ok((seed.deserialize(StrDeserializer::<ErrorKind>::new(name))?, der))
+    }
+}
+
+impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
+    type Error = ErrorKind;
+
+    fn unit_variant(mut self) -> ResultKind<()> {
+        self.seek_delim_expected()?;
+        Ok(())
+    }
+    fn newtype_variant_seed<T: DeserializeSeed<'de>>(mut self, seed: T) -> ResultKind<T::Value> {
+        self.ttl_enter()?;
+        let val = seed.deserialize(self.reborrow())?;
+        self.ttl_leave();
+        Ok(val)
+    }
+    fn tuple_variant<V: Visitor<'de>>(self, len: usize, visitor: V) -> ResultKind<V::Value> {
+        self.deserialize_tuple(len, visitor)
+    }
+    fn struct_variant<V: Visitor<'de>>(self, fields: &'static [&'static str], visitor: V) -> ResultKind<V::Value> {
+        let _ = fields;
+        self.deserialize_struct_body(visitor)
     }
 }

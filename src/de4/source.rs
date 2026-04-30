@@ -28,6 +28,7 @@ pub enum PunctDelim {
     /** `]` */ Brack,
     /** `}` */ Brace,
     /** `,` */ Comma,
+    /** `:` */ Colon,
     /** `=>`*/ FatArrow,
     /** `;` */ Semicolon,
                EOF,
@@ -50,6 +51,7 @@ impl PunctDelim {
             PunctDelim::Brack => todo!(),
             PunctDelim::Brace => todo!(),
             PunctDelim::Comma => todo!(),
+            PunctDelim::Colon => todo!(),
             PunctDelim::FatArrow => todo!(),
             PunctDelim::Semicolon => todo!(),
             PunctDelim::EOF => todo!(),
@@ -95,8 +97,9 @@ macro_rules! parse_concr {
 }
 
 /*
-    Implementor methods that start with `begin_`, `seek_` must `eat_delim` first,
-    and then `eat_ws`, and then `set_position` before consume leading content.
+    NOTE:
+    Implementor methods that start with `begin_` or `seek_`, must `eat_ws` first,
+    and then `set_position` before consume leading content.
 */
 pub trait Source<'de>: Sealed {
     fn set_position(&mut self);
@@ -126,14 +129,18 @@ pub trait Source<'de>: Sealed {
 
     fn begin_map(&mut self) -> ResultKind;
 
-    fn begin_nominal<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>;
+    fn begin_nominal<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
+    where
+        'de: 't;
+
+    fn begin_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<&'t str>
+    where
+        'de: 't;
 
     /// Consume the leading whitespace and comments.
     fn eat_ws(&mut self) -> ResultKind;
 
-    /// Discard the seeked 'delim'. Only takes effect after `seek_delim`.
-    ///
-    /// TODO: Should we panic if `begin_*` or `parse_*` is called before `eat_delim`?
+    /// Consume the seeked 'delim'. Only takes effect after `seek_delim`.
     fn eat_delim(&mut self);
 
     /// Seek the next 'delim' without consume it. Returns `None` if not found.

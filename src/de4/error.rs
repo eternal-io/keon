@@ -23,6 +23,11 @@ pub enum ErrorKind {
     ExceededRecursionLimit,
 
     ExpectedDelimiter,
+    ExpectedIdentifier,
+    ExpectedNominalPath,
+    ExpectedVariantName,
+    ExpectedAnotherEnum { name: &'static str },
+    ExpectedAnotherStruct { name: &'static str },
 }
 
 impl core::error::Error for ErrorKind {}
