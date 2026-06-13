@@ -1,7 +1,7 @@
-use self::private::*;
 use crate::{
     format,
-    value::{Float32, Float64},
+    value::{Float32, Float64, NominalPathRef, Number2, NumberNoSuffix2},
+    Sealed,
 };
 use core::{
     fmt::{self, Write},
@@ -16,21 +16,17 @@ mod ser_concr;
 mod ser_value;
 
 #[cfg(feature = "alloc")]
-pub fn stringify<T: Serialize>(value: &T) -> String {
+pub fn stringify<T: Serialize>(value: &T) -> Result<String, fmt::Error> {
     let mut stringified = String::with_capacity(256);
-    /* writing a string is unlikely to return an error */
-    Serializer::new(&mut stringified, SerializeConfig::minimal())
-        .serialize(value)
-        .unwrap();
-    stringified
+    Serializer::new(&mut stringified, SerializeConfig::minimal()).serialize(value)?;
+    Ok(stringified)
 }
 
 #[cfg(feature = "alloc")]
-pub fn stringify_pretty<T: Serialize>(value: &T, cfg: SerializeConfig) -> String {
+pub fn stringify_pretty<T: Serialize>(value: &T, cfg: SerializeConfig) -> Result<String, fmt::Error> {
     let mut stringified = String::with_capacity(256);
-    /* writing a string is unlikely to return an error */
-    Serializer::new_pretty(&mut stringified, cfg).serialize(value).unwrap();
-    stringified
+    Serializer::new_pretty(&mut stringified, cfg).serialize(value)?;
+    Ok(stringified)
 }
 
 //------------------------------------------------------------------------------
@@ -39,37 +35,54 @@ pub trait Serialize {
     fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut Serializer<Impl>) -> fmt::Result;
 }
 
-#[doc(hidden)]
-pub trait SerializerImpl {
+#[expect(private_bounds, private_interfaces, reason = "Sealed")]
+pub trait SerializerImpl: Sealed {
+    #[doc(hidden)]
     fn push(&mut self, token: Token<'_>) -> fmt::Result;
 }
 
-pub struct Serializer<Impl>(Impl);
+pub struct Serializer<Impl> {
+    ser: Impl,
+    ttl: isize,
+}
 
 impl<W: Write> Serializer<FastImpl<W>> {
     pub fn new(dst: W, cfg: SerializeConfig) -> Self {
-        Self(FastImpl::new(dst, cfg))
+        Self {
+            ttl: cfg.recursion_limit_10x as isize * 10,
+            ser: FastImpl::new(dst, cfg),
+        }
     }
 }
 
 impl<W: Write> Serializer<PrettyImpl<W>> {
     pub fn new_pretty(dst: W, cfg: SerializeConfig) -> Self {
-        Self(PrettyImpl::new(dst, cfg))
+        Self {
+            ttl: cfg.recursion_limit_10x as isize * 10,
+            ser: PrettyImpl::new(dst, cfg),
+        }
     }
 }
 
 impl<Impl: SerializerImpl> Serializer<Impl> {
     #[inline(always)]
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
-        self.0.push(token)
+        self.ser.push(token)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn serialize<T>(&mut self, value: &T) -> fmt::Result
     where
         T: ?Sized + Serialize,
     {
-        value.serialize_with(self)
+        if self.ttl < 0 {
+            return Err(fmt::Error);
+        }
+        self.ttl -= 1;
+        value.serialize_with(self)?;
+        self.ttl += 1;
+
+        Ok(())
     }
 
     #[inline]
@@ -92,6 +105,7 @@ pub struct SerializeConfig {
     pub numeric_suffix: NumericSuffix,
     pub nominal_path_style: NominalPathStyle,
     pub map_like_inline_entries: u8,
+    pub recursion_limit_10x: u8,
 }
 
 impl SerializeConfig {
@@ -101,6 +115,7 @@ impl SerializeConfig {
             numeric_suffix: NumericSuffix::LongIntegerOnly,
             nominal_path_style: NominalPathStyle::Minimal,
             map_like_inline_entries: 3,
+            recursion_limit_10x: 16,
         }
     }
 }
@@ -112,6 +127,7 @@ impl Default for SerializeConfig {
             numeric_suffix: NumericSuffix::LongIntegerOnly,
             nominal_path_style: NominalPathStyle::Full,
             map_like_inline_entries: 3,
+            recursion_limit_10x: 16,
         }
     }
 }
@@ -155,62 +171,57 @@ pub enum NominalPathStyle {
 
 //==================================================================================================
 
-mod private {
-    pub use crate::value::{NominalPathRef, Number2, NumberNoSuffix2};
+pub(crate) enum Token<'a> {
+    #[cfg(feature = "alloc")]
+    Stringified(String),
+    Literal(Literal<'a>),
+    Ident(&'a str),
+    Unit,
+    UnitStruct {
+        kind: NominalKind,
+        path: NominalPathRef<'a>,
+    },
 
-    pub enum Token<'a> {
-        #[cfg(feature = "alloc")]
-        Stringified(String),
-        Literal(Literal<'a>),
-        Ident(&'a str),
-        Unit,
-        UnitStruct {
-            path: NominalPathRef<'a>,
-            kind: NominalKind,
-        },
+    Maybe,
+    Sequence,
+    Tuple,
+    TupleStruct {
+        kind: NominalKind,
+        path: NominalPathRef<'a>,
+    },
+    Map,
+    MapStruct {
+        kind: NominalKind,
+        path: NominalPathRef<'a>,
+    },
 
-        Maybe,
-        Sequence,
-        Tuple,
-        TupleStruct {
-            path: NominalPathRef<'a>,
-            kind: NominalKind,
-        },
-        Map,
-        MapStruct {
-            path: NominalPathRef<'a>,
-            kind: NominalKind,
-        },
+    MaybeEnd,
+    SequenceEnd,
+    TupleLikeEnd,
+    MapLikeEnd,
 
-        MaybeEnd,
-        SequenceEnd,
-        TupleLikeEnd,
-        MapLikeEnd,
+    FatArrow,
+    Colon,
+    Comma,
+}
 
-        FatArrow,
-        Colon,
-        Comma,
-    }
+pub(crate) enum Literal<'a> {
+    Bool(bool),
+    Char(char),
+    Number(Number2),
+    NumberNoSuffix(NumberNoSuffix2),
+    Str(&'a str),
+    Bytes(&'a [u8]),
+}
 
-    pub enum Literal<'a> {
-        Bool(bool),
-        Char(char),
-        Number(Number2),
-        NumberNoSuffix(NumberNoSuffix2),
-        Str(&'a str),
-        Bytes(&'a [u8]),
-    }
-
-    pub enum NominalKind {
-        Preserve,
-        Variant,
-        Struct,
-    }
+pub(crate) enum NominalKind {
+    NoChange,
+    Variant,
+    Struct,
 }
 
 //------------------------------------------------------------------------------
 
-#[doc(hidden)]
 pub struct FastImpl<W> {
     dst: W,
     cfg: SerializeConfig,
@@ -229,7 +240,11 @@ impl<W> Drop for FastImpl<W> {
     }
 }
 
+impl<W> Sealed for FastImpl<W> {}
+
+#[expect(private_interfaces, reason = "Sealed")]
 impl<W: Write> SerializerImpl for FastImpl<W> {
+    #[doc(hidden)]
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
         let dst = &mut self.dst;
         let cfg = &self.cfg;
@@ -260,19 +275,19 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
             Token::Literal(literal) => write_literal(dst, literal, cfg.numeric_suffix)?,
             Token::Ident(ident) => dst.write_str(ident)?,
             Token::Unit => dst.write_str("()")?,
-            Token::UnitStruct { path, kind } => write_nominal_path(dst, path, kind, cfg.nominal_path_style)?,
+            Token::UnitStruct { kind, path } => write_nominal_path(dst, kind, path, cfg.nominal_path_style)?,
 
             Token::Maybe => dst.write_str("?")?,
             Token::Sequence => dst.write_str("[")?,
             Token::Tuple | Token::TupleStruct { .. } => {
-                if let Token::TupleStruct { path, kind } = token {
-                    write_nominal_path(dst, path, kind, cfg.nominal_path_style)?;
+                if let Token::TupleStruct { kind, path } = token {
+                    write_nominal_path(dst, kind, path, cfg.nominal_path_style)?;
                 }
                 dst.write_str("(")?;
             }
             Token::Map | Token::MapStruct { .. } => {
-                if let Token::TupleStruct { path, kind } = token {
-                    write_nominal_path(dst, path, kind, cfg.nominal_path_style)?;
+                if let Token::TupleStruct { kind, path } = token {
+                    write_nominal_path(dst, kind, path, cfg.nominal_path_style)?;
                 }
                 dst.write_str("{")?;
             }
@@ -297,7 +312,6 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
 
 //------------------------------------------------------------------------------
 
-#[doc(hidden)]
 #[cfg(feature = "alloc")]
 pub struct PrettyImpl<W> {
     dst: W,
@@ -415,7 +429,12 @@ impl CompoundKind {
 }
 
 #[cfg(feature = "alloc")]
+impl<W> Sealed for PrettyImpl<W> {}
+
+#[cfg(feature = "alloc")]
+#[expect(private_interfaces, reason = "Sealed")]
 impl<W: Write> SerializerImpl for PrettyImpl<W> {
+    #[doc(hidden)]
     fn push(&mut self, token: Token) -> fmt::Result {
         let dst = &mut self.dst;
         let cfg = &self.cfg;
@@ -507,9 +526,9 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
             Ok(stringified)
         };
 
-        let nominal_path_to_string = |path: NominalPathRef, kind: NominalKind| -> Result<String, fmt::Error> {
+        let nominal_path_to_string = |kind: NominalKind, path: NominalPathRef| -> Result<String, fmt::Error> {
             let mut stringified = String::with_capacity(64);
-            write_nominal_path(&mut stringified, path, kind, cfg.nominal_path_style)?;
+            write_nominal_path(&mut stringified, kind, path, cfg.nominal_path_style)?;
             Ok(stringified)
         };
 
@@ -520,7 +539,7 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
                     Token::Literal(literal) => literal_to_string(literal)?,
                     Token::Ident(ident) => ident.to_string(),
                     Token::Unit => "()".to_string(),
-                    Token::UnitStruct { path, kind } => nominal_path_to_string(path, kind)?,
+                    Token::UnitStruct { kind, path } => nominal_path_to_string(kind, path)?,
                     _ => unreachable!(),
                 };
                 match self.compounds_stack.last() {
@@ -624,12 +643,12 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
                     Token::Maybe => CompoundKind::Maybe,
                     Token::Sequence => CompoundKind::Sequence,
                     Token::Tuple => CompoundKind::TupleLike(None),
-                    Token::TupleStruct { path, kind } => {
-                        CompoundKind::TupleLike(Some(nominal_path_to_string(path, kind)?))
+                    Token::TupleStruct { kind, path } => {
+                        CompoundKind::TupleLike(Some(nominal_path_to_string(kind, path)?))
                     }
                     Token::Map => CompoundKind::MapLikeLhs(None),
-                    Token::MapStruct { path, kind } => {
-                        CompoundKind::MapLikeLhs(Some(nominal_path_to_string(path, kind)?))
+                    Token::MapStruct { kind, path } => {
+                        CompoundKind::MapLikeLhs(Some(nominal_path_to_string(kind, path)?))
                     }
                     _ => unreachable!(),
                 };
@@ -852,33 +871,33 @@ fn write_quoted_bytes(dst: &mut impl Write, bytes: &[u8]) -> fmt::Result {
 
 fn write_nominal_path(
     dst: &mut impl Write,
-    path: NominalPathRef<'_>,
     kind: NominalKind,
+    path: NominalPathRef<'_>,
     style: NominalPathStyle,
 ) -> fmt::Result {
     use {NominalKind as Kind, NominalPathRef as Path, NominalPathStyle as Style};
 
     match path {
         Path::Dual { name, parent } => {
-            if matches!(kind, Kind::Preserve) || style <= Style::Full {
-                dst.write_str(parent)?;
+            if matches!(kind, Kind::NoChange) || style <= Style::Full {
+                dst.write_str(&parent)?;
                 dst.write_str("::")?;
-                dst.write_str(name)
+                dst.write_str(&name)
             } else if matches!(kind, Kind::Variant) || style <= Style::Named {
-                dst.write_str(name)
+                dst.write_str(&name)
             } else {
                 dst.write_str("_")
             }
         }
         Path::Single { name } => {
-            if matches!(kind, Kind::Preserve | Kind::Variant) || style <= Style::Named {
-                dst.write_str(name)
+            if matches!(kind, Kind::NoChange | Kind::Variant) || style <= Style::Named {
+                dst.write_str(&name)
             } else {
                 dst.write_str("_")
             }
         }
         Path::Underscore => {
-            if matches!(kind, Kind::Preserve | Kind::Struct) {
+            if matches!(kind, Kind::NoChange | Kind::Struct) {
                 dst.write_str("_")
             } else {
                 panic!("missing variant name")

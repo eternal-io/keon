@@ -1,6 +1,6 @@
 use core::fmt;
 
-pub type Result<T = ()> = ::core::result::Result<T, Error>;
+pub(crate) type Result<T = ()> = ::core::result::Result<T, Error>;
 
 pub(crate) type ResultKind<T = ()> = ::core::result::Result<T, ErrorKind>;
 

@@ -17,7 +17,7 @@ pub trait Deserialize<'de>: Sized {
 
 pub struct Deserializer<R> {
     src: R,
-    ttl: isize,
+    ttl: isize, // A negative TTL means the deserializer is corrupted.
     buf: Vec<u8>,
 }
 
@@ -31,11 +31,11 @@ impl<R> Deserializer<R> {
     }
 
     fn ttl_enter(&mut self) -> ResultKind {
-        self.ttl -= 1;
-        if self.ttl < 0 {
-            Err(ErrorKind::ExceededRecursionLimit)
-        } else {
+        if self.ttl >= 0 {
+            self.ttl -= 1;
             Ok(())
+        } else {
+            Err(ErrorKind::ExceededRecursionLimit)
         }
     }
 
@@ -47,13 +47,15 @@ impl<R> Deserializer<R> {
 impl<'de, R: Source<'de>> Deserializer<R> {
     pub fn deserialize<T: Deserialize<'de>>(&mut self) -> Result<T> {
         if self.ttl < 0 {
-            return Err(todo!("previous errored"));
+            return Err(todo!("corrupted"));
         }
 
         let res = T::deserialize_with(self);
 
         if res.is_err() {
-            self.ttl = -1; // !!
+            self.ttl = -999; // Mark the deserializer as corrupted.
+
+            // TODO: fix error location.
         }
 
         todo!()

@@ -15,6 +15,8 @@ pub use crate::{
     value::Value,
 };
 
+trait Sealed {}
+
 mod format {
     use core::num::NonZeroU8;
     use lexical_core::{

@@ -1,7 +1,7 @@
-use self::private::*;
 use super::*;
+use crate::Sealed;
 
-pub enum Indicator<'de> {
+pub(crate) enum Indicator<'de> {
     Unit,
     Bool(bool),
     Char(char),
@@ -15,7 +15,7 @@ pub enum Indicator<'de> {
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PunctStart {
+pub(crate) enum PunctStart {
     /** `(` */ Paren,
     /** `[` */ Brack,
     /** `{` */ Brace,
@@ -23,7 +23,7 @@ pub enum PunctStart {
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PunctDelim {
+pub(crate) enum PunctDelim {
     /** `)` */ Paren,
     /** `]` */ Brack,
     /** `}` */ Brace,
@@ -63,7 +63,7 @@ impl PunctDelim {
     }
 }
 
-pub enum NumberKind {
+pub(crate) enum NumberKind {
     Byte,
     Digit,
     Negative,
@@ -71,22 +71,18 @@ pub enum NumberKind {
     NotANumber,
 }
 
-pub enum StringKind {
+pub(crate) enum StringKind {
     Normal,
     Raw(usize),
     Paragraph(usize),
 }
 
-pub enum BytesKind {
+pub(crate) enum BytesKind {
     Normal,
     Raw(usize),
     Base64,
     Base32,
     Base16,
-}
-
-mod private {
-    pub trait Sealed {}
 }
 
 macro_rules! parse_concr {
@@ -100,7 +96,10 @@ macro_rules! parse_concr {
     NOTE:
     Implementor methods that start with `begin_` or `seek_`, must `eat_ws` first,
     and then `set_position` before consume leading content.
+
+    TODO: #[doc(hidden)] everything
 */
+#[expect(private_bounds, private_interfaces, reason = "Sealed")]
 pub trait Source<'de>: Sealed {
     fn set_position(&mut self);
 

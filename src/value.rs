@@ -3,8 +3,8 @@ use core::{
     cmp::Ordering,
     hash::{Hash, Hasher},
     mem,
+    ops::Deref,
 };
-use either::Either;
 
 pub mod concr_to_value;
 pub mod value_to_concr;
@@ -171,7 +171,7 @@ impl_into!(v: f64  => Number2::Float64(v.into()));
 
 pub type Values2 = Vec<Value2>;
 pub type ValuesMap2 = BTreeMap<Value2, Value2>;
-pub type Struct2 = BTreeMap<Str, Value2>;
+pub type Struct2 = BTreeMap<Ident, Value2>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Number2 {
@@ -194,6 +194,50 @@ pub enum NumberNoSuffix2 {
     Int(i64),
     UInt(u64),
     Float(Float64),
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ident(Box<str>);
+
+impl Ident {
+    // TODO: convenient methods
+}
+
+impl Deref for Ident {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl From<IdentRef<'_>> for Ident {
+    fn from(value: IdentRef<'_>) -> Self {
+        Self(value.0.into())
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct IdentRef<'a>(&'a str);
+
+impl<'a> IdentRef<'a> {
+    pub(crate) fn new_unchecked(ident: &'a str) -> Self {
+        Self(ident)
+    }
+}
+
+impl Deref for IdentRef<'_> {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a> From<&'a Ident> for IdentRef<'a> {
+    fn from(value: &'a Ident) -> Self {
+        Self(value)
+    }
 }
 
 pub enum Value2 {
@@ -231,23 +275,22 @@ pub enum Value2 {
     Map(Box<ValuesMap2>),
     /// Nominal map (`struct`).
     MapStruct(Box<(NominalPath2, Struct2)>),
-
-    Nominal {
-        path: Box<NominalPath2>,
-        stru: Option<Box<Either<Vec<Value2>, BTreeMap<Str, Value2>>>>,
-    },
 }
 
 pub enum NominalPath2 {
     Underscore,
-    Single { name: Str },
-    Dual { name: Str, parent: Str },
+    Single { name: Ident },
+    Dual { name: Ident, parent: Ident },
 }
 
-pub enum NominalPathRef<'a> {
+impl NominalPath2 {
+    // TODO: convenient methods
+}
+
+pub(crate) enum NominalPathRef<'a> {
     Underscore,
-    Single { name: &'a str },
-    Dual { name: &'a str, parent: &'a str },
+    Single { name: IdentRef<'a> },
+    Dual { name: IdentRef<'a>, parent: IdentRef<'a> },
 }
 
 impl From<NominalPathRef<'_>> for NominalPath2 {
@@ -268,10 +311,10 @@ impl<'a> From<&'a NominalPath2> for NominalPathRef<'a> {
     fn from(value: &'a NominalPath2) -> Self {
         match value {
             NominalPath2::Underscore => NominalPathRef::Underscore,
-            NominalPath2::Single { name } => NominalPathRef::Single { name: name.as_ref() },
+            NominalPath2::Single { name } => NominalPathRef::Single { name: name.into() },
             NominalPath2::Dual { name, parent } => NominalPathRef::Dual {
-                name: name.as_ref(),
-                parent: parent.as_ref(),
+                name: name.into(),
+                parent: parent.into(),
             },
         }
     }

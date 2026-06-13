@@ -206,7 +206,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
         if let NominalPathRef::Single { name: name_parsed } | NominalPathRef::Dual { name: name_parsed, .. } =
             self.0.src.begin_nominal(&mut self.0.buf)?
         {
-            if name_parsed != name {
+            if *name_parsed != *name {
                 return Err(ErrorKind::ExpectedAnotherStruct { name });
             }
         }
@@ -297,14 +297,14 @@ impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'a, R> {
                 name,
                 parent: parent_parsed,
             } => {
-                if parent_parsed != parent {
+                if *parent_parsed != *parent {
                     return Err(ErrorKind::ExpectedAnotherEnum { name: parent });
                 }
                 name
             }
         };
 
-        Ok((seed.deserialize(StrDeserializer::<ErrorKind>::new(name))?, der))
+        Ok((seed.deserialize(StrDeserializer::<ErrorKind>::new(&name))?, der))
     }
 }
 

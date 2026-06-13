@@ -1,4 +1,5 @@
-use super::{private::*, SerializerImpl};
+use super::{Literal, NominalKind, NominalPathRef, SerializerImpl, Token};
+use crate::value::IdentRef;
 use core::fmt;
 use serde::{
     ser::{
@@ -48,18 +49,20 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     }
     fn serialize_unit_struct(self, name: &'static str) -> fmt::Result {
         self.push(Token::UnitStruct {
-            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
+            path: NominalPathRef::Single {
+                name: IdentRef::new_unchecked(name),
+            },
         })
     }
     fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> fmt::Result {
         let _ = variant_index;
         self.push(Token::UnitStruct {
-            path: NominalPathRef::Dual {
-                name: variant,
-                parent: name,
-            },
             kind: NominalKind::Variant,
+            path: NominalPathRef::Dual {
+                name: IdentRef::new_unchecked(variant),
+                parent: IdentRef::new_unchecked(name),
+            },
         })
     }
 
@@ -80,8 +83,10 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> fmt::Result {
         self.push(Token::TupleStruct {
-            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
+            path: NominalPathRef::Single {
+                name: IdentRef::new_unchecked(name),
+            },
         })?;
         self.serialize(value)?;
         self.push(Token::TupleLikeEnd)
@@ -95,11 +100,11 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     ) -> fmt::Result {
         let _ = variant_index;
         self.push(Token::TupleStruct {
-            path: NominalPathRef::Dual {
-                name: variant,
-                parent: name,
-            },
             kind: NominalKind::Variant,
+            path: NominalPathRef::Dual {
+                name: IdentRef::new_unchecked(variant),
+                parent: IdentRef::new_unchecked(name),
+            },
         })?;
         self.serialize(value)?;
         self.push(Token::TupleLikeEnd)
@@ -113,8 +118,10 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
         let _ = len;
         self.push(Token::TupleStruct {
-            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
+            path: NominalPathRef::Single {
+                name: IdentRef::new_unchecked(name),
+            },
         })?;
         Ok(self)
     }
@@ -128,11 +135,11 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         let _ = len;
         let _ = variant_index;
         self.push(Token::TupleStruct {
-            path: NominalPathRef::Dual {
-                name: variant,
-                parent: name,
-            },
             kind: NominalKind::Variant,
+            path: NominalPathRef::Dual {
+                name: IdentRef::new_unchecked(variant),
+                parent: IdentRef::new_unchecked(name),
+            },
         })?;
         Ok(self)
     }
@@ -145,8 +152,10 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         let _ = len;
         self.push(Token::MapStruct {
-            path: NominalPathRef::Single { name },
             kind: NominalKind::Struct,
+            path: NominalPathRef::Single {
+                name: IdentRef::new_unchecked(name),
+            },
         })?;
         Ok(self)
     }
@@ -160,11 +169,11 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         let _ = len;
         let _ = variant_index;
         self.push(Token::MapStruct {
-            path: NominalPathRef::Dual {
-                name: variant,
-                parent: name,
-            },
             kind: NominalKind::Variant,
+            path: NominalPathRef::Dual {
+                name: IdentRef::new_unchecked(variant),
+                parent: IdentRef::new_unchecked(name),
+            },
         })?;
         Ok(self)
     }
