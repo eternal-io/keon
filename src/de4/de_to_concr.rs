@@ -15,10 +15,10 @@ impl<'de, T: Deserialize<'de>> super::Deserialize<'de> for T {
 
 //==================================================================================================
 
-macro_rules! deserialize_number {
-    ( $method:ident, $parsing:ident, $visiting:ident ) => {
+macro_rules! deserialize_integer {
+    ($method:ident, $visiting:ident, $parsing:ident) => {
         fn $method<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
-            if let NumberKind::Byte = self.begin_number()? {
+            if self.begin_integer_try_byte() {
                 visitor.visit_u8(self.parse_byte()?)
             } else {
                 visitor.$visiting(self.$parsing()?)
@@ -27,8 +27,15 @@ macro_rules! deserialize_number {
     };
 }
 
-/// Avoid direct use [`super::Deserializer`] as [`serde::Deserializer`] that bypass error location fix.
-#[repr(transparent)]
+macro_rules! deserialize_float {
+    ($method:ident, $visiting:ident, $parsing:ident) => {
+        fn $method<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
+            visitor.$visiting(self.$parsing()?)
+        }
+    };
+}
+
+/// Avoid direct use of [`super::Deserializer`] as [`serde::Deserializer`] that bypasses error location fix.
 struct DeserializerWrapper<'a, R>(&'a mut super::Deserializer<R>);
 
 impl<R> DeserializerWrapper<'_, R> {
@@ -70,26 +77,28 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     }
 
     fn deserialize_unit<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
-        self.begin_unit()?;
+        self.parse_unit()?;
         visitor.visit_unit()
     }
 
     fn deserialize_bool<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
-        visitor.visit_bool(self.begin_bool()?)
+        visitor.visit_bool(self.parse_bool()?)
     }
 
-    deserialize_number!(deserialize_i8, parse_i8, visit_i8);
-    deserialize_number!(deserialize_i16, parse_i16, visit_i16);
-    deserialize_number!(deserialize_i32, parse_i32, visit_i32);
-    deserialize_number!(deserialize_i64, parse_i64, visit_i64);
-    deserialize_number!(deserialize_i128, parse_i128, visit_i128);
-    deserialize_number!(deserialize_u8, parse_u8, visit_u8);
-    deserialize_number!(deserialize_u16, parse_u16, visit_u16);
-    deserialize_number!(deserialize_u32, parse_u32, visit_u32);
-    deserialize_number!(deserialize_u64, parse_u64, visit_u64);
-    deserialize_number!(deserialize_u128, parse_u128, visit_u128);
-    deserialize_number!(deserialize_f32, parse_f32, visit_f32);
-    deserialize_number!(deserialize_f64, parse_f64, visit_f64);
+    deserialize_integer!(deserialize_i8, visit_i8, parse_i8);
+    deserialize_integer!(deserialize_i16, visit_i16, parse_i16);
+    deserialize_integer!(deserialize_i32, visit_i32, parse_i32);
+    deserialize_integer!(deserialize_i64, visit_i64, parse_i64);
+    deserialize_integer!(deserialize_i128, visit_i128, parse_i128);
+
+    deserialize_integer!(deserialize_u8, visit_u8, parse_u8);
+    deserialize_integer!(deserialize_u16, visit_u16, parse_u16);
+    deserialize_integer!(deserialize_u32, visit_u32, parse_u32);
+    deserialize_integer!(deserialize_u64, visit_u64, parse_u64);
+    deserialize_integer!(deserialize_u128, visit_u128, parse_u128);
+
+    deserialize_float!(deserialize_f32, visit_f32, parse_f32);
+    deserialize_float!(deserialize_f64, visit_f64, parse_f64);
 
     fn deserialize_char<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
         self.begin_char()?;

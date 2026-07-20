@@ -73,7 +73,7 @@ pub enum Value {
 
     /// Structural tuple, also used to represent 'unit'.
     ///
-    /// Guaranteed that the [`Values`] inside is non-empty, if it's serialized/deserialized by KEON.
+    /// Guaranteed that the [`Values`] inside is non-empty, if it's (de)serialized by KEON.
     Tuple(Option<Box<Values>>),
 
     /// Structural seq.
