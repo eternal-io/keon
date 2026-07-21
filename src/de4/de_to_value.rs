@@ -10,7 +10,6 @@ impl<'de> super::Deserialize<'de> for Value2 {
             Indicator::Bytes(bytes_kind) => todo!(),
             Indicator::Number(number_kind) => todo!(),
             Indicator::String(string_kind) => todo!(),
-            Indicator::Maybe => todo!(),
             Indicator::PunctStart(punct_start) => todo!(),
             Indicator::NominalPath(nominal_path_ref) => todo!(),
         }

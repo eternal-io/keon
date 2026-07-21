@@ -26,8 +26,27 @@ pub enum ErrorKind {
     ExpectedIdentifier,
     ExpectedNominalPath,
     ExpectedVariantName,
-    ExpectedAnotherEnum { name: &'static str },
-    ExpectedAnotherStruct { name: &'static str },
+    UnexpectedEnum {
+        expected: &'static str,
+        // found: String,
+        // TODO!
+    },
+    ExpectedStruct {
+        name: &'static str,
+    },
+
+    DuplicatedComma,
+    ExpectedArray,
+    ExpectedArrayEnd,
+    ExpectedColon,
+    ExpectedFatArrow,
+    ExpectedMapLike,
+    ExpectedMapLikeEnd,
+    ExpectedMaybe,
+    ExpectedTuple,
+    ExpectedTupleEnd,
+    ExpectedUnit,
+    ExpectedUnitEnd,
 }
 
 impl core::error::Error for ErrorKind {}
