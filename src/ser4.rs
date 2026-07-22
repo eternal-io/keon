@@ -1,7 +1,7 @@
 use crate::{
     format,
     value::{Float32, Float64, NominalPathRef, Number2, NumberNoSuffix2},
-    Sealed,
+    PrivateMethod, Sealed,
 };
 use core::{
     fmt::{self, Write},
@@ -32,7 +32,9 @@ pub fn stringify_pretty<T: Serialize>(value: &T, cfg: SerializeConfig) -> Result
 //------------------------------------------------------------------------------
 
 pub trait Serialize {
-    fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut Serializer<Impl>) -> fmt::Result;
+    #[expect(private_interfaces)]
+    #[doc(hidden)]
+    fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut Serializer<Impl>, _: PrivateMethod) -> fmt::Result;
 }
 
 #[expect(private_bounds, private_interfaces, reason = "Sealed")]
@@ -79,7 +81,7 @@ impl<Impl: SerializerImpl> Serializer<Impl> {
             return Err(fmt::Error);
         }
         self.ttl -= 1;
-        value.serialize_with(self)?;
+        value.serialize_with(self, PrivateMethod)?;
         self.ttl += 1;
 
         Ok(())
@@ -92,7 +94,7 @@ impl<Impl: SerializerImpl> Serializer<Impl> {
     {
         values
             .into_iter()
-            .try_for_each(|value| value.as_ref().serialize_with(self))
+            .try_for_each(|value| value.as_ref().serialize_with(self, PrivateMethod))
     }
 }
 
@@ -183,7 +185,7 @@ pub(crate) enum Token<'a> {
     },
 
     Maybe,
-    Sequence,
+    Array,
     Tuple,
     TupleStruct {
         kind: NominalKind,
@@ -196,7 +198,7 @@ pub(crate) enum Token<'a> {
     },
 
     MaybeEnd,
-    SequenceEnd,
+    ArrayEnd,
     TupleLikeEnd,
     MapLikeEnd,
 
@@ -253,7 +255,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
         if matches!(
             token,
             Token::Maybe
-                | Token::Sequence
+                | Token::Array
                 | Token::Tuple
                 | Token::TupleStruct { .. }
                 | Token::Map
@@ -264,7 +266,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
 
         if matches!(
             token,
-            Token::MaybeEnd | Token::SequenceEnd | Token::TupleLikeEnd | Token::MapLikeEnd
+            Token::MaybeEnd | Token::ArrayEnd | Token::TupleLikeEnd | Token::MapLikeEnd
         ) {
             *ctr -= 1;
         }
@@ -278,7 +280,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
             Token::UnitStruct { kind, path } => write_nominal_path(dst, kind, path, cfg.nominal_path_style)?,
 
             Token::Maybe => dst.write_str("?")?,
-            Token::Sequence => dst.write_str("[")?,
+            Token::Array => dst.write_str("[")?,
             Token::Tuple | Token::TupleStruct { .. } => {
                 if let Token::TupleStruct { kind, path } = token {
                     write_nominal_path(dst, kind, path, cfg.nominal_path_style)?;
@@ -293,7 +295,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
             }
 
             Token::MaybeEnd => (),
-            Token::SequenceEnd => dst.write_str("]")?,
+            Token::ArrayEnd => dst.write_str("]")?,
             Token::TupleLikeEnd => dst.write_str(")")?,
             Token::MapLikeEnd => dst.write_str("}")?,
 
@@ -364,7 +366,7 @@ impl Compound {
 #[cfg(feature = "alloc")]
 enum CompoundKind {
     Maybe,
-    Sequence,
+    Array,
     TupleLike(Option<String>),
     MapLikeLhs(Option<String>),
     MapLikeRhs(Option<String>),
@@ -391,7 +393,7 @@ impl CompoundKind {
     fn take(&mut self) -> Self {
         match self {
             CompoundKind::Maybe => CompoundKind::Maybe,
-            CompoundKind::Sequence => CompoundKind::Sequence,
+            CompoundKind::Array => CompoundKind::Array,
             CompoundKind::TupleLike(head) => CompoundKind::TupleLike(head.take()),
             CompoundKind::MapLikeLhs(head) => CompoundKind::MapLikeLhs(head.take()),
             CompoundKind::MapLikeRhs(head) => CompoundKind::MapLikeRhs(head.take()),
@@ -401,7 +403,7 @@ impl CompoundKind {
     fn write_indicator_to(&self, dst: &mut impl Write) -> fmt::Result {
         match self {
             CompoundKind::Maybe => dst.write_str("?"),
-            CompoundKind::Sequence => dst.write_str("["),
+            CompoundKind::Array => dst.write_str("["),
             CompoundKind::TupleLike(head) => {
                 if let Some(head) = head {
                     dst.write_str(head)?;
@@ -421,7 +423,7 @@ impl CompoundKind {
     fn write_terminator_to(&self, dst: &mut impl Write) -> fmt::Result {
         match self {
             CompoundKind::Maybe => Ok(()),
-            CompoundKind::Sequence => dst.write_str("]"),
+            CompoundKind::Array => dst.write_str("]"),
             CompoundKind::TupleLike(_) => dst.write_str(")"),
             CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => dst.write_str("}"),
         }
@@ -578,10 +580,10 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
                 }
             }
 
-            Token::MaybeEnd | Token::SequenceEnd | Token::TupleLikeEnd | Token::MapLikeEnd => {
+            Token::MaybeEnd | Token::ArrayEnd | Token::TupleLikeEnd | Token::MapLikeEnd => {
                 let debug_assert_matches = |token: &Token<'_>, kind: &CompoundKind| match kind {
                     CompoundKind::Maybe => debug_assert!(matches!(token, Token::MaybeEnd)),
-                    CompoundKind::Sequence => debug_assert!(matches!(token, Token::SequenceEnd)),
+                    CompoundKind::Array => debug_assert!(matches!(token, Token::ArrayEnd)),
                     CompoundKind::TupleLike(_) => debug_assert!(matches!(token, Token::TupleLikeEnd)),
                     CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => {
                         debug_assert!(matches!(token, Token::MapLikeEnd))
@@ -641,7 +643,7 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
             token => {
                 let kind = match token {
                     Token::Maybe => CompoundKind::Maybe,
-                    Token::Sequence => CompoundKind::Sequence,
+                    Token::Array => CompoundKind::Array,
                     Token::Tuple => CompoundKind::TupleLike(None),
                     Token::TupleStruct { kind, path } => {
                         CompoundKind::TupleLike(Some(nominal_path_to_string(kind, path)?))

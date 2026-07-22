@@ -47,6 +47,7 @@ pub enum ErrorKind {
     ExpectedTupleEnd,
     ExpectedUnit,
     ExpectedUnitEnd,
+    ExpectedInitiator,
 }
 
 impl core::error::Error for ErrorKind {}

@@ -1,10 +1,10 @@
-use super::{Literal, NominalKind, SerializerImpl, Token};
-use crate::value::{Ident, Value2};
-use alloc::collections::BTreeMap;
+use super::{Literal, NominalKind, PrivateMethod, SerializerImpl, Token};
+use crate::value::{Struct2, Value2, ValuesMap2};
 use core::fmt;
 
 impl super::Serialize for Value2 {
-    fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut super::Serializer<Impl>) -> fmt::Result {
+    #[expect(private_interfaces)]
+    fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut super::Serializer<Impl>, _: PrivateMethod) -> fmt::Result {
         let ser_values = |ser: &mut super::Serializer<Impl>, values: &[Value2]| -> fmt::Result {
             for value in values {
                 ser.serialize(value)?;
@@ -13,18 +13,17 @@ impl super::Serialize for Value2 {
             Ok(())
         };
 
-        let ser_values_map =
-            |ser: &mut super::Serializer<Impl>, values_map: &BTreeMap<Value2, Value2>| -> fmt::Result {
-                for (key, value) in values_map.iter() {
-                    ser.serialize(key)?;
-                    ser.push(Token::FatArrow)?;
-                    ser.serialize(value)?;
-                    ser.push(Token::Comma)?;
-                }
-                Ok(())
-            };
+        let ser_values_map = |ser: &mut super::Serializer<Impl>, values_map: &ValuesMap2| -> fmt::Result {
+            for (key, value) in values_map.iter() {
+                ser.serialize(key)?;
+                ser.push(Token::FatArrow)?;
+                ser.serialize(value)?;
+                ser.push(Token::Comma)?;
+            }
+            Ok(())
+        };
 
-        let ser_fields_map = |ser: &mut super::Serializer<Impl>, fields_map: &BTreeMap<Ident, Value2>| -> fmt::Result {
+        let ser_fields_map = |ser: &mut super::Serializer<Impl>, fields_map: &Struct2| -> fmt::Result {
             for (field, value) in fields_map.iter() {
                 ser.push(Token::Ident(field))?;
                 ser.push(Token::Colon)?;
@@ -55,10 +54,10 @@ impl super::Serialize for Value2 {
                 ser.push(Token::MaybeEnd)
             }
 
-            Value2::Sequence(values) => {
-                ser.push(Token::Sequence)?;
+            Value2::Array(values) => {
+                ser.push(Token::Array)?;
                 ser_values(ser, values)?;
-                ser.push(Token::SequenceEnd)
+                ser.push(Token::ArrayEnd)
             }
 
             Value2::Tuple(values) => {

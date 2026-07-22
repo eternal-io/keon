@@ -1,4 +1,4 @@
-use super::{Literal, NominalKind, NominalPathRef, SerializerImpl, Token};
+use super::{Literal, NominalKind, NominalPathRef, PrivateMethod, SerializerImpl, Token};
 use crate::value::IdentRef;
 use core::fmt;
 use serde::{
@@ -10,8 +10,8 @@ use serde::{
 };
 
 impl<T: ?Sized + Serialize> super::Serialize for T {
-    #[inline(always)]
-    fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut super::Serializer<Impl>) -> fmt::Result {
+    #[expect(private_interfaces)]
+    fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut super::Serializer<Impl>, _: PrivateMethod) -> fmt::Result {
         self.serialize(ser)
     }
 }
@@ -77,7 +77,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
     }
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
         let _ = len;
-        self.push(Token::Sequence)?;
+        self.push(Token::Array)?;
         Ok(self)
     }
 
@@ -187,7 +187,7 @@ impl<Impl: SerializerImpl> SerializeSeq for &mut super::Serializer<Impl> {
         self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        self.push(Token::SequenceEnd)
+        self.push(Token::ArrayEnd)
     }
 }
 

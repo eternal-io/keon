@@ -1,4 +1,4 @@
-use super::{error::*, source::*};
+use super::{error::*, source::*, PrivateMethod};
 use crate::value::NominalPathRef;
 use core::ops::{Deref, DerefMut};
 use either::Either;
@@ -8,7 +8,8 @@ use serde::{
 };
 
 impl<'de, T: Deserialize<'de>> super::Deserialize<'de> for T {
-    fn deserialize_with<R: Source<'de>>(der: &mut super::Deserializer<R>) -> ResultKind<Self> {
+    #[expect(private_interfaces)]
+    fn deserialize_with<R: Source<'de>>(der: &mut super::Deserializer<R>, _: PrivateMethod) -> ResultKind<Self> {
         T::deserialize(DeserializerWrapper(der))
     }
 }
@@ -17,9 +18,9 @@ impl<'de, T: Deserialize<'de>> super::Deserialize<'de> for T {
 
 macro_rules! recursion_guard {
     ($self:ident, $expr:expr) => {{
-        $self.ttl_enter()?;
+        $self.0.ttl_enter()?;
         let res = $expr;
-        $self.ttl_leave();
+        $self.0.ttl_leave();
         res
     }};
 }
@@ -28,7 +29,7 @@ macro_rules! deserialize_integer {
     ($method:ident, $visiting:ident, $parsing:ident) => {
         fn $method<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
             self.eat_ws()?;
-            if self.try_byte() {
+            if self.try_byte()? {
                 visitor.visit_u8(self.parse_byte()?)
             } else {
                 visitor.$visiting(self.$parsing()?)
@@ -52,14 +53,6 @@ struct DeserializerWrapper<'a, R>(&'a mut super::Deserializer<R>);
 impl<R> DeserializerWrapper<'_, R> {
     fn reborrow<'a>(&'a mut self) -> DeserializerWrapper<'a, R> {
         DeserializerWrapper(self.0)
-    }
-
-    fn ttl_enter(&mut self) -> ResultKind {
-        self.0.ttl_enter()
-    }
-
-    fn ttl_leave(&mut self) {
-        self.0.ttl_leave()
     }
 }
 
@@ -225,7 +218,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     // NOTE: This method is called when deserialize struct field name.
     fn deserialize_identifier<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
         self.eat_ws()?;
-        visitor.visit_str(self.0.src.parse_identifier(&mut self.0.buf)?)
+        visitor.visit_str(&self.0.src.parse_identifier(&mut self.0.buf)?)
     }
 }
 
@@ -273,7 +266,7 @@ impl<'de, R: Source<'de>> SeqAccess<'de> for DeserializerWrapper<'_, R> {
 
         let val = seed.deserialize(self.reborrow())?;
 
-        self.try_next_delim(PunctDelim::Comma)?;
+        self.delim(Delimiter::Comma)?;
 
         Ok(Some(val))
     }
@@ -292,9 +285,10 @@ impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapAccesso
         let val = seed.deserialize(self.0.reborrow())?;
 
         if STRUCT_MODE {
-            self.0.next_delim(PunctDelim::Colon, ErrorKind::ExpectedColon)?;
+            self.0.delim_expected(Delimiter::Colon, ErrorKind::ExpectedColon)?;
         } else {
-            self.0.next_delim(PunctDelim::FatArrow, ErrorKind::ExpectedFatArrow)?;
+            self.0
+                .delim_expected(Delimiter::FatArrow, ErrorKind::ExpectedFatArrow)?;
         }
 
         Ok(Some(val))
@@ -303,7 +297,7 @@ impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapAccesso
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
         let val = seed.deserialize(self.0.reborrow())?;
 
-        self.0.try_next_delim(PunctDelim::Comma)?;
+        self.0.delim(Delimiter::Comma)?;
 
         Ok(val)
     }

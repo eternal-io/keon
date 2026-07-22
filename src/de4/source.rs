@@ -1,20 +1,20 @@
 use super::*;
-use crate::Sealed;
 
 pub(crate) enum Indicator<'de> {
     Unit,
     Bool(bool),
     Char(char),
-    Number(NumberKind),
+    Byte(u8),
     String(StringKind),
     Bytes(BytesKind),
-    PunctStart(PunctStart),
+    Number(NumberKind),
+    Initiator(Initiator),
     NominalPath(NominalPathRef<'de>),
 }
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PunctStart {
+pub(crate) enum Initiator {
     /** `?` */ Quest,
     /** `(` */ Paren,
     /** `[` */ Brack,
@@ -23,7 +23,7 @@ pub(crate) enum PunctStart {
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PunctDelim {
+pub(crate) enum Delimiter {
     /** `)` */ Paren,
     /** `]` */ Brack,
     /** `}` */ Brace,
@@ -34,41 +34,10 @@ pub(crate) enum PunctDelim {
                EOF,
 }
 
-impl PunctStart {
-    pub(crate) fn expect(&self, punct: Self) -> ResultKind {
-        (*self == punct).then_some(()).ok_or_else(|| match punct {
-            PunctStart::Quest => todo!(),
-            PunctStart::Paren => todo!(),
-            PunctStart::Brack => todo!(),
-            PunctStart::Brace => todo!(),
-        })
-    }
-}
-
-impl PunctDelim {
-    pub(crate) fn expect(&self, punct: Self) -> ResultKind {
-        (*self == punct).then_some(()).ok_or_else(|| match punct {
-            PunctDelim::Paren => todo!(),
-            PunctDelim::Brack => todo!(),
-            PunctDelim::Brace => todo!(),
-            PunctDelim::Comma => todo!(),
-            PunctDelim::Colon => todo!(),
-            PunctDelim::FatArrow => todo!(),
-            PunctDelim::Semicolon => todo!(),
-            PunctDelim::EOF => todo!(),
-        })
-    }
-
-    pub(crate) fn expects(&self, puncts: &[Self], reason: ErrorKind) -> ResultKind {
-        puncts.contains(self).then_some(()).ok_or(reason)
-    }
-}
-
 pub(crate) enum NumberKind {
-    Byte,
-    Digit,
-    Negative,
+    Normal,
     Infinity,
+    NegInfinity,
     NotANumber,
 }
 
@@ -95,31 +64,36 @@ pub(crate) trait Read<'de> {
     /// Position of the most recent call to `set_position()`.
     fn position(&self) -> Position;
 
-    /// Consumes the leading whitespace and comments.
+    /// Consumes the subsequent whitespaces and comments.
     fn eat_ws(&mut self) -> ResultKind;
 
-    /// Skips WS and consumes the specified start punctuation. Returns `Err` if not found.
-    fn next_start(&mut self, start: PunctStart, reason: ErrorKind) -> ResultKind;
+    /// Skips WS and consumes the specified delimiter if possible:
+    /// - returns `None` on success;
+    /// - returns `Some` if another delimiter is found;
+    /// - returns `Err` if no delimiter found.
+    fn delim(&mut self, delim: Delimiter) -> ResultKind<Option<Delimiter>>;
 
-    /// Skips WS and consumes the specified delim punctuation. Returns `Err` if not found.
-    fn next_delim(&mut self, delim: PunctDelim, reason: ErrorKind) -> ResultKind;
+    /// Skips WS and consumes the specified delimiter. Returns `Err` if not found.
+    fn delim_expected(&mut self, delim: Delimiter, reason: ErrorKind) -> ResultKind {
+        if self.delim(delim)?.is_none() {
+            Ok(())
+        } else {
+            Err(reason)
+        }
+    }
 
-    /// Skips WS and consumes the specified delim punctuation if possible.
-    /// Returns `None` on success; returns `Some(_)` if something else is found.
-    fn try_next_delim(&mut self, delim: PunctDelim) -> ResultKind<Option<PunctDelim>>;
+    /// Skips WS and peeks the subsequent delimiter. Returns `None` if not found.
+    fn seek_delim(&mut self) -> ResultKind<Option<Delimiter>>;
 
-    /// Skips WS and peeks the subsequent delim punctuation. Returns `None` if not found.
-    fn seek_delim(&mut self) -> ResultKind<Option<PunctDelim>>;
-
-    /// Skips WS and peeks the subsequent delim punctuation. Returns `Err` if not found.
-    fn seek_delim_expected(&mut self) -> ResultKind<PunctDelim> {
+    /// Skips WS and peeks the subsequent delimiter. Returns `Err` if not found.
+    fn seek_delim_expected(&mut self) -> ResultKind<Delimiter> {
         self.seek_delim()?.ok_or(ErrorKind::ExpectedDelimiter)
     }
 }
 
 pub(crate) trait ReadConcr<'de>: Read<'de> {
     /// If the subsequent content starts with `b'`, consume it and return true.
-    fn try_byte(&mut self) -> bool;
+    fn try_byte(&mut self) -> ResultKind<bool>;
 
     fn begin_char(&mut self) -> ResultKind;
 
@@ -127,17 +101,13 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
 
     fn begin_bytes(&mut self) -> ResultKind<BytesKind>;
 
-    fn begin_maybe(&mut self) -> ResultKind {
-        self.next_start(PunctStart::Quest, ErrorKind::ExpectedMaybe)
-    }
+    fn begin_maybe(&mut self) -> ResultKind;
 
-    fn begin_tuple(&mut self) -> ResultKind {
-        self.next_start(PunctStart::Paren, ErrorKind::ExpectedTuple)
-    }
+    fn begin_tuple(&mut self) -> ResultKind;
     fn end_tuple(&mut self) -> ResultKind {
-        if let Some(delim) = self.try_next_delim(PunctDelim::Paren)? {
+        if let Some(delim) = self.delim(Delimiter::Paren)? {
             self.set_position();
-            if let PunctDelim::Comma = delim {
+            if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
             } else {
                 Err(ErrorKind::ExpectedTupleEnd)
@@ -147,13 +117,11 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
         }
     }
 
-    fn begin_array(&mut self) -> ResultKind {
-        self.next_start(PunctStart::Brack, ErrorKind::ExpectedArray)
-    }
+    fn begin_array(&mut self) -> ResultKind;
     fn end_array(&mut self) -> ResultKind {
-        if let Some(delim) = self.try_next_delim(PunctDelim::Brack)? {
+        if let Some(delim) = self.delim(Delimiter::Brack)? {
             self.set_position();
-            if let PunctDelim::Comma = delim {
+            if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
             } else {
                 Err(ErrorKind::ExpectedArrayEnd)
@@ -163,13 +131,11 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
         }
     }
 
-    fn begin_map_like(&mut self) -> ResultKind {
-        self.next_start(PunctStart::Brace, ErrorKind::ExpectedMapLike)
-    }
+    fn begin_map_like(&mut self) -> ResultKind;
     fn end_map_like(&mut self) -> ResultKind {
-        if let Some(delim) = self.try_next_delim(PunctDelim::Brace)? {
+        if let Some(delim) = self.delim(Delimiter::Brace)? {
             self.set_position();
-            if let PunctDelim::Comma = delim {
+            if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
             } else {
                 Err(ErrorKind::ExpectedMapLikeEnd)
@@ -181,11 +147,7 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
 
     //------------------------------------------------------------------------------
 
-    fn parse_unit(&mut self) -> ResultKind {
-        self.next_start(PunctStart::Paren, ErrorKind::ExpectedUnit)?;
-        self.next_delim(PunctDelim::Paren, ErrorKind::ExpectedUnitEnd)?;
-        Ok(())
-    }
+    fn parse_unit(&mut self) -> ResultKind;
 
     fn parse_bool(&mut self) -> ResultKind<bool>;
 
@@ -212,7 +174,7 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
 
     fn parse_bytes<'t>(&mut self, kind: BytesKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de [u8], &'t [u8]>>;
 
-    fn parse_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<&'t str>
+    fn parse_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
     where
         'de: 't;
 
@@ -223,6 +185,9 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
 
 pub(crate) trait ReadAny<'de>: Read<'de> {
     fn begin(&mut self) -> ResultKind<Indicator<'de>>;
+
+    /// Skips WS and consumes the subsequent initiator. Returns `None` if not found.
+    fn initiator(&mut self) -> ResultKind<Option<Initiator>>;
 
     fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Either<Number2, NumberNoSuffix2>>;
 }

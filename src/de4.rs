@@ -1,5 +1,5 @@
 use self::{error::*, source::*};
-use crate::{format::*, value::*};
+use crate::{format::*, value::*, PrivateMethod};
 use core::{cmp::Ordering, marker::PhantomData};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use either::Either;
@@ -12,7 +12,9 @@ pub mod source;
 pub const DEFAULT_RECURSION_LIMIT: isize = 160;
 
 pub trait Deserialize<'de>: Sized {
-    fn deserialize_with<R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Self>;
+    #[expect(private_interfaces)]
+    #[doc(hidden)]
+    fn deserialize_with<R: Source<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self>;
 }
 
 pub struct Deserializer<R> {
@@ -50,7 +52,9 @@ impl<'de, R: Source<'de>> Deserializer<R> {
             return Err(todo!("corrupted"));
         }
 
-        let res = T::deserialize_with(self);
+        let res = T::deserialize_with(self, PrivateMethod);
+
+        // TODO: check no more contents?
 
         if res.is_err() {
             self.ttl = -999; // Mark the deserializer as corrupted.

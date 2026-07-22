@@ -151,10 +151,10 @@ impl_into!(v: i64  => NumberNoSuffix::Int(v));
 impl_into!(v: u64  => NumberNoSuffix::UInt(v));
 impl_into!(v: f64  => NumberNoSuffix::Float(v.into()));
 
-impl_into!(v: f32  => Float32(v));
-impl_into!(v: f64  => Float64(v));
-
 //------------------------------------------------------------------------------
+
+impl_into!(v: Number2 => Value2::Number(v));
+impl_into!(v: NumberNoSuffix2 => Value2::NumberNoSuffix(v));
 
 impl_into!(v: i8   => Number2::Int8(v));
 impl_into!(v: i16  => Number2::Int16(v));
@@ -168,6 +168,21 @@ impl_into!(v: u64  => Number2::UInt64(v));
 impl_into!(v: u128 => Number2::UInt128 { lo: v as _, hi: (v >> 64) as _ });
 impl_into!(v: f32  => Number2::Float32(v.into()));
 impl_into!(v: f64  => Number2::Float64(v.into()));
+
+impl_into!(v: i8   => NumberNoSuffix2::Int(v as _));
+impl_into!(v: i16  => NumberNoSuffix2::Int(v as _));
+impl_into!(v: i32  => NumberNoSuffix2::Int(v as _));
+impl_into!(v: i64  => NumberNoSuffix2::Int(v));
+impl_into!(v: u8   => NumberNoSuffix2::UInt(v as _));
+impl_into!(v: u16  => NumberNoSuffix2::UInt(v as _));
+impl_into!(v: u32  => NumberNoSuffix2::UInt(v as _));
+impl_into!(v: u64  => NumberNoSuffix2::UInt(v));
+impl_into!(v: f32  => NumberNoSuffix2::Float(v.into()));
+impl_into!(v: f64  => NumberNoSuffix2::Float(v.into()));
+
+impl_into!(v: f32  => Float32(v));
+impl_into!(v: f32  => Float64(v as _));
+impl_into!(v: f64  => Float64(v));
 
 pub type Values2 = Vec<Value2>;
 pub type ValuesMap2 = BTreeMap<Value2, Value2>;
@@ -240,6 +255,7 @@ impl<'a> From<&'a Ident> for IdentRef<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value2 {
     /// Literal Boolean value.
     Bool(bool),
@@ -263,8 +279,8 @@ pub enum Value2 {
     /// This is non-nominal due to [serde]'s design.
     Maybe(Option<Box<Value2>>),
 
-    /// Structural sequence.
-    Sequence(Box<Values2>),
+    /// Structural array.
+    Array(Box<Values2>),
 
     /// Structural tuple.
     Tuple(Box<Values2>),
@@ -277,6 +293,7 @@ pub enum Value2 {
     MapStruct(Box<(NominalPath2, Struct2)>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NominalPath2 {
     Underscore,
     Single { name: Ident },

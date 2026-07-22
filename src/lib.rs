@@ -17,6 +17,8 @@ pub use crate::{
 
 trait Sealed {}
 
+struct PrivateMethod;
+
 mod format {
     use core::num::NonZeroU8;
     use lexical_core::{

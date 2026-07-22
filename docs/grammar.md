@@ -2,7 +2,7 @@
 
 - Definitions named with `SCREAMING_SNAKE_CASE` are *atoms*.
 - Definitions named with `UpperCamelCase` are *compounds*.
-- WHITESPACE and COMMENTs are allowed only **between** definitions in a *compound*.
+- WS are allowed only between definitions in a *compound*.
 
 #### Specials
 
@@ -198,7 +198,7 @@ PARAGRAPH_LITERAL ->
 Structure ->
       MaybeValue
     | TupleValue
-    | SeqValue
+    | ArrayValue
     | MapValue
 
 MaybeValue ->
@@ -207,7 +207,7 @@ MaybeValue ->
 TupleValue ->
     `(` ( Value ( `,` Value )* `,`? )? `)`
 
-SeqValue ->
+ArrayValue ->
     `[` ( Value ( `,` Value )* `,`? )? `]`
 
 MapValue ->
