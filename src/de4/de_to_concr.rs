@@ -173,7 +173,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
 
     fn deserialize_unit_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
         self.deserialize_struct_name(name)?;
-        self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
+        self.adjacent_to_delim_expected(ErrorKind::InvalidUnit)?;
         visitor.visit_unit()
     }
     fn deserialize_newtype_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
@@ -332,7 +332,7 @@ impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
     type Error = ErrorKind;
 
     fn unit_variant(mut self) -> ResultKind<()> {
-        self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
+        self.adjacent_to_delim_expected(ErrorKind::InvalidUnit)?;
         Ok(())
     }
 

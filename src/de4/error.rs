@@ -29,7 +29,6 @@ pub enum ErrorKind {
     ExpectedDifferentStructName { expected: &'static str, found: String },
     UnexpectedPathAsStructName,
 
-    UnexpectedUnitBody,
     ExpectedMaybe,
     ExpectedArray,
     ExpectedArrayEnd,
@@ -44,7 +43,10 @@ pub enum ErrorKind {
 
     DuplicatedComma,
 
+    InvalidUnit,
     InvalidNominalStructureBody,
+    InvalidUtf8Character,
+    UnclosedBlockComment,
 }
 
 impl core::error::Error for ErrorKind {}

@@ -13,7 +13,8 @@
 - `<BACKTICK>`: `U+0060` (grave accent ``'`'``)
 - `<Non-ASCII>`: Non-ASCII characters
 - `<EOF>` : end of input
-- `XID_Start` and `XID_Continue`: as defined in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/tr31-41.html)
+- `<XID_Start>` and `<XID_Continue>`: as specified in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/)
+- `<White_Space>`: as specified in [Unicode Character Database](https://www.unicode.org/reports/tr44/) [`PropList.txt`](https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt)
 
 ---
 
@@ -31,26 +32,9 @@ Value ->
     | NominalStructure
 
 
-/*== Whitespace ==*/
+/*== Whitespaces and comments ==*/
 
-WS -> ( WHITESPACE* COMMENT )* WHITESPACE*
-
-WHITESPACE -> !!characters that have `White_Space` Unicode property
-
-/* U+0009 (horizontal tab, '\t')
- * U+000A (line feed, '\n')
- * U+000B (vertical tab)
- * U+000C (form feed)
- * U+000D (carriage return, '\r')
- * U+0020 (space, ' ')
- * U+0085 (next line)
- * U+200E (left-to-right mark)
- * U+200F (right-to-left mark)
- * U+2028 (line separator)
- * U+2029 (paragraph separator)
- */
-
-/*== Comments ==*/
+WS -> ( <White_Space>* COMMENT )* <White_Space>*
 
 COMMENT ->
     LINE_COMMENT | BLOCK_COMMENT
@@ -81,8 +65,8 @@ RAW_IDENT ->
     <BACKTICK> IDENT_OR_KEYWORD
 
 IDENT_OR_KEYWORD ->
-      XID_Start XID_Continue*
-    |       `_` XID_Continue+
+      <XID_Start> <XID_Continue>*
+    |         `_` <XID_Continue>+
 
 
 /*== Literals ==*/

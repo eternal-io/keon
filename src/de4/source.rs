@@ -1,4 +1,5 @@
 use super::*;
+use memchr::*;
 
 pub(crate) enum Indicator<'de> {
     Unit,
@@ -196,4 +197,109 @@ pub(crate) trait ParseToValue<'de>: ParseHelper<'de> {
 
 //==================================================================================================
 
-// TODO: impl Source for &str
+pub struct SliceSource<'de> {
+    src: &'de [u8],
+    idx: usize,
+    report_idx: usize,
+}
+
+impl<'de> SliceSource<'de> {
+    fn rest(&self) -> &'de [u8] {
+        &self.src[self.idx..]
+    }
+
+    fn bump(&mut self, len: usize) {
+        debug_assert!(len <= self.rest().len());
+        self.idx += len;
+    }
+
+    fn bump_to_end(&mut self) {
+        self.idx = self.src.len();
+    }
+
+    /// Refer to [`char::is_whitespace`].
+    fn eat_pure_ws(&mut self) {
+        loop {
+            self.bump(match self.rest() {
+                [b'\x09'..=b'\x0D', ..] => 1,                   // 0009..000D <control-0009>..<control-000D>
+                [b'\x20', ..] => 1,                             // 0020       SPACE
+                [b'\xC2', b'\x85', ..] => 2,                    // 0085       <control-0085>
+                [b'\xC2', b'\xA0', ..] => 2,                    // 00A0       NO-BREAK SPACE
+                [b'\xE1', b'\x9A', b'\x80', ..] => 3,           // 1680       OGHAM SPACE MARK
+                [b'\xE2', b'\x80', b'\x80'..=b'\x8A', ..] => 3, // 2000..200A EN QUAD..HAIR SPACE
+                [b'\xE2', b'\x80', b'\xA8', ..] => 3,           // 2028       LINE SEPARATOR
+                [b'\xE2', b'\x80', b'\xA9', ..] => 3,           // 2029       PARAGRAPH SEPARATOR
+                [b'\xE2', b'\x80', b'\xAF', ..] => 3,           // 202F       NARROW NO-BREAK SPACE
+                [b'\xE2', b'\x81', b'\x9F', ..] => 3,           // 205F       MEDIUM MATHEMATICAL SPACE
+                [b'\xE3', b'\x80', b'\x80', ..] => 3,           // 3000       IDEOGRAPHIC SPACE
+                _ => break,
+            });
+        }
+    }
+
+    // fn next_byte(&mut self) -> Option<u8> {
+    //     self.src.get(self.idx).copied().inspect(|_| self.idx += 1)
+    // }
+
+    // fn peek_byte(&mut self) -> Option<u8> {
+    //     self.src.get(self.idx).copied()
+    // }
+}
+
+// impl<'de> Source<'de> for SliceSource<'de> {}
+
+impl<'de> ParseHelper<'de> for SliceSource<'de> {
+    fn set_position(&mut self) {
+        self.report_idx = self.idx;
+    }
+
+    fn position(&self) -> Position {
+        todo!()
+    }
+
+    fn eat_ws(&mut self) -> ResultKind {
+        loop {
+            self.eat_pure_ws();
+            match self.rest() {
+                [b'/', b'/', rest @ ..] => {
+                    if let Some(off) = memchr(b'\n', rest) {
+                        self.bump(2 + off);
+                    } else {
+                        self.bump_to_end();
+                    }
+                }
+                [b'/', b'*', rest @ ..] => {
+                    self.bump(2);
+                    let mut lv = 1usize;
+                    while lv > 0 {
+                        if let Some(off) = memchr2(b'*', b'/', self.rest()) {
+                            self.bump(off);
+                        }
+                        match rest {
+                            [b'/', b'*', ..] => {
+                                self.bump(2);
+                                lv += 1;
+                            }
+                            [b'*', b'/', ..] => {
+                                self.bump(2);
+                                lv -= 1;
+                            }
+                            [_, ..] => (),
+                            [] => return Err(ErrorKind::UnclosedBlockComment),
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+        Ok(())
+    }
+
+    fn delim(&mut self, delim: Delimiter) -> ResultKind<Option<Delimiter>> {
+        todo!()
+    }
+
+    fn adjacent_to_delim(&mut self) -> ResultKind<bool> {
+        todo!()
+    }
+}
