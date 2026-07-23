@@ -189,26 +189,26 @@ PARAGRAPH_LITERAL ->
         NEWLINE WS
         <BACKTICK>{k} [`|` `<` `>`] <SPACE>? ( ~[<LF> <CR>] )*
     )*          // ^ If there is an opportunity to do something "wrong", someone will do it.
-                //   So I chose to simply limit the length of subsequent delimiter sequences
-                //   to the same length as the first line, to keep it "correct".
+                //   So I chose to limit the length of the subsequent initiator sequences to
+                //   match the first line, to keep it "correct".
 
 
 /*== Structures ==*/
 
 Structure ->
       MaybeValue
-    | TupleValue
     | ArrayValue
+    | TupleValue
     | MapValue
 
 MaybeValue ->
     `?` Value?
 
-TupleValue ->
-    `(` ( Value ( `,` Value )* `,`? )? `)`
-
 ArrayValue ->
     `[` ( Value ( `,` Value )* `,`? )? `]`
+
+TupleValue ->
+    `(` ( Value ( `,` Value )* `,`? )? `)`
 
 MapValue ->
     `{` (
@@ -220,13 +220,13 @@ MapValue ->
 /*== Nominal Structures ==*/
 
 NominalStructure ->
-    NominalPath ( TupleValue | StructValue )?
+    NOMINAL_PATH ( TupleValue | StructValue )?
 
-NominalPath ->
+NOMINAL_PATH ->
       `_`
     | IDENTIFIER
     | IDENTIFIER `::` IDENTIFIER
-    // We could certainly support complex paths like `path::to::Foo::Bar`,
+    // We could certainly support long paths like `path::to::Foo::Bar`,
     // but this seemed to lack usefulness and is no longer provided.
 
 StructValue ->

@@ -42,7 +42,7 @@ impl super::Serialize for Value2 {
             Value2::ByteBuf(bytes) => ser.push(Token::Literal(Literal::Bytes(bytes.as_ref()))),
             Value2::Unit => ser.push(Token::Unit),
             Value2::UnitStruct(path) => ser.push(Token::UnitStruct {
-                kind: NominalKind::NoChange,
+                kind: NominalKind::Unspecified,
                 path: path.as_ref().into(),
             }),
 
@@ -68,7 +68,7 @@ impl super::Serialize for Value2 {
             Value2::TupleStruct(path_values) => {
                 let (path, values) = path_values.as_ref();
                 ser.push(Token::TupleStruct {
-                    kind: NominalKind::NoChange,
+                    kind: NominalKind::Unspecified,
                     path: path.into(),
                 })?;
                 ser_values(ser, values)?;
@@ -83,7 +83,7 @@ impl super::Serialize for Value2 {
             Value2::MapStruct(path_fields_map) => {
                 let (path, fields_map) = path_fields_map.as_ref();
                 ser.push(Token::MapStruct {
-                    kind: NominalKind::NoChange,
+                    kind: NominalKind::Unspecified,
                     path: path.into(),
                 })?;
                 ser_fields_map(ser, fields_map)?;

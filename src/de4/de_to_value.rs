@@ -18,43 +18,42 @@ impl<'de> Deserialize<'de> for Value2 {
                 NumberKind::NotANumber => Self::NumberNoSuffix(f64::NAN.into()),
             },
             Indicator::Initiator(init) => match init {
-                Initiator::Quest => Self::Maybe(if der.src.seek_delim()?.is_none() {
+                Initiator::Maybe => Self::Maybe(if !der.src.adjacent_to_delim()? {
                     Some(Box::new(deserialize_value(der)?))
                 } else {
                     None
                 }),
-                Initiator::Paren => {
+                Initiator::Array => {
                     let val = Self::Array(Box::new(deserialize_values(der)?));
-                    der.src.end_tuple()?;
-                    val
-                }
-                Initiator::Brack => {
-                    let val = Self::Tuple(Box::new(deserialize_values(der)?));
                     der.src.end_array()?;
                     val
                 }
-                Initiator::Brace => {
+                Initiator::Tuple => {
+                    let val = Self::Tuple(Box::new(deserialize_values(der)?));
+                    der.src.end_tuple()?;
+                    val
+                }
+                Initiator::MapLike => {
                     let val = Self::Map(Box::new(deserialize_values_map(der)?));
                     der.src.end_map_like()?;
                     val
                 }
             },
             Indicator::NominalPath(path) => match der.src.initiator()? {
-                None => Self::UnitStruct(Box::new(path.into())),
                 Some(init) => match init {
-                    Initiator::Paren => {
+                    Initiator::Tuple => {
                         let val = Self::TupleStruct(Box::new((path.into(), deserialize_values(der)?)));
                         der.src.end_tuple()?;
                         val
                     }
-                    Initiator::Brace => {
+                    Initiator::MapLike => {
                         let val = Self::MapStruct(Box::new((path.into(), deserialize_fields_map(der)?)));
                         der.src.end_map_like()?;
                         val
                     }
-                    Initiator::Quest => return Err(todo!()),
-                    Initiator::Brack => return Err(todo!()),
+                    _ => return Err(ErrorKind::InvalidNominalStructureBody),
                 },
+                None => Self::UnitStruct(Box::new(path.into())),
             },
         })
     }
@@ -71,7 +70,7 @@ fn deserialize_values<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultK
     der.ttl_enter()?;
     let mut values = Values2::new();
     loop {
-        if der.src.seek_delim()?.is_some() {
+        if der.src.adjacent_to_delim()? {
             break;
         }
         let value = Value2::deserialize_with(der, PrivateMethod)?;
@@ -86,7 +85,7 @@ fn deserialize_values_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> Res
     der.ttl_enter()?;
     let mut values_map = ValuesMap2::new();
     loop {
-        if der.src.seek_delim()?.is_some() {
+        if der.src.adjacent_to_delim()? {
             break;
         }
         let key = Value2::deserialize_with(der, PrivateMethod)?;
@@ -103,7 +102,7 @@ fn deserialize_fields_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> Res
     der.ttl_enter()?;
     let mut fields_map = Struct2::new();
     loop {
-        if der.src.seek_delim()?.is_some() {
+        if der.src.adjacent_to_delim()? {
             break;
         }
         let field = Ident::from(der.src.parse_identifier(&mut der.buf)?);

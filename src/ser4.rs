@@ -217,7 +217,7 @@ pub(crate) enum Literal<'a> {
 }
 
 pub(crate) enum NominalKind {
-    NoChange,
+    Unspecified,
     Variant,
     Struct,
 }
@@ -881,7 +881,7 @@ fn write_nominal_path(
 
     match path {
         Path::Dual { name, parent } => {
-            if matches!(kind, Kind::NoChange) || style <= Style::Full {
+            if matches!(kind, Kind::Unspecified) || style <= Style::Full {
                 dst.write_str(&parent)?;
                 dst.write_str("::")?;
                 dst.write_str(&name)
@@ -892,14 +892,14 @@ fn write_nominal_path(
             }
         }
         Path::Single { name } => {
-            if matches!(kind, Kind::NoChange | Kind::Variant) || style <= Style::Named {
+            if matches!(kind, Kind::Unspecified | Kind::Variant) || style <= Style::Named {
                 dst.write_str(&name)
             } else {
                 dst.write_str("_")
             }
         }
         Path::Underscore => {
-            if matches!(kind, Kind::NoChange | Kind::Struct) {
+            if matches!(kind, Kind::Unspecified | Kind::Struct) {
                 dst.write_str("_")
             } else {
                 panic!("missing variant name")

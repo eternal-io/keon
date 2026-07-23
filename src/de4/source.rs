@@ -15,22 +15,22 @@ pub(crate) enum Indicator<'de> {
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Initiator {
-    /** `?` */ Quest,
-    /** `(` */ Paren,
-    /** `[` */ Brack,
-    /** `{` */ Brace,
+    /** `?` */ Maybe,
+    /** `[` */ Array,
+    /** `(` */ Tuple,
+    /** `{` */ MapLike,
 }
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delimiter {
-    /** `)` */ Paren,
-    /** `]` */ Brack,
-    /** `}` */ Brace,
+    /** `]` */ Array,
+    /** `)` */ Tuple,
+    /** `}` */ MapLike,
     /** `,` */ Comma,
     /** `:` */ Colon,
     /** `=>`*/ FatArrow,
-    /** `;` */ Semicolon,
+    /** `;` */ SemiColon,
                EOF,
 }
 
@@ -55,10 +55,10 @@ pub(crate) enum BytesKind {
     Base16,
 }
 
-#[expect(private_bounds, reason = "Sealed")]
-pub trait Source<'de>: ReadConcr<'de> + ReadAny<'de> {}
+#[expect(private_bounds)]
+pub trait Source<'de>: ParseToConcr<'de> + ParseToValue<'de> {}
 
-pub(crate) trait Read<'de> {
+pub(crate) trait ParseHelper<'de> {
     fn set_position(&mut self);
 
     /// Position of the most recent call to `set_position()`.
@@ -70,7 +70,7 @@ pub(crate) trait Read<'de> {
     /// Skips WS and consumes the specified delimiter if possible:
     /// - returns `None` on success;
     /// - returns `Some` if another delimiter is found;
-    /// - returns `Err` if no delimiter found.
+    /// - returns `Err` if no delimiter is found.
     fn delim(&mut self, delim: Delimiter) -> ResultKind<Option<Delimiter>>;
 
     /// Skips WS and consumes the specified delimiter. Returns `Err` if not found.
@@ -82,16 +82,16 @@ pub(crate) trait Read<'de> {
         }
     }
 
-    /// Skips WS and peeks the subsequent delimiter. Returns `None` if not found.
-    fn seek_delim(&mut self) -> ResultKind<Option<Delimiter>>;
+    /// Skips WS and checks the presence of a subsequent delimiter.
+    fn adjacent_to_delim(&mut self) -> ResultKind<bool>;
 
-    /// Skips WS and peeks the subsequent delimiter. Returns `Err` if not found.
-    fn seek_delim_expected(&mut self) -> ResultKind<Delimiter> {
-        self.seek_delim()?.ok_or(ErrorKind::ExpectedDelimiter)
+    /// Skips WS and checks the presence of a subsequent delimiter. Returns `Err(reason)` if not found.
+    fn adjacent_to_delim_expected(&mut self, reason: ErrorKind) -> ResultKind {
+        self.adjacent_to_delim()?.then_some(()).ok_or(reason)
     }
 }
 
-pub(crate) trait ReadConcr<'de>: Read<'de> {
+pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     /// If the subsequent content starts with `b'`, consume it and return true.
     fn try_byte(&mut self) -> ResultKind<bool>;
 
@@ -103,23 +103,9 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
 
     fn begin_maybe(&mut self) -> ResultKind;
 
-    fn begin_tuple(&mut self) -> ResultKind;
-    fn end_tuple(&mut self) -> ResultKind {
-        if let Some(delim) = self.delim(Delimiter::Paren)? {
-            self.set_position();
-            if let Delimiter::Comma = delim {
-                Err(ErrorKind::DuplicatedComma)
-            } else {
-                Err(ErrorKind::ExpectedTupleEnd)
-            }
-        } else {
-            Ok(())
-        }
-    }
-
     fn begin_array(&mut self) -> ResultKind;
     fn end_array(&mut self) -> ResultKind {
-        if let Some(delim) = self.delim(Delimiter::Brack)? {
+        if let Some(delim) = self.delim(Delimiter::Array)? {
             self.set_position();
             if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
@@ -131,9 +117,23 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
         }
     }
 
+    fn begin_tuple(&mut self) -> ResultKind;
+    fn end_tuple(&mut self) -> ResultKind {
+        if let Some(delim) = self.delim(Delimiter::Tuple)? {
+            self.set_position();
+            if let Delimiter::Comma = delim {
+                Err(ErrorKind::DuplicatedComma)
+            } else {
+                Err(ErrorKind::ExpectedTupleEnd)
+            }
+        } else {
+            Ok(())
+        }
+    }
+
     fn begin_map_like(&mut self) -> ResultKind;
     fn end_map_like(&mut self) -> ResultKind {
-        if let Some(delim) = self.delim(Delimiter::Brace)? {
+        if let Some(delim) = self.delim(Delimiter::MapLike)? {
             self.set_position();
             if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
@@ -153,6 +153,7 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
 
     fn parse_byte(&mut self) -> ResultKind<u8>;
 
+    // TODO: According to the grammar spec, WS is not allowed between negative signs and digits.
     fn parse_i8(&mut self) -> ResultKind<i8>;
     fn parse_i16(&mut self) -> ResultKind<i16>;
     fn parse_i32(&mut self) -> ResultKind<i32>;
@@ -174,16 +175,17 @@ pub(crate) trait ReadConcr<'de>: Read<'de> {
 
     fn parse_bytes<'t>(&mut self, kind: BytesKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de [u8], &'t [u8]>>;
 
-    fn parse_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
+    // TODO: According to the grammar spec, WS is not allowed surrounding path separators.
+    fn parse_nominal_path<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
     where
         'de: 't;
 
-    fn parse_nominal_path<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
+    fn parse_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
     where
         'de: 't;
 }
 
-pub(crate) trait ReadAny<'de>: Read<'de> {
+pub(crate) trait ParseToValue<'de>: ParseHelper<'de> {
     fn begin(&mut self) -> ResultKind<Indicator<'de>>;
 
     /// Skips WS and consumes the subsequent initiator. Returns `None` if not found.

@@ -1,6 +1,7 @@
 use alloc::collections::BTreeMap;
 use core::{
     cmp::Ordering,
+    fmt,
     hash::{Hash, Hasher},
     mem,
     ops::Deref,
@@ -252,6 +253,12 @@ impl Deref for IdentRef<'_> {
 impl<'a> From<&'a Ident> for IdentRef<'a> {
     fn from(value: &'a Ident) -> Self {
         Self(value)
+    }
+}
+
+impl fmt::Display for IdentRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self)
     }
 }
 

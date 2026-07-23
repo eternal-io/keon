@@ -22,32 +22,29 @@ pub enum ErrorKind {
     WontImplement,
     ExceededRecursionLimit,
 
-    ExpectedDelimiter,
-    ExpectedIdentifier,
-    ExpectedNominalPath,
+    // ExpectedIdentifier,
+    // ExpectedNominalPath,
     ExpectedVariantName,
-    UnexpectedEnum {
-        expected: &'static str,
-        // found: String,
-        // TODO!
-    },
-    ExpectedStruct {
-        name: &'static str,
-    },
+    ExpectedDifferentEnumName { expected: &'static str, found: String },
+    ExpectedDifferentStructName { expected: &'static str, found: String },
+    UnexpectedPathAsStructName,
 
-    DuplicatedComma,
+    UnexpectedUnitBody,
+    ExpectedMaybe,
     ExpectedArray,
     ExpectedArrayEnd,
-    ExpectedColon,
-    ExpectedFatArrow,
-    ExpectedMapLike,
-    ExpectedMapLikeEnd,
-    ExpectedMaybe,
     ExpectedTuple,
     ExpectedTupleEnd,
-    ExpectedUnit,
-    ExpectedUnitEnd,
+    ExpectedMapLike,
+    ExpectedMapLikeEnd,
+
+    ExpectedColon,
+    ExpectedFatArrow,
     ExpectedInitiator,
+
+    DuplicatedComma,
+
+    InvalidNominalStructureBody,
 }
 
 impl core::error::Error for ErrorKind {}
