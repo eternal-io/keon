@@ -98,13 +98,11 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     deserialize_integer!(deserialize_i32, visit_i32, parse_i32);
     deserialize_integer!(deserialize_i64, visit_i64, parse_i64);
     deserialize_integer!(deserialize_i128, visit_i128, parse_i128);
-
     deserialize_integer!(deserialize_u8, visit_u8, parse_u8);
     deserialize_integer!(deserialize_u16, visit_u16, parse_u16);
     deserialize_integer!(deserialize_u32, visit_u32, parse_u32);
     deserialize_integer!(deserialize_u64, visit_u64, parse_u64);
     deserialize_integer!(deserialize_u128, visit_u128, parse_u128);
-
     deserialize_float!(deserialize_f32, visit_f32, parse_f32);
     deserialize_float!(deserialize_f64, visit_f64, parse_f64);
 
@@ -173,7 +171,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
 
     fn deserialize_unit_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
         self.deserialize_struct_name(name)?;
-        self.adjacent_to_delim_expected(ErrorKind::InvalidUnit)?;
+        self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
         visitor.visit_unit()
     }
     fn deserialize_newtype_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
@@ -245,7 +243,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     fn deserialize_map_like<V: Visitor<'de>, const STRUCT_MODE: bool>(mut self, visitor: V) -> ResultKind<V::Value> {
         recursion_guard!(self, {
             self.begin_map_like()?;
-            let val = visitor.visit_map(MapAccessor::<R, STRUCT_MODE> { der: self.reborrow() })?;
+            let val = visitor.visit_map(MapLikeAccessor::<R, STRUCT_MODE> { der: self.reborrow() })?;
             self.end_map_like()?;
             Ok(val)
         })
@@ -267,15 +265,15 @@ impl<'de, R: Source<'de>> SeqAccess<'de> for DeserializerWrapper<'_, R> {
     }
 }
 
-struct MapAccessor<'a, R, const STRUCT_MODE: bool> {
+struct MapLikeAccessor<'a, R, const STRUCT_MODE: bool> {
     der: DeserializerWrapper<'a, R>,
 }
 
-impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapAccessor<'_, R, STRUCT_MODE> {
+impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapLikeAccessor<'_, R, STRUCT_MODE> {
     type Error = ErrorKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
-        let MapAccessor { der } = self;
+        let MapLikeAccessor { der } = self;
         if der.adjacent_to_delim()? {
             return Ok(None);
         }
@@ -289,7 +287,7 @@ impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapAccesso
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
-        let MapAccessor { der } = self;
+        let MapLikeAccessor { der } = self;
         let val = seed.deserialize(der.reborrow())?;
         der.delim(Delimiter::Comma)?;
         Ok(val)
@@ -332,7 +330,7 @@ impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
     type Error = ErrorKind;
 
     fn unit_variant(mut self) -> ResultKind<()> {
-        self.adjacent_to_delim_expected(ErrorKind::InvalidUnit)?;
+        self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
         Ok(())
     }
 

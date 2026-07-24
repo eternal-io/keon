@@ -1,4 +1,5 @@
 use super::*;
+use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use memchr::*;
 
 pub(crate) enum Indicator<'de> {
@@ -35,6 +36,21 @@ pub(crate) enum Delimiter {
                EOF,
 }
 
+pub(crate) enum NumberSuffix {
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Int128,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    UInt128,
+    Float32,
+    Float64,
+}
+
 pub(crate) enum NumberKind {
     Normal,
     Infinity,
@@ -42,28 +58,66 @@ pub(crate) enum NumberKind {
     NotANumber,
 }
 
+pub(crate) enum IntegerKind {
+    Dec = 10,
+    Hex = 16,
+    Oct = 8,
+    Bin = 2,
+}
+
 pub(crate) enum StringKind {
     Normal,
-    Raw(usize),
-    Paragraph(usize),
+    Raw { ticks: usize },
+    Paragraph { ticks: usize },
 }
 
 pub(crate) enum BytesKind {
     Normal,
-    Raw(usize),
+    Raw { ticks: usize },
     Base64,
     Base32,
     Base16,
+}
+
+trait LenUtf8 {
+    fn len_utf8(&self) -> usize;
+}
+
+impl LenUtf8 for Delimiter {
+    fn len_utf8(&self) -> usize {
+        match self {
+            Delimiter::FatArrow => 2,
+            Delimiter::EOF => 0,
+            _ => 1,
+        }
+    }
+}
+
+impl LenUtf8 for NumberSuffix {
+    fn len_utf8(&self) -> usize {
+        match self {
+            NumberSuffix::Int8 => 2,
+            NumberSuffix::UInt8 => 2,
+            NumberSuffix::Int16 | NumberSuffix::Int32 | NumberSuffix::Int64 => 3,
+            NumberSuffix::UInt16 | NumberSuffix::UInt32 | NumberSuffix::UInt64 => 3,
+            NumberSuffix::Float32 | NumberSuffix::Float64 => 3,
+            NumberSuffix::Int128 => 4,
+            NumberSuffix::UInt128 => 4,
+        }
+    }
 }
 
 #[expect(private_bounds)]
 pub trait Source<'de>: ParseToConcr<'de> + ParseToValue<'de> {}
 
 pub(crate) trait ParseHelper<'de> {
-    fn set_position(&mut self);
-
-    /// Position of the most recent call to `set_position()`.
+    /// Position after the last call to `eat_ws()` or `raise()`.
+    ///
+    /// Note that many methods would call `eat_ws()` implicitly.
     fn position(&self) -> Position;
+
+    /// Bumps the `position()` by `offset` and returns `Err(reason)`.
+    fn raise(&mut self, offset: usize, reason: ErrorKind) -> ResultKind;
 
     /// Consumes the subsequent whitespaces and comments.
     fn eat_ws(&mut self) -> ResultKind;
@@ -76,11 +130,7 @@ pub(crate) trait ParseHelper<'de> {
 
     /// Skips WS and consumes the specified delimiter. Returns `Err` if not found.
     fn delim_expected(&mut self, delim: Delimiter, reason: ErrorKind) -> ResultKind {
-        if self.delim(delim)?.is_none() {
-            Ok(())
-        } else {
-            Err(reason)
-        }
+        self.delim(delim)?.is_none().then_some(()).ok_or(reason)
     }
 
     /// Skips WS and checks the presence of a subsequent delimiter.
@@ -107,7 +157,6 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn begin_array(&mut self) -> ResultKind;
     fn end_array(&mut self) -> ResultKind {
         if let Some(delim) = self.delim(Delimiter::Array)? {
-            self.set_position();
             if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
             } else {
@@ -121,7 +170,6 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn begin_tuple(&mut self) -> ResultKind;
     fn end_tuple(&mut self) -> ResultKind {
         if let Some(delim) = self.delim(Delimiter::Tuple)? {
-            self.set_position();
             if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
             } else {
@@ -135,7 +183,6 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn begin_map_like(&mut self) -> ResultKind;
     fn end_map_like(&mut self) -> ResultKind {
         if let Some(delim) = self.delim(Delimiter::MapLike)? {
-            self.set_position();
             if let Delimiter::Comma = delim {
                 Err(ErrorKind::DuplicatedComma)
             } else {
@@ -152,23 +199,21 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
 
     fn parse_bool(&mut self) -> ResultKind<bool>;
 
-    fn parse_byte(&mut self) -> ResultKind<u8>;
-
-    // TODO: According to the grammar spec, WS is not allowed between negative signs and digits.
+    // NOTE: According to the grammar spec, WS is not allowed between negative signs and digits.
     fn parse_i8(&mut self) -> ResultKind<i8>;
     fn parse_i16(&mut self) -> ResultKind<i16>;
     fn parse_i32(&mut self) -> ResultKind<i32>;
     fn parse_i64(&mut self) -> ResultKind<i64>;
     fn parse_i128(&mut self) -> ResultKind<i128>;
-
     fn parse_u8(&mut self) -> ResultKind<u8>;
     fn parse_u16(&mut self) -> ResultKind<u16>;
     fn parse_u32(&mut self) -> ResultKind<u32>;
     fn parse_u64(&mut self) -> ResultKind<u64>;
     fn parse_u128(&mut self) -> ResultKind<u128>;
-
     fn parse_f32(&mut self) -> ResultKind<f32>;
     fn parse_f64(&mut self) -> ResultKind<f64>;
+
+    fn parse_byte(&mut self) -> ResultKind<u8>;
 
     fn parse_char(&mut self) -> ResultKind<char>;
 
@@ -176,7 +221,7 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
 
     fn parse_bytes<'t>(&mut self, kind: BytesKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de [u8], &'t [u8]>>;
 
-    // TODO: According to the grammar spec, WS is not allowed surrounding path separators.
+    // NOTE: According to the grammar spec, WS is not allowed surrounding path separators.
     fn parse_nominal_path<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
     where
         'de: 't;
@@ -196,6 +241,56 @@ pub(crate) trait ParseToValue<'de>: ParseHelper<'de> {
 }
 
 //==================================================================================================
+
+macro_rules! fn_parse_integer {
+    ($ty:ty, $name:ident, $number_suffix:path, $error_kind:path) => {
+        fn $name(&mut self) -> ResultKind<$ty> {
+            use lexical_core::parse_partial_with_options as parse;
+
+            let (n, len) = match self.peek_integer_kind() {
+                IntegerKind::Dec => parse::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTS),
+                IntegerKind::Hex => parse::<$ty, NUMBER_FORMAT_HEX>(self.rest(), &PARSE_INTEGER_OPTS),
+                IntegerKind::Oct => parse::<$ty, NUMBER_FORMAT_OCT>(self.rest(), &PARSE_INTEGER_OPTS),
+                IntegerKind::Bin => parse::<$ty, NUMBER_FORMAT_BIN>(self.rest(), &PARSE_INTEGER_OPTS),
+            }?;
+            self.bump(len);
+
+            match self.peek_number_suffix() {
+                None => self.adjacent_to_delim_expected(ErrorKind::InvalidNumberSuffix)?,
+                Some(suffix) => {
+                    if !matches!(suffix, $number_suffix) {
+                        return Err($error_kind);
+                    }
+                }
+            }
+            self.bump($number_suffix.len_utf8());
+
+            Ok(n)
+        }
+    };
+}
+
+macro_rules! fn_parse_float {
+    ($ty:ty, $name:ident, $number_suffix:path, $error_kind:path) => {
+        fn $name(&mut self) -> ResultKind<$ty> {
+            let (f, len) =
+                lexical_core::parse_partial_with_options::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_FLOAT_OPTS)?;
+            self.bump(len);
+
+            match self.peek_number_suffix() {
+                None => self.adjacent_to_delim_expected(ErrorKind::InvalidNumberSuffix)?,
+                Some(suffix) => {
+                    if !matches!(suffix, $number_suffix) {
+                        return Err($error_kind);
+                    }
+                }
+            }
+            self.bump($number_suffix.len_utf8());
+
+            Ok(f)
+        }
+    };
+}
 
 pub struct SliceSource<'de> {
     src: &'de [u8],
@@ -217,8 +312,12 @@ impl<'de> SliceSource<'de> {
         self.idx = self.src.len();
     }
 
-    /// Refer to [`char::is_whitespace`].
-    fn eat_pure_ws(&mut self) {
+    fn set_position(&mut self) {
+        self.report_idx = self.idx;
+    }
+
+    /// Consumes the subsequent whitespaces. Refer to [`char::is_whitespace`].
+    fn eat_ws_pure(&mut self) {
         loop {
             self.bump(match self.rest() {
                 [b'\x09'..=b'\x0D', ..] => 1,                   // 0009..000D <control-0009>..<control-000D>
@@ -237,29 +336,225 @@ impl<'de> SliceSource<'de> {
         }
     }
 
-    // fn next_byte(&mut self) -> Option<u8> {
-    //     self.src.get(self.idx).copied().inspect(|_| self.idx += 1)
-    // }
-
-    // fn peek_byte(&mut self) -> Option<u8> {
-    //     self.src.get(self.idx).copied()
-    // }
-}
-
-// impl<'de> Source<'de> for SliceSource<'de> {}
-
-impl<'de> ParseHelper<'de> for SliceSource<'de> {
-    fn set_position(&mut self) {
-        self.report_idx = self.idx;
+    /// Skips WS and peeks the subsequent delimiter.
+    fn seek_delim(&mut self) -> ResultKind<Option<Delimiter>> {
+        self.eat_ws()?;
+        'found: {
+            let found = match self.rest() {
+                [b']', ..] => Delimiter::Array,
+                [b')', ..] => Delimiter::Tuple,
+                [b'}', ..] => Delimiter::MapLike,
+                [b',', ..] => Delimiter::Comma,
+                [b':', ..] => Delimiter::Colon,
+                [b'=', b'>', ..] => Delimiter::FatArrow,
+                [b';', ..] => Delimiter::SemiColon,
+                [] => Delimiter::EOF,
+                _ => break 'found,
+            };
+            return Ok(Some(found));
+        }
+        Ok(None)
     }
 
+    fn consume(&mut self, needle: &[u8]) -> bool {
+        if self.rest().starts_with(needle) {
+            self.bump(needle.len());
+            true
+        } else {
+            false
+        }
+    }
+
+    fn consume_expected(&mut self, needle: &[u8], reason: ErrorKind) -> ResultKind {
+        self.consume(needle).then_some(()).ok_or(reason)
+    }
+
+    fn consume_ticks_peek_initiator(&mut self) -> (usize, Option<u8>) {
+        let ticks = self.rest().iter().take_while(|&&ch| ch == b'`').count();
+        self.bump(ticks);
+        if let Some(initiator) = self.rest().first().copied() {
+            if initiator < 0x80 {
+                return (ticks, Some(initiator));
+            }
+        }
+        (ticks, None)
+    }
+
+    fn peek_integer_kind(&self) -> IntegerKind {
+        match self.rest() {
+            [b'-', b'0', b'b', ..] | [b'0', b'b', ..] => IntegerKind::Bin,
+            [b'-', b'0', b'o', ..] | [b'0', b'o', ..] => IntegerKind::Oct,
+            [b'-', b'0', b'x', ..] | [b'0', b'x', ..] => IntegerKind::Hex,
+            _ => IntegerKind::Dec,
+        }
+    }
+
+    fn peek_number_suffix(&self) -> Option<NumberSuffix> {
+        'found: {
+            let kind = match self.rest() {
+                [b'i', b'8', ..] => NumberSuffix::Int8,
+                [b'i', b'1', b'6', ..] => NumberSuffix::Int16,
+                [b'i', b'3', b'2', ..] => NumberSuffix::Int32,
+                [b'i', b'6', b'4', ..] => NumberSuffix::Int64,
+                [b'u', b'8', ..] => NumberSuffix::UInt8,
+                [b'u', b'1', b'6', ..] => NumberSuffix::UInt16,
+                [b'u', b'3', b'2', ..] => NumberSuffix::UInt32,
+                [b'u', b'6', b'4', ..] => NumberSuffix::UInt64,
+                [b'f', b'3', b'2', ..] => NumberSuffix::Float32,
+                [b'f', b'6', b'4', ..] => NumberSuffix::Float64,
+                _ => break 'found,
+            };
+            return Some(kind);
+        }
+        None
+    }
+
+    fn consume_escape_in_byte(&mut self) -> ResultKind<Option<u8>> {
+        if !self.consume(b"\\") {
+            return Ok(None);
+        }
+        let byte = match self.rest() {
+            [b'\\', ..] => b'\\',
+            [b'\"', ..] => b'\"',
+            [b'\'', ..] => b'\'',
+            [b'\0', ..] => b'\0',
+            [b'\n', ..] => b'\n',
+            [b'\t', ..] => b'\t',
+            [b'\r', ..] => b'\r',
+            _ => {
+                if self.consume(b"x") {
+                    if let Some((bytes, _)) = self.rest().split_first_chunk::<2>() {
+                        let byte = lexical_core::parse::<u8>(bytes)?;
+                        self.bump(bytes.len());
+                        return Ok(Some(byte));
+                    }
+                }
+                return Err(ErrorKind::InvalidByteEscape);
+            }
+        };
+        self.bump(1);
+        Ok(Some(byte))
+    }
+
+    fn consume_escape_in_char(&mut self) -> ResultKind<Option<char>> {
+        if !self.consume(b"\\") {
+            return Ok(None);
+        }
+        let ch = match self.rest() {
+            [b'\\', ..] => '\\',
+            [b'\"', ..] => '\"',
+            [b'\'', ..] => '\'',
+            [b'\0', ..] => '\0',
+            [b'\n', ..] => '\n',
+            [b'\t', ..] => '\t',
+            [b'\r', ..] => '\r',
+            _ => {
+                if self.consume(b"x") {
+                    if let Some((bytes, _)) = self.rest().split_first_chunk::<2>() {
+                        let byte = lexical_core::parse::<u8>(bytes)?;
+                        if byte < 0x80 {
+                            self.bump(bytes.len());
+                            return Ok(Some(byte as char));
+                        }
+                    }
+                } else if self.consume(b"u") {
+                    'unicode: {
+                        if !self.consume(b"{") {
+                            break 'unicode;
+                        }
+                        let Some(len) = self.rest().iter().position(|&byte| byte == b'}') else {
+                            break 'unicode;
+                        };
+                        let Ok(cp) = lexical_core::parse_with_options::<
+                            u32,
+                            { lexical_core::NumberFormatBuilder::hexadecimal() },
+                        >(
+                            &self.rest()[..len + 1], &lexical_core::ParseIntegerOptions::new()
+                        ) else {
+                            break 'unicode;
+                        };
+                        let Some(ch) = char::from_u32(cp) else {
+                            break 'unicode;
+                        };
+                        self.bump(len + 1);
+                        return Ok(Some(ch));
+                    }
+                    return Err(ErrorKind::InvalidUnicodeEscape);
+                }
+                return Err(ErrorKind::InvalidAsciiEscape);
+            }
+        };
+        self.bump(1);
+        Ok(Some(ch))
+    }
+
+    fn next_ch_from(&mut self, offset: usize) -> ResultKind<(char, usize)> {
+        // Copyright (c) 2008-2010 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+        // See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
+        const UTF8_ACCEPT: u32 = 0;
+        const UTF8_REJECT: u32 = 12;
+        #[rustfmt::skip]
+        const UTF8D: [u8; 364] = [
+            // The first part of the table maps bytes to character classes that
+            // to reduce the size of the transition table and create bitmasks.
+             0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+             0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+             0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+             0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+             1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,  9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+             7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+             8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+            10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
+            // The second part is a transition table that maps a combination
+            // of a state of the automaton and a character class to a state.
+             0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+            12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+            12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+            12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+            12,36,12,12,12,12,12,12,12,12,12,12,
+        ];
+
+        let mut state = UTF8_ACCEPT;
+        let mut codep = 0;
+
+        for (i, &byte) in self.rest()[offset..].iter().enumerate() {
+            let type_ = UTF8D[byte as usize] as u32;
+
+            codep = if state != UTF8_ACCEPT {
+                codep << 6 | 0x3F & byte as u32
+            } else {
+                (0xFF >> type_) & byte as u32
+            };
+            state = UTF8D[256 + state as usize + type_ as usize] as u32;
+
+            if state == UTF8_ACCEPT {
+                return Ok((unsafe { char::from_u32_unchecked(codep) }, i + 1));
+            }
+            if state == UTF8_REJECT {
+                break;
+            }
+        }
+
+        Err(ErrorKind::InvalidUtf8Sequence)
+    }
+}
+
+// TODO! impl<'de> Source<'de> for SliceSource<'de> {}
+
+impl<'de> ParseHelper<'de> for SliceSource<'de> {
     fn position(&self) -> Position {
         todo!()
     }
 
+    fn raise(&mut self, offset: usize, reason: ErrorKind) -> ResultKind {
+        self.bump(offset);
+        self.set_position();
+        Err(reason)
+    }
+
     fn eat_ws(&mut self) -> ResultKind {
         loop {
-            self.eat_pure_ws();
+            self.eat_ws_pure();
             match self.rest() {
                 [b'/', b'/', rest @ ..] => {
                     if let Some(off) = memchr(b'\n', rest) {
@@ -292,14 +587,209 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
                 _ => break,
             }
         }
+        self.set_position();
         Ok(())
     }
 
     fn delim(&mut self, delim: Delimiter) -> ResultKind<Option<Delimiter>> {
-        todo!()
+        match self.seek_delim()? {
+            Some(found) => {
+                if found == delim {
+                    self.bump(found.len_utf8());
+
+                    Ok(None)
+                } else {
+                    Ok(Some(found))
+                }
+            }
+            None => Err(ErrorKind::ExpectedDelimiter),
+        }
     }
 
     fn adjacent_to_delim(&mut self) -> ResultKind<bool> {
+        Ok(self.seek_delim()?.is_some())
+    }
+}
+
+impl<'de> ParseToConcr<'de> for SliceSource<'de> {
+    fn try_byte(&mut self) -> ResultKind<bool> {
+        Ok(self.consume(b"b'"))
+    }
+
+    fn begin_char(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"'", ErrorKind::ExpectedCharacter)
+    }
+
+    fn begin_string(&mut self) -> ResultKind<StringKind> {
+        self.eat_ws()?;
+        let kind = match self.consume_ticks_peek_initiator() {
+            (0, Some(b'"')) => StringKind::Normal,
+            (ticks @ 1.., Some(b'"')) => StringKind::Raw { ticks },
+            (ticks @ 1.., Some(b'|')) => StringKind::Paragraph { ticks },
+            _ => return Err(ErrorKind::ExpectedStringOrParagraph),
+        };
+        self.bump(1);
+        Ok(kind)
+    }
+
+    fn begin_bytes(&mut self) -> ResultKind<BytesKind> {
+        self.eat_ws()?;
+        if !self.consume(b"b") {
+            return Err(ErrorKind::ExpectedByteString);
+        }
+        let kind = if let (ticks, Some(b'"')) = self.consume_ticks_peek_initiator() {
+            self.bump(1);
+            if ticks == 0 {
+                BytesKind::Normal
+            } else {
+                BytesKind::Raw { ticks }
+            }
+        } else if self.consume(b"64\"") {
+            BytesKind::Base64
+        } else if self.consume(b"32\"") {
+            BytesKind::Base32
+        } else if self.consume(b"16\"") {
+            BytesKind::Base16
+        } else {
+            return Err(ErrorKind::ExpectedByteString);
+        };
+        Ok(kind)
+    }
+
+    fn begin_maybe(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"?", ErrorKind::ExpectedMaybe)
+    }
+
+    fn begin_array(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"[", ErrorKind::ExpectedArray)
+    }
+
+    fn begin_tuple(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"(", ErrorKind::ExpectedTuple)
+    }
+
+    fn begin_map_like(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"{", ErrorKind::ExpectedMapLike)
+    }
+
+    fn parse_unit(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"(", ErrorKind::ExpectedUnit)?;
+        self.eat_ws()?;
+        self.consume_expected(b")", ErrorKind::ExpectedUnitEnd)
+    }
+
+    // NOTE: No leading `eat_ws()` following.
+
+    fn parse_bool(&mut self) -> ResultKind<bool> {
+        if self.consume(b"true") {
+            Ok(true)
+        } else if self.consume(b"false") {
+            Ok(false)
+        } else {
+            Err(ErrorKind::ExpectedBoolean)
+        }
+    }
+
+    fn_parse_integer!(i8, parse_i8, NumberSuffix::Int8, ErrorKind::ExpectedInt8);
+    fn_parse_integer!(i16, parse_i16, NumberSuffix::Int16, ErrorKind::ExpectedInt16);
+    fn_parse_integer!(i32, parse_i32, NumberSuffix::Int32, ErrorKind::ExpectedInt32);
+    fn_parse_integer!(i64, parse_i64, NumberSuffix::Int64, ErrorKind::ExpectedInt64);
+    fn_parse_integer!(i128, parse_i128, NumberSuffix::Int128, ErrorKind::ExpectedInt128);
+    fn_parse_integer!(u8, parse_u8, NumberSuffix::UInt8, ErrorKind::ExpectedUInt8);
+    fn_parse_integer!(u16, parse_u16, NumberSuffix::UInt16, ErrorKind::ExpectedUInt16);
+    fn_parse_integer!(u32, parse_u32, NumberSuffix::UInt32, ErrorKind::ExpectedUInt32);
+    fn_parse_integer!(u64, parse_u64, NumberSuffix::UInt64, ErrorKind::ExpectedUInt64);
+    fn_parse_integer!(u128, parse_u128, NumberSuffix::UInt128, ErrorKind::ExpectedUInt128);
+    fn_parse_float!(f32, parse_f32, NumberSuffix::Float32, ErrorKind::ExpectedFloat32);
+    fn_parse_float!(f64, parse_f64, NumberSuffix::Float64, ErrorKind::ExpectedFloat64);
+
+    fn parse_byte(&mut self) -> ResultKind<u8> {
+        if let Some(byte) = self.consume_escape_in_byte()? {
+            self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+            Ok(byte)
+        } else {
+            let (ch, len) = self.next_ch_from(0)?;
+            if ch.is_ascii() {
+                self.bump(len);
+                self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+                Ok(ch as u8)
+            } else {
+                Err(ErrorKind::UnexpectedNonAsciiCharacter)
+            }
+        }
+    }
+
+    fn parse_char(&mut self) -> ResultKind<char> {
+        if let Some(ch) = self.consume_escape_in_char()? {
+            self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+            Ok(ch)
+        } else {
+            let (ch, len) = self.next_ch_from(0)?;
+            self.bump(len);
+            self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+            Ok(ch)
+        }
+    }
+
+    fn parse_string<'t>(&mut self, kind: StringKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de str, &'t str>> {
         todo!()
+    }
+
+    fn parse_bytes<'t>(&mut self, kind: BytesKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de [u8], &'t [u8]>> {
+        todo!()
+    }
+
+    fn parse_nominal_path<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
+    where
+        'de: 't,
+    {
+        todo!()
+    }
+
+    fn parse_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
+    where
+        'de: 't,
+    {
+        let _ = buf;
+        let raw_mode = self.consume(b"`");
+        let mut conti = false;
+        let mut offset = 0;
+
+        if self.rest().starts_with(b"_") {
+            conti = true;
+            offset += 1;
+        }
+
+        loop {
+            let (ch, len) = self.next_ch_from(offset)?;
+            if !conti && unicode_ident::is_xid_start(ch) {
+                conti = true;
+                offset += len;
+            } else if conti && unicode_ident::is_xid_continue(ch) {
+                offset += len;
+            } else {
+                break;
+            }
+        }
+
+        if offset == 0 {
+            Err(ErrorKind::ExpectedIdentifier)
+        } else {
+            let ident = unsafe { str::from_utf8_unchecked(&self.rest()[..offset]) };
+            if matches!(ident, "_") {
+                Err(ErrorKind::UnexpectedUnderscoreAsIdentifier)
+            } else if !raw_mode && matches!(ident, "true" | "false" | "inf" | "NaN") {
+                Err(ErrorKind::UnexpectedKeywordAsIdentifier)
+            } else {
+                self.bump(offset);
+                Ok(IdentRef::new_unchecked(ident))
+            }
+        }
     }
 }

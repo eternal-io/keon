@@ -1,7 +1,5 @@
 use self::{error::*, source::*};
 use crate::{format::*, value::*, PrivateMethod};
-use core::{cmp::Ordering, marker::PhantomData};
-use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use either::Either;
 
 mod de_to_concr;

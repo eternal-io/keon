@@ -27,7 +27,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 either = "1.15.0"
 memchr = "2.7.5"
 simdutf8 = "0.1.5"
-lexical-core = { version = "1.0.5", features = ["format", "power-of-two"] }
+lexical-core = { version = "1.0.6", features = ["format", "power-of-two"] }
 data-encoding = "2.9.0"
 unicode-ident = "1.0.18"
 

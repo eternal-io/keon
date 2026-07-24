@@ -29,6 +29,26 @@ pub enum ErrorKind {
     ExpectedDifferentStructName { expected: &'static str, found: String },
     UnexpectedPathAsStructName,
 
+    ExpectedStringOrParagraph,
+    ExpectedCharacter,
+    ExpectedByteString,
+    ExpectedInt8,
+    ExpectedInt16,
+    ExpectedInt32,
+    ExpectedInt64,
+    ExpectedInt128,
+    ExpectedUInt8,
+    ExpectedUInt16,
+    ExpectedUInt32,
+    ExpectedUInt64,
+    ExpectedUInt128,
+    ExpectedFloat32,
+    ExpectedFloat64,
+    ExpectedBoolean,
+    InvalidNumberSuffix,
+
+    ExpectedUnit,
+    ExpectedUnitEnd,
     ExpectedMaybe,
     ExpectedArray,
     ExpectedArrayEnd,
@@ -36,17 +56,25 @@ pub enum ErrorKind {
     ExpectedTupleEnd,
     ExpectedMapLike,
     ExpectedMapLikeEnd,
+    UnexpectedUnitBody,
 
+    ExpectedUnquote,
     ExpectedColon,
     ExpectedFatArrow,
-    ExpectedInitiator,
+    ExpectedDelimiter,
+    InvalidNominalStructureBody,
 
     DuplicatedComma,
 
-    InvalidUnit,
-    InvalidNominalStructureBody,
-    InvalidUtf8Character,
     UnclosedBlockComment,
+    InvalidByteEscape,
+    InvalidAsciiEscape,
+    InvalidUnicodeEscape,
+    InvalidUtf8Sequence,
+    UnexpectedNonAsciiCharacter,
+    ExpectedIdentifier,
+    UnexpectedKeywordAsIdentifier,
+    UnexpectedUnderscoreAsIdentifier,
 }
 
 impl core::error::Error for ErrorKind {}
@@ -59,6 +87,12 @@ impl serde::de::Error for ErrorKind {
 
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        todo!()
+    }
+}
+
+impl From<lexical_core::Error> for ErrorKind {
+    fn from(value: lexical_core::Error) -> Self {
         todo!()
     }
 }

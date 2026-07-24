@@ -1,5 +1,5 @@
 use crate::{
-    format,
+    format::*,
     value::{Float32, Float64, NominalPathRef, Number2, NumberNoSuffix2},
     PrivateMethod, Sealed,
 };
@@ -729,7 +729,7 @@ macro_rules! write_number {
         $write_opts:path
     ) => {
         if let $variant = $numeric {
-            let slice = lexical_core::write_with_options::<_, { format::NUMBER_FORMAT }>($x, &mut $buf, &$write_opts);
+            let slice = lexical_core::write_with_options::<_, NUMBER_FORMAT>($x, &mut $buf, &$write_opts);
 
             $dst.write_str(unsafe { ::core::str::from_utf8_unchecked(slice) })?;
 
@@ -747,12 +747,12 @@ fn write_number(
     let mut buf = [0x00u8; lexical_core::BUFFER_SIZE];
 
     'switch: {
-        write_number!('switch, dst, Numeric::Int(x),           numeric, x,                               buf, format::WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::UInt(x),          numeric, x,                               buf, format::WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::Float32(x),       numeric, x,                               buf, format::WRITE_FLOAT_OPTS);
-        write_number!('switch, dst, Numeric::Float64(x),       numeric, x,                               buf, format::WRITE_FLOAT_OPTS);
-        write_number!('switch, dst, Numeric::LongInt{lo, hi},  numeric, (hi as i128) << 64 | lo as i128, buf, format::WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::LongUInt{lo, hi}, numeric, (hi as u128) << 64 | lo as u128, buf, format::WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::Int(x),           numeric, x,                               buf, WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::UInt(x),          numeric, x,                               buf, WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::Float32(x),       numeric, x,                               buf, WRITE_FLOAT_OPTS);
+        write_number!('switch, dst, Numeric::Float64(x),       numeric, x,                               buf, WRITE_FLOAT_OPTS);
+        write_number!('switch, dst, Numeric::LongInt{lo, hi},  numeric, (hi as i128) << 64 | lo as i128, buf, WRITE_INTEGER_OPTS);
+        write_number!('switch, dst, Numeric::LongUInt{lo, hi}, numeric, (hi as u128) << 64 | lo as u128, buf, WRITE_INTEGER_OPTS);
     }
 
     let Either::Left(number) = number else {
@@ -833,16 +833,16 @@ fn write_escaped_char(dst: &mut impl Write, ch: char, ctx: TextualKind) -> fmt::
 
 #[inline(always)]
 fn write_u8_fmt_02_hex(dst: &mut impl Write, byte: u8) -> fmt::Result {
-    const NUMBER_FORMAT_HEX_NO_PREFIX: u128 = lexical_core::NumberFormatBuilder::rebuild(format::NUMBER_FORMAT)
+    const NUMBER_FORMAT_HEX_NO_PREFIX: u128 = lexical_core::NumberFormatBuilder::rebuild(NUMBER_FORMAT)
         .mantissa_radix(16)
-        .build();
+        .build_strict();
 
     let mut buf = [b'0'; 2];
 
     lexical_core::write_with_options::<u8, NUMBER_FORMAT_HEX_NO_PREFIX>(
         byte,
         &mut buf[(byte < 0x10) as usize..],
-        &format::WRITE_INTEGER_OPTS,
+        &WRITE_INTEGER_OPTS,
     );
 
     dst.write_str(unsafe { ::core::str::from_utf8_unchecked(&buf) })
