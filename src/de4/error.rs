@@ -16,11 +16,15 @@ pub struct Error {}
 
 //==================================================================================================
 
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum ErrorKind {
     Corrupted,
     WontImplement,
     ExceededRecursionLimit,
+    UnexpectedEof,
+    UnexpectedCarriageReturn,
+    UnbalancedRawTicks,
 
     // ExpectedIdentifier,
     // ExpectedNominalPath,
@@ -74,7 +78,7 @@ pub enum ErrorKind {
     UnexpectedNonAsciiCharacter,
     ExpectedIdentifier,
     UnexpectedKeywordAsIdentifier,
-    UnexpectedUnderscoreAsIdentifier,
+    UnexpectedUnderscoreIdentifier,
 }
 
 impl core::error::Error for ErrorKind {}
@@ -93,6 +97,12 @@ impl fmt::Display for ErrorKind {
 
 impl From<lexical_core::Error> for ErrorKind {
     fn from(value: lexical_core::Error) -> Self {
+        todo!()
+    }
+}
+
+impl From<simdutf8::compat::Utf8Error> for ErrorKind {
+    fn from(value: simdutf8::compat::Utf8Error) -> Self {
         todo!()
     }
 }

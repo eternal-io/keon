@@ -1,4 +1,5 @@
 use super::*;
+use core::cmp::Ordering;
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use memchr::*;
 
@@ -97,12 +98,12 @@ impl LenUtf8 for NumberSuffix {
     fn len_utf8(&self) -> usize {
         match self {
             NumberSuffix::Int8 => 2,
-            NumberSuffix::UInt8 => 2,
             NumberSuffix::Int16 | NumberSuffix::Int32 | NumberSuffix::Int64 => 3,
-            NumberSuffix::UInt16 | NumberSuffix::UInt32 | NumberSuffix::UInt64 => 3,
-            NumberSuffix::Float32 | NumberSuffix::Float64 => 3,
             NumberSuffix::Int128 => 4,
+            NumberSuffix::UInt8 => 2,
+            NumberSuffix::UInt16 | NumberSuffix::UInt32 | NumberSuffix::UInt64 => 3,
             NumberSuffix::UInt128 => 4,
+            NumberSuffix::Float32 | NumberSuffix::Float64 => 3,
         }
     }
 }
@@ -115,9 +116,6 @@ pub(crate) trait ParseHelper<'de> {
     ///
     /// Note that many methods would call `eat_ws()` implicitly.
     fn position(&self) -> Position;
-
-    /// Bumps the `position()` by `offset` and returns `Err(reason)`.
-    fn raise(&mut self, offset: usize, reason: ErrorKind) -> ResultKind;
 
     /// Consumes the subsequent whitespaces and comments.
     fn eat_ws(&mut self) -> ResultKind;
@@ -193,8 +191,6 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
         }
     }
 
-    //------------------------------------------------------------------------------
-
     fn parse_unit(&mut self) -> ResultKind;
 
     fn parse_bool(&mut self) -> ResultKind<bool>;
@@ -217,16 +213,18 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
 
     fn parse_char(&mut self) -> ResultKind<char>;
 
-    fn parse_string<'t>(&mut self, kind: StringKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de str, &'t str>>;
+    fn parse_string<'t>(&mut self, kind: StringKind, scratch: &'t mut Vec<u8>)
+        -> ResultKind<Either<&'de str, &'t str>>;
 
-    fn parse_bytes<'t>(&mut self, kind: BytesKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de [u8], &'t [u8]>>;
+    fn parse_bytes<'t>(&mut self, kind: BytesKind, scratch: &'t mut Vec<u8>)
+        -> ResultKind<Either<&'de [u8], &'t [u8]>>;
 
     // NOTE: According to the grammar spec, WS is not allowed surrounding path separators.
-    fn parse_nominal_path<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
+    fn parse_nominal_path<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
     where
         'de: 't;
 
-    fn parse_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
+    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
     where
         'de: 't;
 }
@@ -303,6 +301,12 @@ impl<'de> SliceSource<'de> {
         &self.src[self.idx..]
     }
 
+    fn raise<T>(&mut self, offset: usize, reason: ErrorKind) -> ResultKind<T> {
+        self.bump(offset);
+        self.set_position();
+        Err(reason)
+    }
+
     fn bump(&mut self, len: usize) {
         debug_assert!(len <= self.rest().len());
         self.idx += len;
@@ -370,7 +374,7 @@ impl<'de> SliceSource<'de> {
     }
 
     fn consume_ticks_peek_initiator(&mut self) -> (usize, Option<u8>) {
-        let ticks = self.rest().iter().take_while(|&&ch| ch == b'`').count();
+        let ticks = self.rest().iter().take_while(|&&byte| byte == b'`').count();
         self.bump(ticks);
         if let Some(initiator) = self.rest().first().copied() {
             if initiator < 0x80 {
@@ -378,6 +382,10 @@ impl<'de> SliceSource<'de> {
             }
         }
         (ticks, None)
+    }
+
+    fn peek_ticks_from(&self, offset: usize) -> usize {
+        self.rest()[offset..].iter().take_while(|&&byte| byte == b'`').count()
     }
 
     fn peek_integer_kind(&self) -> IntegerKind {
@@ -396,10 +404,12 @@ impl<'de> SliceSource<'de> {
                 [b'i', b'1', b'6', ..] => NumberSuffix::Int16,
                 [b'i', b'3', b'2', ..] => NumberSuffix::Int32,
                 [b'i', b'6', b'4', ..] => NumberSuffix::Int64,
+                [b'i', b'1', b'2', b'8', ..] => NumberSuffix::Int128,
                 [b'u', b'8', ..] => NumberSuffix::UInt8,
                 [b'u', b'1', b'6', ..] => NumberSuffix::UInt16,
                 [b'u', b'3', b'2', ..] => NumberSuffix::UInt32,
                 [b'u', b'6', b'4', ..] => NumberSuffix::UInt64,
+                [b'u', b'1', b'2', b'8', ..] => NumberSuffix::UInt128,
                 [b'f', b'3', b'2', ..] => NumberSuffix::Float32,
                 [b'f', b'6', b'4', ..] => NumberSuffix::Float64,
                 _ => break 'found,
@@ -409,86 +419,80 @@ impl<'de> SliceSource<'de> {
         None
     }
 
-    fn consume_escape_in_byte(&mut self) -> ResultKind<Option<u8>> {
-        if !self.consume(b"\\") {
-            return Ok(None);
-        }
-        let byte = match self.rest() {
+    fn peek_escape_byte_from(&self, offset: usize) -> ResultKind<(u8, usize)> {
+        let byte = match &self.rest()[offset..] {
             [b'\\', ..] => b'\\',
             [b'\"', ..] => b'\"',
             [b'\'', ..] => b'\'',
-            [b'\0', ..] => b'\0',
-            [b'\n', ..] => b'\n',
-            [b'\t', ..] => b'\t',
-            [b'\r', ..] => b'\r',
-            _ => {
-                if self.consume(b"x") {
-                    if let Some((bytes, _)) = self.rest().split_first_chunk::<2>() {
-                        let byte = lexical_core::parse::<u8>(bytes)?;
-                        self.bump(bytes.len());
-                        return Ok(Some(byte));
-                    }
+            [b'0', ..] => b'\0',
+            [b'n', ..] => b'\n',
+            [b't', ..] => b'\t',
+            [b'r', ..] => b'\r',
+            [b'x', rest @ ..] => {
+                if let Some((bytes, _)) = rest.split_first_chunk() {
+                    let byte = Self::parse_u8_fmt_02_hex(bytes)?;
+
+                    return Ok((byte, 1 + 2));
                 }
                 return Err(ErrorKind::InvalidByteEscape);
             }
+            _ => return Err(ErrorKind::InvalidByteEscape),
         };
-        self.bump(1);
-        Ok(Some(byte))
+        Ok((byte, 1))
     }
 
-    fn consume_escape_in_char(&mut self) -> ResultKind<Option<char>> {
-        if !self.consume(b"\\") {
-            return Ok(None);
-        }
-        let ch = match self.rest() {
+    fn peek_escape_char_from(&self, offset: usize) -> ResultKind<(char, usize)> {
+        let ch = match &self.rest()[offset..] {
             [b'\\', ..] => '\\',
             [b'\"', ..] => '\"',
             [b'\'', ..] => '\'',
-            [b'\0', ..] => '\0',
-            [b'\n', ..] => '\n',
-            [b'\t', ..] => '\t',
-            [b'\r', ..] => '\r',
-            _ => {
-                if self.consume(b"x") {
-                    if let Some((bytes, _)) = self.rest().split_first_chunk::<2>() {
-                        let byte = lexical_core::parse::<u8>(bytes)?;
-                        if byte < 0x80 {
-                            self.bump(bytes.len());
-                            return Ok(Some(byte as char));
-                        }
+            [b'0', ..] => '\0',
+            [b'n', ..] => '\n',
+            [b't', ..] => '\t',
+            [b'r', ..] => '\r',
+            [b'x', rest @ ..] => {
+                if let Some((bytes, _)) = rest.split_first_chunk() {
+                    let byte = Self::parse_u8_fmt_02_hex(bytes)?;
+                    if byte < 0x80 {
+                        return Ok((byte as char, 1 + 2));
                     }
-                } else if self.consume(b"u") {
-                    'unicode: {
-                        if !self.consume(b"{") {
-                            break 'unicode;
-                        }
-                        let Some(len) = self.rest().iter().position(|&byte| byte == b'}') else {
-                            break 'unicode;
-                        };
-                        let Ok(cp) = lexical_core::parse_with_options::<
-                            u32,
-                            { lexical_core::NumberFormatBuilder::hexadecimal() },
-                        >(
-                            &self.rest()[..len + 1], &lexical_core::ParseIntegerOptions::new()
-                        ) else {
-                            break 'unicode;
-                        };
-                        let Some(ch) = char::from_u32(cp) else {
-                            break 'unicode;
-                        };
-                        self.bump(len + 1);
-                        return Ok(Some(ch));
-                    }
-                    return Err(ErrorKind::InvalidUnicodeEscape);
                 }
                 return Err(ErrorKind::InvalidAsciiEscape);
             }
+            [b'u', rest @ ..] => {
+                'unicode: {
+                    let Some(b'{') = rest.first() else {
+                        break 'unicode;
+                    };
+                    let Some(len) = rest[1..].iter().position(|&byte| byte == b'}') else {
+                        break 'unicode;
+                    };
+                    let Ok(codep) = lexical_core::parse_with_options::<u32, NUMBER_FORMAT_HEX_NO_PREFIX>(
+                        &rest[1..][..len],
+                        &PARSE_INTEGER_OPTS,
+                    ) else {
+                        break 'unicode;
+                    };
+                    let Some(ch) = char::from_u32(codep) else {
+                        break 'unicode;
+                    };
+                    return Ok((ch, 1 + 1 + len + 1));
+                }
+                return Err(ErrorKind::InvalidUnicodeEscape);
+            }
+            _ => return Err(ErrorKind::InvalidAsciiEscape),
         };
-        self.bump(1);
-        Ok(Some(ch))
+        Ok((ch, 1))
     }
 
-    fn next_ch_from(&mut self, offset: usize) -> ResultKind<(char, usize)> {
+    fn parse_u8_fmt_02_hex(bytes: &[u8; 2]) -> ResultKind<u8> {
+        Ok(lexical_core::parse_with_options::<u8, NUMBER_FORMAT_HEX_NO_PREFIX>(
+            bytes,
+            &PARSE_INTEGER_OPTS,
+        )?)
+    }
+
+    fn decode_from(&self, offset: usize) -> ResultKind<Option<(char, usize)>> {
         // Copyright (c) 2008-2010 Bjoern Hoehrmann <bjoern@hoehrmann.de>
         // See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
         const UTF8_ACCEPT: u32 = 0;
@@ -514,9 +518,12 @@ impl<'de> SliceSource<'de> {
             12,36,12,12,12,12,12,12,12,12,12,12,
         ];
 
+        if self.rest()[offset..].is_empty() {
+            return Ok(None);
+        }
+
         let mut state = UTF8_ACCEPT;
         let mut codep = 0;
-
         for (i, &byte) in self.rest()[offset..].iter().enumerate() {
             let type_ = UTF8D[byte as usize] as u32;
 
@@ -528,7 +535,7 @@ impl<'de> SliceSource<'de> {
             state = UTF8D[256 + state as usize + type_ as usize] as u32;
 
             if state == UTF8_ACCEPT {
-                return Ok((unsafe { char::from_u32_unchecked(codep) }, i + 1));
+                return Ok(Some((unsafe { char::from_u32_unchecked(codep) }, i + 1)));
             }
             if state == UTF8_REJECT {
                 break;
@@ -537,19 +544,62 @@ impl<'de> SliceSource<'de> {
 
         Err(ErrorKind::InvalidUtf8Sequence)
     }
+
+    fn decode_from_expected(&self, offset: usize) -> ResultKind<(char, usize)> {
+        self.decode_from(offset)?.ok_or(ErrorKind::UnexpectedEof)
+    }
+
+    fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<IdentRef<'de>>> {
+        let raw_mode = self.consume(b"`");
+        let mut conti = false;
+        let mut offset = 0;
+
+        if self.rest().starts_with(b"_") {
+            conti = true;
+            offset += 1;
+        }
+        loop {
+            if let Some((ch, len)) = self.decode_from(offset)? {
+                if !conti && unicode_ident::is_xid_start(ch) || conti && unicode_ident::is_xid_continue(ch) {
+                    conti = true;
+                    offset += len;
+                    continue;
+                }
+                if offset == 0 {
+                    return Err(ErrorKind::ExpectedIdentifier);
+                }
+                break;
+            }
+            if offset == 0 {
+                return Err(ErrorKind::UnexpectedEof);
+            }
+            break;
+        }
+
+        let ident = unsafe { str::from_utf8_unchecked(&self.rest()[..offset]) };
+        if matches!(ident, "_") {
+            if raw_mode {
+                Err(ErrorKind::UnexpectedUnderscoreIdentifier)
+            } else {
+                self.bump(offset);
+                Ok(None)
+            }
+        } else {
+            if !raw_mode && matches!(ident, "true" | "false" | "inf" | "NaN") {
+                Err(ErrorKind::UnexpectedKeywordAsIdentifier)
+            } else {
+                self.bump(offset);
+                Ok(Some(IdentRef::new_unchecked(ident)))
+            }
+        }
+    }
 }
 
-// TODO! impl<'de> Source<'de> for SliceSource<'de> {}
+impl<'de> Source<'de> for SliceSource<'de> {}
 
 impl<'de> ParseHelper<'de> for SliceSource<'de> {
     fn position(&self) -> Position {
         todo!()
-    }
-
-    fn raise(&mut self, offset: usize, reason: ErrorKind) -> ResultKind {
-        self.bump(offset);
-        self.set_position();
-        Err(reason)
     }
 
     fn eat_ws(&mut self) -> ResultKind {
@@ -710,86 +760,227 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
     fn_parse_float!(f64, parse_f64, NumberSuffix::Float64, ErrorKind::ExpectedFloat64);
 
     fn parse_byte(&mut self) -> ResultKind<u8> {
-        if let Some(byte) = self.consume_escape_in_byte()? {
-            self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
-            Ok(byte)
+        let (byte, len) = if self.consume(b"\\") {
+            self.peek_escape_byte_from(0)?
         } else {
-            let (ch, len) = self.next_ch_from(0)?;
-            if ch.is_ascii() {
-                self.bump(len);
-                self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
-                Ok(ch as u8)
-            } else {
-                Err(ErrorKind::UnexpectedNonAsciiCharacter)
+            let (ch, len) = self.decode_from_expected(0)?;
+            if !ch.is_ascii() {
+                return Err(ErrorKind::UnexpectedNonAsciiCharacter);
             }
-        }
+            (ch as u8, len)
+        };
+
+        self.bump(len);
+        self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+        Ok(byte)
     }
 
     fn parse_char(&mut self) -> ResultKind<char> {
-        if let Some(ch) = self.consume_escape_in_char()? {
-            self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
-            Ok(ch)
+        let (ch, len) = if self.consume(b"\\") {
+            self.peek_escape_char_from(0)?
         } else {
-            let (ch, len) = self.next_ch_from(0)?;
-            self.bump(len);
-            self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
-            Ok(ch)
-        }
+            self.decode_from_expected(0)?
+        };
+
+        self.bump(len);
+        self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+        Ok(ch)
     }
 
-    fn parse_string<'t>(&mut self, kind: StringKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de str, &'t str>> {
-        todo!()
-    }
-
-    fn parse_bytes<'t>(&mut self, kind: BytesKind, buf: &'t mut Vec<u8>) -> ResultKind<Either<&'de [u8], &'t [u8]>> {
-        todo!()
-    }
-
-    fn parse_nominal_path<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
-    where
-        'de: 't,
-    {
-        todo!()
-    }
-
-    fn parse_identifier<'t>(&mut self, buf: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
-    where
-        'de: 't,
-    {
-        let _ = buf;
-        let raw_mode = self.consume(b"`");
-        let mut conti = false;
+    fn parse_string<'t>(
+        &mut self,
+        kind: StringKind,
+        scratch: &'t mut Vec<u8>,
+    ) -> ResultKind<Either<&'de str, &'t str>> {
+        scratch.clear();
+        let mut buf = [0; 4];
         let mut offset = 0;
+        let mut scratched = false;
+        match kind {
+            StringKind::Normal => {
+                loop {
+                    let Some(off) = memchr3(b'\\', b'\r', b'\"', &self.rest()[offset..]) else {
+                        return self.raise(offset, ErrorKind::UnexpectedEof);
+                    };
+                    let frag = &self.rest()[offset..][..off];
+                    offset += off;
 
-        if self.rest().starts_with(b"_") {
-            conti = true;
-            offset += 1;
-        }
+                    match self.rest()[offset] {
+                        b'\\' => {
+                            let (ch, len) = self
+                                .peek_escape_char_from(offset + 1)
+                                .inspect_err(|_| self.bump(offset + 1))?;
+                            scratched = true;
+                            scratch.extend_from_slice(frag);
+                            scratch.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                            offset += 1 + len
+                        }
+                        b'\r' => {
+                            let Some(b'\n') = self.rest().get(offset + 1) else {
+                                return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
+                            };
+                            scratched = true;
+                            scratch.extend_from_slice(frag);
+                            scratch.push(b'\n');
+                            offset += 1 + 1;
+                        }
+                        b'\"' => {
+                            if scratched {
+                                scratch.extend_from_slice(frag);
+                            }
+                            break;
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                let content = if scratched {
+                    Either::Right(simdutf8::compat::from_utf8(scratch)?)
+                } else {
+                    Either::Left(simdutf8::compat::from_utf8(&self.rest()[..offset])?)
+                };
 
-        loop {
-            let (ch, len) = self.next_ch_from(offset)?;
-            if !conti && unicode_ident::is_xid_start(ch) {
-                conti = true;
-                offset += len;
-            } else if conti && unicode_ident::is_xid_continue(ch) {
-                offset += len;
-            } else {
-                break;
+                self.bump(offset + 1);
+                Ok(content)
+            }
+
+            StringKind::Raw { ticks } => {
+                loop {
+                    let Some(off) = memchr2(b'\r', b'\"', &self.rest()[offset..]) else {
+                        return self.raise(offset, ErrorKind::UnexpectedEof);
+                    };
+                    let frag = &self.rest()[offset..][..off];
+                    offset += off;
+
+                    match self.rest()[offset] {
+                        b'\r' => {
+                            let Some(b'\n') = self.rest().get(offset + 1) else {
+                                return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
+                            };
+                            scratched = true;
+                            scratch.extend_from_slice(frag);
+                            scratch.push(b'\n');
+                            offset += 1 + 1;
+                        }
+                        b'\"' => {
+                            let r_ticks = self.peek_ticks_from(offset + 1);
+                            match ticks.cmp(&r_ticks) {
+                                Ordering::Greater => offset += 1 + r_ticks,
+                                Ordering::Equal => {
+                                    if scratched {
+                                        scratch.extend_from_slice(frag);
+                                    }
+                                    break;
+                                }
+                                Ordering::Less => return self.raise(offset, ErrorKind::UnbalancedRawTicks),
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                let content = if scratched {
+                    Either::Right(simdutf8::compat::from_utf8(scratch)?)
+                } else {
+                    Either::Left(simdutf8::compat::from_utf8(&self.rest()[..offset])?)
+                };
+
+                self.bump(offset + 1 + ticks);
+                Ok(content)
+            }
+
+            StringKind::Paragraph { ticks } => {
+                let mut fresh = true;
+                loop {
+                    let rest = &self.rest()[offset..];
+                    if rest.is_empty() {
+                        break;
+                    }
+                    // TODO: consume the first space.
+
+                    if let Some(off) = memchr2(b'\r', b'\n', rest) {
+                        let frag = &rest[offset..][..off];
+                        match rest[offset] {
+                            b'\r' => {
+                                let Some(b'\n') = self.rest().get(offset + 1) else {
+                                    return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
+                                };
+                                scratched = true;
+                                scratch.extend_from_slice(frag);
+                                scratch.push(b'\n');
+                                offset += 1 + 1;
+                            }
+                            b'\n' => {
+                                todo!()
+                            }
+
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        if scratched {
+                            scratch.extend_from_slice(rest);
+                        }
+                        break;
+                    }
+
+                    fresh = false;
+                }
+
+                todo!()
             }
         }
+    }
 
-        if offset == 0 {
-            Err(ErrorKind::ExpectedIdentifier)
-        } else {
-            let ident = unsafe { str::from_utf8_unchecked(&self.rest()[..offset]) };
-            if matches!(ident, "_") {
-                Err(ErrorKind::UnexpectedUnderscoreAsIdentifier)
-            } else if !raw_mode && matches!(ident, "true" | "false" | "inf" | "NaN") {
-                Err(ErrorKind::UnexpectedKeywordAsIdentifier)
-            } else {
-                self.bump(offset);
-                Ok(IdentRef::new_unchecked(ident))
+    fn parse_bytes<'t>(
+        &mut self,
+        kind: BytesKind,
+        scratch: &'t mut Vec<u8>,
+    ) -> ResultKind<Either<&'de [u8], &'t [u8]>> {
+        todo!()
+    }
+
+    fn parse_nominal_path<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
+    where
+        'de: 't,
+    {
+        let _ = scratch;
+
+        match self.parse_identifier_or_underscore()? {
+            None => Ok(NominalPathRef::Underscore),
+            Some(name_or_parent) => {
+                if !self.consume(b"::") {
+                    Ok(NominalPathRef::Single { name: name_or_parent })
+                } else {
+                    Ok(NominalPathRef::Dual {
+                        name: self
+                            .parse_identifier_or_underscore()?
+                            .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)?,
+                        parent: name_or_parent,
+                    })
+                }
             }
         }
+    }
+
+    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
+    where
+        'de: 't,
+    {
+        let _ = scratch;
+
+        self.parse_identifier_or_underscore()?
+            .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
+    }
+}
+
+impl<'de> ParseToValue<'de> for SliceSource<'de> {
+    fn begin(&mut self) -> ResultKind<Indicator<'de>> {
+        todo!()
+    }
+
+    fn initiator(&mut self) -> ResultKind<Option<Initiator>> {
+        todo!()
+    }
+
+    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Either<Number2, NumberNoSuffix2>> {
+        todo!()
     }
 }

@@ -22,9 +22,8 @@ struct PrivateMethod;
 mod format {
     use core::num::NonZeroU8;
     use lexical_core::{
-        NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder, ParseIntegerOptions,
-        ParseIntegerOptionsBuilder, WriteFloatOptions, WriteFloatOptionsBuilder, WriteIntegerOptions,
-        WriteIntegerOptionsBuilder,
+        parse_integer_options, write_integer_options, NumberFormatBuilder, ParseFloatOptions, ParseFloatOptionsBuilder,
+        ParseIntegerOptions, WriteFloatOptions, WriteFloatOptionsBuilder, WriteIntegerOptions,
     };
 
     pub(crate) const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
@@ -38,6 +37,9 @@ mod format {
         .digit_separator(NonZeroU8::new(b'_'))
         .build_strict();
 
+    pub(crate) const NUMBER_FORMAT_HEX_NO_PREFIX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+        .mantissa_radix(16)
+        .build_strict();
     pub(crate) const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
         .mantissa_radix(16)
         .base_prefix(NonZeroU8::new(b'x'))
@@ -51,8 +53,7 @@ mod format {
         .base_prefix(NonZeroU8::new(b'b'))
         .build_strict();
 
-    pub(crate) const PARSE_INTEGER_OPTS: ParseIntegerOptions =
-        ParseIntegerOptionsBuilder::new().no_multi_digit(false).build_strict();
+    pub(crate) const PARSE_INTEGER_OPTS: ParseIntegerOptions = parse_integer_options::STANDARD;
 
     pub(crate) const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
         .lossy(false)
@@ -63,7 +64,7 @@ mod format {
         .infinity_string(Some(b"inf"))
         .build_strict();
 
-    pub(crate) const WRITE_INTEGER_OPTS: WriteIntegerOptions = WriteIntegerOptionsBuilder::new().build_strict();
+    pub(crate) const WRITE_INTEGER_OPTS: WriteIntegerOptions = write_integer_options::STANDARD;
 
     pub(crate) const WRITE_FLOAT_OPTS: WriteFloatOptions = WriteFloatOptionsBuilder::new()
         .exponent(b'e')
