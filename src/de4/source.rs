@@ -1,7 +1,8 @@
 use super::*;
 use core::cmp::Ordering;
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
-use memchr::*;
+use memchr::{memchr, memchr2, memchr3};
+use simdutf8::compat::from_utf8 as decode_utf8;
 
 pub(crate) enum Indicator<'de> {
     Unit,
@@ -307,6 +308,11 @@ impl<'de> SliceSource<'de> {
         Err(reason)
     }
 
+    fn raise_unexpected_eof<T>(&mut self) -> ResultKind<T> {
+        self.bump_to_end();
+        Err(ErrorKind::UnexpectedEof)
+    }
+
     fn bump(&mut self, len: usize) {
         debug_assert!(len <= self.rest().len());
         self.idx += len;
@@ -323,7 +329,7 @@ impl<'de> SliceSource<'de> {
     /// Consumes the subsequent whitespaces. Refer to [`char::is_whitespace`].
     fn eat_ws_pure(&mut self) {
         loop {
-            self.bump(match self.rest() {
+            let len = match self.rest() {
                 [b'\x09'..=b'\x0D', ..] => 1,                   // 0009..000D <control-0009>..<control-000D>
                 [b'\x20', ..] => 1,                             // 0020       SPACE
                 [b'\xC2', b'\x85', ..] => 2,                    // 0085       <control-0085>
@@ -336,8 +342,26 @@ impl<'de> SliceSource<'de> {
                 [b'\xE2', b'\x81', b'\x9F', ..] => 3,           // 205F       MEDIUM MATHEMATICAL SPACE
                 [b'\xE3', b'\x80', b'\x80', ..] => 3,           // 3000       IDEOGRAPHIC SPACE
                 _ => break,
-            });
+            };
+            self.bump(len);
         }
+    }
+
+    fn trim_end(mut bytes: &[u8]) -> &[u8] {
+        while let
+            | [left @ .., b'\x09'..=b'\x0D']                    // 0009..000D <control-0009>..<control-000D>
+            | [left @ .., b'\x20']                              // 0020       SPACE
+            | [left @ .., b'\xC2', b'\x85']                     // 0085       <control-0085>
+            | [left @ .., b'\xC2', b'\xA0']                     // 00A0       NO-BREAK SPACE
+            | [left @ .., b'\xE1', b'\x9A', b'\x80']            // 1680       OGHAM SPACE MARK
+            | [left @ .., b'\xE2', b'\x80', b'\x80'..=b'\x8A']  // 2000..200A EN QUAD..HAIR SPACE
+            | [left @ .., b'\xE2', b'\x80', b'\xA8']            // 2028       LINE SEPARATOR
+            | [left @ .., b'\xE2', b'\x80', b'\xA9']            // 2029       PARAGRAPH SEPARATOR
+            | [left @ .., b'\xE2', b'\x80', b'\xAF']            // 202F       NARROW NO-BREAK SPACE
+            | [left @ .., b'\xE2', b'\x81', b'\x9F']            // 205F       MEDIUM MATHEMATICAL SPACE
+            | [left @ .., b'\xE3', b'\x80', b'\x80']            // 3000       IDEOGRAPHIC SPACE
+            = bytes { bytes = left }
+        bytes
     }
 
     /// Skips WS and peeks the subsequent delimiter.
@@ -545,23 +569,23 @@ impl<'de> SliceSource<'de> {
         Err(ErrorKind::InvalidUtf8Sequence)
     }
 
-    fn decode_from_expected(&self, offset: usize) -> ResultKind<(char, usize)> {
-        self.decode_from(offset)?.ok_or(ErrorKind::UnexpectedEof)
+    fn decode_expected(&self) -> ResultKind<(char, usize)> {
+        self.decode_from(0)?.ok_or(ErrorKind::UnexpectedEof)
     }
 
     fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<IdentRef<'de>>> {
         let raw_mode = self.consume(b"`");
-        let mut conti = false;
+        let mut contd = false;
         let mut offset = 0;
 
         if self.rest().starts_with(b"_") {
-            conti = true;
+            contd = true;
             offset += 1;
         }
         loop {
             if let Some((ch, len)) = self.decode_from(offset)? {
-                if !conti && unicode_ident::is_xid_start(ch) || conti && unicode_ident::is_xid_continue(ch) {
-                    conti = true;
+                if !contd && unicode_ident::is_xid_start(ch) || contd && unicode_ident::is_xid_continue(ch) {
+                    contd = true;
                     offset += len;
                     continue;
                 }
@@ -576,7 +600,7 @@ impl<'de> SliceSource<'de> {
             break;
         }
 
-        let ident = unsafe { str::from_utf8_unchecked(&self.rest()[..offset]) };
+        let ident = unsafe { core::str::from_utf8_unchecked(&self.rest()[..offset]) };
         if matches!(ident, "_") {
             if raw_mode {
                 Err(ErrorKind::UnexpectedUnderscoreIdentifier)
@@ -608,7 +632,7 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
             match self.rest() {
                 [b'/', b'/', rest @ ..] => {
                     if let Some(off) = memchr(b'\n', rest) {
-                        self.bump(2 + off);
+                        self.bump(2 + off + 1);
                     } else {
                         self.bump_to_end();
                     }
@@ -677,7 +701,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             (0, Some(b'"')) => StringKind::Normal,
             (ticks @ 1.., Some(b'"')) => StringKind::Raw { ticks },
             (ticks @ 1.., Some(b'|')) => StringKind::Paragraph { ticks },
-            _ => return Err(ErrorKind::ExpectedStringOrParagraph),
+            _ => return Err(ErrorKind::ExpectedString),
         };
         self.bump(1);
         Ok(kind)
@@ -734,7 +758,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         self.consume_expected(b")", ErrorKind::ExpectedUnitEnd)
     }
 
-    // NOTE: No leading `eat_ws()` following.
+    // NOTE: The following would not eat leading ws.
 
     fn parse_bool(&mut self) -> ResultKind<bool> {
         if self.consume(b"true") {
@@ -763,7 +787,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         let (byte, len) = if self.consume(b"\\") {
             self.peek_escape_byte_from(0)?
         } else {
-            let (ch, len) = self.decode_from_expected(0)?;
+            let (ch, len) = self.decode_expected()?;
             if !ch.is_ascii() {
                 return Err(ErrorKind::UnexpectedNonAsciiCharacter);
             }
@@ -779,7 +803,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         let (ch, len) = if self.consume(b"\\") {
             self.peek_escape_char_from(0)?
         } else {
-            self.decode_from_expected(0)?
+            self.decode_expected()?
         };
 
         self.bump(len);
@@ -800,7 +824,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             StringKind::Normal => {
                 loop {
                     let Some(off) = memchr3(b'\\', b'\r', b'\"', &self.rest()[offset..]) else {
-                        return self.raise(offset, ErrorKind::UnexpectedEof);
+                        return self.raise_unexpected_eof();
                     };
                     let frag = &self.rest()[offset..][..off];
                     offset += off;
@@ -833,10 +857,17 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                         _ => unreachable!(),
                     }
                 }
-                let content = if scratched {
-                    Either::Right(simdutf8::compat::from_utf8(scratch)?)
+
+                let content = if !scratched {
+                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(|e| {
+                        self.bump(e.valid_up_to());
+                        ErrorKind::InvalidUtf8Sequence
+                    })?)
                 } else {
-                    Either::Left(simdutf8::compat::from_utf8(&self.rest()[..offset])?)
+                    Either::Right(decode_utf8(scratch).map_err(|e| {
+                        self.bump(e.valid_up_to());
+                        ErrorKind::InvalidUtf8Sequence
+                    })?)
                 };
 
                 self.bump(offset + 1);
@@ -846,7 +877,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             StringKind::Raw { ticks } => {
                 loop {
                     let Some(off) = memchr2(b'\r', b'\"', &self.rest()[offset..]) else {
-                        return self.raise(offset, ErrorKind::UnexpectedEof);
+                        return self.raise_unexpected_eof();
                     };
                     let frag = &self.rest()[offset..][..off];
                     offset += off;
@@ -877,10 +908,17 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                         _ => unreachable!(),
                     }
                 }
-                let content = if scratched {
-                    Either::Right(simdutf8::compat::from_utf8(scratch)?)
+
+                let content = if !scratched {
+                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(|e| {
+                        self.bump(e.valid_up_to());
+                        ErrorKind::InvalidUtf8Sequence
+                    })?)
                 } else {
-                    Either::Left(simdutf8::compat::from_utf8(&self.rest()[..offset])?)
+                    Either::Right(decode_utf8(scratch).map_err(|e| {
+                        self.bump(e.valid_up_to());
+                        ErrorKind::InvalidUtf8Sequence
+                    })?)
                 };
 
                 self.bump(offset + 1 + ticks);
@@ -888,43 +926,95 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             }
 
             StringKind::Paragraph { ticks } => {
-                let mut fresh = true;
+                let mut line_type = b'|';
+                let mut prev_line = None;
+                let mut par_break = false;
                 loop {
-                    let rest = &self.rest()[offset..];
-                    if rest.is_empty() {
-                        break;
-                    }
-                    // TODO: consume the first space.
+                    self.consume(b" ");
+                    let offset = memchr2(b'\r', b'\n', self.rest());
+                    let line = Self::trim_end(match offset {
+                        Some(off) => &self.rest()[..off],
+                        None => self.rest(),
+                    });
 
-                    if let Some(off) = memchr2(b'\r', b'\n', rest) {
-                        let frag = &rest[offset..][..off];
-                        match rest[offset] {
-                            b'\r' => {
-                                let Some(b'\n') = self.rest().get(offset + 1) else {
-                                    return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
-                                };
-                                scratched = true;
-                                scratch.extend_from_slice(frag);
-                                scratch.push(b'\n');
-                                offset += 1 + 1;
-                            }
-                            b'\n' => {
-                                todo!()
-                            }
-
-                            _ => unreachable!(),
+                    if let Some(off) = offset {
+                        if let Some(b'\r') = self.rest().get(off) {
+                            let Some(b'\n') = self.rest().get(off + 1) else {
+                                return self.raise(off, ErrorKind::UnexpectedCarriageReturn);
+                            };
+                            self.bump(off + 1 + 1);
+                        } else {
+                            self.bump(off + 1);
                         }
                     } else {
-                        if scratched {
-                            scratch.extend_from_slice(rest);
-                        }
-                        break;
+                        self.bump_to_end();
                     }
 
-                    fresh = false;
+                    'stage_line: {
+                        if !scratched {
+                            if let Some(first_line) = prev_line {
+                                scratched = true;
+                                scratch.extend_from_slice(first_line);
+                            } else {
+                                break 'stage_line;
+                            }
+                        }
+                        match line_type {
+                            b'|' => scratch.push(b'\n'),
+                            b'<' => {
+                                if !scratch.is_empty() && !line.is_empty() {
+                                    if par_break {
+                                        scratch.push(b'\n');
+                                    }
+                                }
+                            }
+                            b'>' => {
+                                if !scratch.is_empty() && !line.is_empty() {
+                                    if par_break {
+                                        scratch.push(b'\n');
+                                    } else {
+                                        scratch.push(b' ');
+                                    }
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                        scratch.extend_from_slice(line);
+                    }
+
+                    if line.is_empty() {
+                        par_break = true;
+                    } else {
+                        par_break = false;
+                    }
+                    prev_line = Some(line);
+
+                    if self.adjacent_to_delim()? {
+                        break;
+                    }
+                    let (r_ticks, Some(initiator @ (b'|' | b'<' | b'>'))) = self.consume_ticks_peek_initiator() else {
+                        return Err(ErrorKind::InvalidParagraphLineInitiator);
+                    };
+                    if ticks != r_ticks {
+                        return Err(ErrorKind::UnbalancedRawTicks);
+                    }
+                    self.bump(1);
+                    line_type = initiator;
                 }
 
-                todo!()
+                let content = if !scratched {
+                    Either::Left(decode_utf8(prev_line.unwrap()).map_err(|e| {
+                        self.bump(e.valid_up_to());
+                        ErrorKind::InvalidUtf8Sequence
+                    })?)
+                } else {
+                    Either::Right(decode_utf8(scratch).map_err(|e| {
+                        self.bump(e.valid_up_to());
+                        ErrorKind::InvalidUtf8Sequence
+                    })?)
+                };
+
+                Ok(content)
             }
         }
     }
@@ -934,7 +1024,133 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         kind: BytesKind,
         scratch: &'t mut Vec<u8>,
     ) -> ResultKind<Either<&'de [u8], &'t [u8]>> {
-        todo!()
+        let mut offset = 0;
+        let mut scratched = false;
+        match kind {
+            BytesKind::Normal => {
+                scratch.clear();
+                loop {
+                    let Some(off) = memchr3(b'\\', b'\r', b'\"', &self.rest()[offset..]) else {
+                        return self.raise_unexpected_eof();
+                    };
+                    let frag = &self.rest()[offset..][..off];
+                    offset += off;
+
+                    match self.rest()[offset] {
+                        b'\\' => {
+                            let (byte, len) = self
+                                .peek_escape_byte_from(offset + 1)
+                                .inspect_err(|_| self.bump(offset + 1))?;
+                            scratched = true;
+                            scratch.extend_from_slice(frag);
+                            scratch.push(byte);
+                            offset += 1 + len
+                        }
+                        b'\r' => {
+                            let Some(b'\n') = self.rest().get(offset + 1) else {
+                                return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
+                            };
+                            scratched = true;
+                            scratch.extend_from_slice(frag);
+                            scratch.push(b'\n');
+                            offset += 1 + 1;
+                        }
+                        b'\"' => {
+                            if scratched {
+                                scratch.extend_from_slice(frag);
+                            }
+                            break;
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+
+                let content = if !scratched {
+                    Either::Left(&self.rest()[..offset])
+                } else {
+                    Either::Right(&scratch[..])
+                };
+
+                self.bump(offset + 1);
+                Ok(content)
+            }
+
+            BytesKind::Raw { ticks } => {
+                scratch.clear();
+                loop {
+                    let Some(off) = memchr2(b'\r', b'\"', &self.rest()[offset..]) else {
+                        return self.raise_unexpected_eof();
+                    };
+                    let frag = &self.rest()[offset..][..off];
+                    offset += off;
+
+                    match self.rest()[offset] {
+                        b'\r' => {
+                            let Some(b'\n') = self.rest().get(offset + 1) else {
+                                return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
+                            };
+                            scratched = true;
+                            scratch.extend_from_slice(frag);
+                            scratch.push(b'\n');
+                            offset += 1 + 1;
+                        }
+                        b'\"' => {
+                            let r_ticks = self.peek_ticks_from(offset + 1);
+                            match ticks.cmp(&r_ticks) {
+                                Ordering::Greater => offset += 1 + r_ticks,
+                                Ordering::Equal => {
+                                    if scratched {
+                                        scratch.extend_from_slice(frag);
+                                    }
+                                    break;
+                                }
+                                Ordering::Less => return self.raise(offset, ErrorKind::UnbalancedRawTicks),
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+
+                let content = if !scratched {
+                    Either::Left(&self.rest()[..offset])
+                } else {
+                    Either::Right(&scratch[..])
+                };
+
+                self.bump(offset + 1 + ticks);
+                Ok(content)
+            }
+
+            _ => {
+                let encoding = match kind {
+                    BytesKind::Base64 => BASE64URL_NOPAD,
+                    BytesKind::Base32 => BASE32_NOPAD,
+                    BytesKind::Base16 => HEXUPPER_PERMISSIVE,
+                    _ => unreachable!(),
+                };
+                let Some(offset) = memchr(b'"', self.rest()) else {
+                    return self.raise_unexpected_eof();
+                };
+                let encoded = &self.rest()[..offset];
+
+                let new_len = encoding.decode_len(offset).map_err(|e| {
+                    self.bump(e.position);
+                    e.kind
+                })?;
+                scratch.resize(new_len, 0);
+
+                let len = encoding.decode_mut(encoded, scratch).map_err(
+                    |data_encoding::DecodePartial { error: e, .. }| {
+                        self.bump(e.position);
+                        e.kind
+                    },
+                )?;
+                scratch.truncate(len);
+
+                self.bump(offset + 1);
+                Ok(Either::Right(scratch))
+            }
+        }
     }
 
     fn parse_nominal_path<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
@@ -942,7 +1158,6 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         'de: 't,
     {
         let _ = scratch;
-
         match self.parse_identifier_or_underscore()? {
             None => Ok(NominalPathRef::Underscore),
             Some(name_or_parent) => {
@@ -965,7 +1180,6 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         'de: 't,
     {
         let _ = scratch;
-
         self.parse_identifier_or_underscore()?
             .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
     }

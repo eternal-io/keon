@@ -33,7 +33,7 @@ pub enum ErrorKind {
     ExpectedDifferentStructName { expected: &'static str, found: String },
     UnexpectedPathAsStructName,
 
-    ExpectedStringOrParagraph,
+    ExpectedString,
     ExpectedCharacter,
     ExpectedByteString,
     ExpectedInt8,
@@ -50,6 +50,7 @@ pub enum ErrorKind {
     ExpectedFloat64,
     ExpectedBoolean,
     InvalidNumberSuffix,
+    InvalidParagraphLineInitiator,
 
     ExpectedUnit,
     ExpectedUnitEnd,
@@ -103,6 +104,12 @@ impl From<lexical_core::Error> for ErrorKind {
 
 impl From<simdutf8::compat::Utf8Error> for ErrorKind {
     fn from(value: simdutf8::compat::Utf8Error) -> Self {
+        todo!()
+    }
+}
+
+impl From<data_encoding::DecodeKind> for ErrorKind {
+    fn from(value: data_encoding::DecodeKind) -> Self {
         todo!()
     }
 }
