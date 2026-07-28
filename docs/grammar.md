@@ -30,6 +30,7 @@ Value ->
       LITERAL
     | Structure
     | NominalStructure
+    | RangeType
 
 
 /*== Whitespaces and comments ==*/
@@ -105,7 +106,7 @@ HEX_DIGIT -> [`0`-`9` `A`-`F` `a`-`f`]
 
 // float literals
 FLOAT_LITERAL ->
-    `-`? ( `inf` | `NaN` | DEC_LITERAL ( `.` DEC_LITERAL? )? FLOAT_EXPONENT? ) FLOAT_SUFFIX?
+    `-`? ( `inf` | `NaN` | DEC_LITERAL ( `.` DEC_LITERAL? )? FLOAT_EXPONENT? FLOAT_SUFFIX? )
 
 FLOAT_EXPONENT ->
     ( `e` | `E` ) ( `+` | `-` )? `_`* DEC_LITERAL
@@ -204,7 +205,11 @@ MapValue ->
 /*== Nominal Structures ==*/
 
 NominalStructure ->
-    NOMINAL_PATH ( TupleValue | StructValue )?
+      NOMINAL_PATH ( TupleValue | StructValue )?
+    | NOMINAL_NEWTYPE
+
+NOMINAL_NEWTYPE ->
+    ( `!` IDENTIFIER | NOMINAL_PATH ) WS Value
 
 NOMINAL_PATH ->
       `_`
@@ -218,4 +223,24 @@ StructValue ->
               IDENTIFIER `:` Value
         ( `,` IDENTIFIER `:` Value )* `,`?
     )? `}`
+
+
+/*== Range Types ==*/
+
+RangeType ->
+      RangeFull
+    | RangeTo
+    | RangeToInclusive
+    | RangeFrom
+    | Range
+    | RangeInclusive
+
+RangeFull        ->        `..`
+RangeTo          ->        `..`  NUMBER
+RangeToInclusive ->        `..=` NUMBER
+RangeFrom        -> NUMBER `..`
+Range            -> NUMBER `..`  NUMBER
+RangeInclusive   -> NUMBER `..=` NUMBER
+
+NUMBER -> INTEGER_LITERAL | FLOAT_LITERAL
 ```

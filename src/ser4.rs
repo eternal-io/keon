@@ -1,13 +1,12 @@
 use crate::{
     format::*,
-    value::{Float32, Float64, NominalPathRef, Number2, NumberNoSuffix2},
+    value::{Float32, Float64, NominalPathRef, Number2},
     PrivateMethod, Sealed,
 };
 use core::{
     fmt::{self, Write},
     num::NonZeroU8,
 };
-use either::Either;
 
 #[cfg(feature = "alloc")]
 use alloc::collections::VecDeque;
@@ -199,7 +198,7 @@ pub(crate) enum Token<'a> {
 
     MaybeEnd,
     ArrayEnd,
-    TupleLikeEnd,
+    TupleEnd,
     MapLikeEnd,
 
     FatArrow,
@@ -211,7 +210,6 @@ pub(crate) enum Literal<'a> {
     Bool(bool),
     Char(char),
     Number(Number2),
-    NumberNoSuffix(NumberNoSuffix2),
     Str(&'a str),
     Bytes(&'a [u8]),
 }
@@ -266,7 +264,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
 
         if matches!(
             token,
-            Token::MaybeEnd | Token::ArrayEnd | Token::TupleLikeEnd | Token::MapLikeEnd
+            Token::MaybeEnd | Token::ArrayEnd | Token::TupleEnd | Token::MapLikeEnd
         ) {
             *ctr -= 1;
         }
@@ -296,7 +294,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
 
             Token::MaybeEnd => (),
             Token::ArrayEnd => dst.write_str("]")?,
-            Token::TupleLikeEnd => dst.write_str(")")?,
+            Token::TupleEnd => dst.write_str(")")?,
             Token::MapLikeEnd => dst.write_str("}")?,
 
             Token::FatArrow => dst.write_str("=>")?,
@@ -580,11 +578,11 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
                 }
             }
 
-            Token::MaybeEnd | Token::ArrayEnd | Token::TupleLikeEnd | Token::MapLikeEnd => {
+            Token::MaybeEnd | Token::ArrayEnd | Token::TupleEnd | Token::MapLikeEnd => {
                 let debug_assert_matches = |token: &Token<'_>, kind: &CompoundKind| match kind {
                     CompoundKind::Maybe => debug_assert!(matches!(token, Token::MaybeEnd)),
                     CompoundKind::Array => debug_assert!(matches!(token, Token::ArrayEnd)),
-                    CompoundKind::TupleLike(_) => debug_assert!(matches!(token, Token::TupleLikeEnd)),
+                    CompoundKind::TupleLike(_) => debug_assert!(matches!(token, Token::TupleEnd)),
                     CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => {
                         debug_assert!(matches!(token, Token::MapLikeEnd))
                     }
@@ -695,25 +693,19 @@ impl From<Number2> for Numeric {
             Number2::Int8(x) => Numeric::Int(x as _),
             Number2::Int16(x) => Numeric::Int(x as _),
             Number2::Int32(x) => Numeric::Int(x as _),
-            Number2::Int64(x) => Numeric::Int(x as _),
+            Number2::Int64(x) => Numeric::Int(x),
             Number2::Int128 { lo, hi } => Numeric::LongInt { lo, hi },
             Number2::UInt8(x) => Numeric::UInt(x as _),
             Number2::UInt16(x) => Numeric::UInt(x as _),
             Number2::UInt32(x) => Numeric::UInt(x as _),
-            Number2::UInt64(x) => Numeric::UInt(x as _),
+            Number2::UInt64(x) => Numeric::UInt(x),
             Number2::UInt128 { lo, hi } => Numeric::LongUInt { lo, hi },
             Number2::Float32(Float32(x)) => Numeric::Float32(x),
             Number2::Float64(Float64(x)) => Numeric::Float64(x),
-        }
-    }
-}
 
-impl From<NumberNoSuffix2> for Numeric {
-    fn from(value: NumberNoSuffix2) -> Self {
-        match value {
-            NumberNoSuffix2::Int(x) => Numeric::Int(x),
-            NumberNoSuffix2::UInt(x) => Numeric::UInt(x),
-            NumberNoSuffix2::Float(Float64(x)) => Numeric::Float64(x),
+            Number2::IntNoSuffix(x) => Numeric::Int(x),
+            Number2::UIntNoSuffix(x) => Numeric::UInt(x),
+            Number2::FloatNoSuffix(Float64(x)) => Numeric::Float64(x),
         }
     }
 }
@@ -738,27 +730,35 @@ macro_rules! write_number {
     };
 }
 
-fn write_number(
-    dst: &mut impl Write,
-    number: Either<Number2, NumberNoSuffix2>,
-    suffix_control: NumericSuffix,
-) -> fmt::Result {
-    let numeric = number.either_into::<Numeric>();
+fn write_number(dst: &mut impl Write, number: Number2, suffix_control: NumericSuffix) -> fmt::Result {
     let mut buf = [0x00u8; lexical_core::BUFFER_SIZE];
 
-    'switch: {
-        write_number!('switch, dst, Numeric::Int(x),           numeric, x,                               buf, WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::UInt(x),          numeric, x,                               buf, WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::Float32(x),       numeric, x,                               buf, WRITE_FLOAT_OPTS);
-        write_number!('switch, dst, Numeric::Float64(x),       numeric, x,                               buf, WRITE_FLOAT_OPTS);
-        write_number!('switch, dst, Numeric::LongInt{lo, hi},  numeric, (hi as i128) << 64 | lo as i128, buf, WRITE_INTEGER_OPTS);
-        write_number!('switch, dst, Numeric::LongUInt{lo, hi}, numeric, (hi as u128) << 64 | lo as u128, buf, WRITE_INTEGER_OPTS);
+    macro_rules! write_number_case {
+        ($x:expr, $buf:ident, $write_options:path) => {
+            dst.write_str(unsafe {
+                core::str::from_utf8_unchecked(lexical_core::write_with_options::<_, NUMBER_FORMAT>(
+                    $x,
+                    &mut $buf,
+                    &$write_options,
+                ))
+            })?
+        };
+    }
+    match Numeric::from(number) {
+        Numeric::Int(x) => write_number_case!(x, buf, WRITE_INTEGER_OPTS),
+        Numeric::UInt(x) => write_number_case!(x, buf, WRITE_INTEGER_OPTS),
+        Numeric::Float32(x) => write_number_case!(x, buf, WRITE_FLOAT_OPTS),
+        Numeric::Float64(x) => write_number_case!(x, buf, WRITE_FLOAT_OPTS),
+        Numeric::LongInt { lo, hi } => write_number_case!((hi as i128) << 64 | lo as i128, buf, WRITE_INTEGER_OPTS),
+        Numeric::LongUInt { lo, hi } => write_number_case!((hi as u128) << 64 | lo as u128, buf, WRITE_INTEGER_OPTS),
     }
 
-    let Either::Left(number) = number else {
+    if matches!(
+        number,
+        Number2::IntNoSuffix(_) | Number2::UIntNoSuffix(_) | Number2::FloatNoSuffix(_)
+    ) {
         return Ok(());
-    };
-
+    }
     match number {
         Number2::Int128 { .. } => dst.write_str("i128"),
         Number2::UInt128 { .. } => dst.write_str("u128"),
@@ -778,6 +778,7 @@ fn write_number(
                     true => match number {
                         Number2::Float32(_) => dst.write_str("f32"),
                         Number2::Float64(_) => dst.write_str("f64"),
+
                         _ => unreachable!(),
                     },
                     false => Ok(()),
@@ -915,8 +916,7 @@ fn write_literal(dst: &mut impl Write, literal: Literal<'_>, suffix_control: Num
             false => dst.write_str("false"),
         },
         Literal::Char(ch) => write_quoted_char(dst, ch),
-        Literal::Number(num) => write_number(dst, Either::Left(num), suffix_control),
-        Literal::NumberNoSuffix(num) => write_number(dst, Either::Right(num), suffix_control),
+        Literal::Number(num) => write_number(dst, num, suffix_control),
         Literal::Str(s) => write_quoted_string(dst, s),
         Literal::Bytes(bytes) => write_quoted_bytes(dst, bytes),
     }

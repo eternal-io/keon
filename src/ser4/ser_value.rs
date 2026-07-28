@@ -37,7 +37,6 @@ impl super::Serialize for Value2 {
             Value2::Bool(b) => ser.push(Token::Literal(Literal::Bool(*b))),
             Value2::Char(ch) => ser.push(Token::Literal(Literal::Char(*ch))),
             Value2::Number(num) => ser.push(Token::Literal(Literal::Number(*num))),
-            Value2::NumberNoSuffix(num) => ser.push(Token::Literal(Literal::NumberNoSuffix(*num))),
             Value2::String(s) => ser.push(Token::Literal(Literal::Str(s.as_ref()))),
             Value2::ByteBuf(bytes) => ser.push(Token::Literal(Literal::Bytes(bytes.as_ref()))),
             Value2::Unit => ser.push(Token::Unit),
@@ -45,7 +44,6 @@ impl super::Serialize for Value2 {
                 kind: NominalKind::Unspecified,
                 path: path.as_ref().into(),
             }),
-
             Value2::Maybe(maybe) => {
                 ser.push(Token::Maybe)?;
                 if let Some(value) = maybe {
@@ -53,17 +51,15 @@ impl super::Serialize for Value2 {
                 }
                 ser.push(Token::MaybeEnd)
             }
-
             Value2::Array(values) => {
                 ser.push(Token::Array)?;
                 ser_values(ser, values)?;
                 ser.push(Token::ArrayEnd)
             }
-
             Value2::Tuple(values) => {
                 ser.push(Token::Tuple)?;
                 ser_values(ser, values)?;
-                ser.push(Token::TupleLikeEnd)
+                ser.push(Token::TupleEnd)
             }
             Value2::TupleStruct(path_values) => {
                 let (path, values) = path_values.as_ref();
@@ -72,9 +68,8 @@ impl super::Serialize for Value2 {
                     path: path.into(),
                 })?;
                 ser_values(ser, values)?;
-                ser.push(Token::TupleLikeEnd)
+                ser.push(Token::TupleEnd)
             }
-
             Value2::Map(values_map) => {
                 ser.push(Token::Map)?;
                 ser_values_map(ser, values_map)?;
@@ -89,6 +84,12 @@ impl super::Serialize for Value2 {
                 ser_fields_map(ser, fields_map)?;
                 ser.push(Token::MapLikeEnd)
             }
+            Value2::RangeFull => todo!(),
+            Value2::RangeTo(number) => todo!(),
+            Value2::RangeToInclusive(number) => todo!(),
+            Value2::RangeFrom(number) => todo!(),
+            Value2::Range(_) => todo!(),
+            Value2::RangeInclusive(_) => todo!(),
         }
     }
 }

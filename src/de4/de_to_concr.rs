@@ -170,18 +170,18 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     //------------------------------------------------------------------------------
 
     fn deserialize_unit_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
-        self.deserialize_struct_name(name)?;
-        self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
+        self.eat_ws()?;
+        if name == "RangeFull" && self.try_range_to(false)? {
+        } else {
+            self.deserialize_struct_name(name)?;
+            self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
+        }
         visitor.visit_unit()
     }
     fn deserialize_newtype_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
-        self.deserialize_struct_name(name)?;
-        recursion_guard!(self, {
-            self.begin_tuple()?;
-            let val = visitor.visit_newtype_struct(self.reborrow())?;
-            self.end_tuple()?;
-            Ok(val)
-        })
+        self.eat_ws()?;
+        self.deserialize_newtype_struct_tag(name)?;
+        recursion_guard!(self, Ok(visitor.visit_newtype_struct(self.reborrow())?))
     }
     fn deserialize_tuple_struct<V: Visitor<'de>>(
         mut self,
@@ -189,6 +189,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         len: usize,
         visitor: V,
     ) -> ResultKind<V::Value> {
+        self.eat_ws()?;
         self.deserialize_struct_name(name)?;
         self.deserialize_tuple(len, visitor)
     }
@@ -198,7 +199,35 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         fields: &'static [&'static str],
         visitor: V,
     ) -> ResultKind<V::Value> {
-        let _ = fields;
+        self.eat_ws()?;
+        match name {
+            "RangeTo" if matches!(fields, ["end"]) => {
+                if self.try_range_to(false)? {
+                    return visitor.visit_map(RangeToAccessor { der: Some(self) });
+                }
+            }
+            "RangeToInclusive" if matches!(fields, ["end"]) => {
+                if self.try_range_to(true)? {
+                    return visitor.visit_map(RangeToAccessor { der: Some(self) });
+                }
+            }
+            "RangeFrom" if matches!(fields, ["start"]) => {
+                if self.try_range_from()? {
+                    return visitor.visit_map(RangeFromAccessor { der: Some(self) });
+                }
+            }
+            "Range" if matches!(fields, ["start", "end"]) => {
+                if self.try_range_from()? {
+                    return visitor.visit_map(RangeAccessor::<R, false>::new(self));
+                }
+            }
+            "RangeInclusive" if matches!(fields, ["start", "end"]) => {
+                if self.try_range_from()? {
+                    return visitor.visit_map(RangeAccessor::<R, true>::new(self));
+                }
+            }
+            _ => (),
+        }
         self.deserialize_struct_name(name)?;
         self.deserialize_map_like::<V, true>(visitor)
     }
@@ -222,8 +251,20 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
 
 impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     #[inline]
+    fn deserialize_newtype_struct_tag(&mut self, name: &'static str) -> ResultKind {
+        if let Some(name_parsed) = self.0.src.parse_newtype_struct_tag(&mut self.0.buf)? {
+            if *name_parsed != *name {
+                return Err(ErrorKind::ExpectedDifferentStructName {
+                    expected: name,
+                    found: name_parsed.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
     fn deserialize_struct_name(&mut self, name: &'static str) -> ResultKind {
-        self.eat_ws()?;
         match self.0.src.parse_nominal_path(&mut self.0.buf)? {
             NominalPathRef::Underscore => (),
             NominalPathRef::Single { name: name_parsed } => {
@@ -294,6 +335,105 @@ impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapLikeAcc
     }
 }
 
+//------------------------------------------------------------------------------
+
+struct RangeToAccessor<'a, R> {
+    der: Option<DeserializerWrapper<'a, R>>,
+}
+
+impl<'de, R: Source<'de>> MapAccess<'de> for RangeToAccessor<'_, R> {
+    type Error = ErrorKind;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+        if let Some(der) = self.der.as_mut() {
+            der.adjacent_to_number_expected()?;
+            Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("end"))?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+        let Some(der) = self.der.take() else {
+            panic!("contract violation")
+        };
+        seed.deserialize(der)
+    }
+}
+
+struct RangeFromAccessor<'a, R> {
+    der: Option<DeserializerWrapper<'a, R>>,
+}
+
+impl<'de, R: Source<'de>> MapAccess<'de> for RangeFromAccessor<'_, R> {
+    type Error = ErrorKind;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+        if self.der.is_some() {
+            Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("start"))?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+        let Some(mut der) = self.der.take() else {
+            panic!("contract violation")
+        };
+        let num = seed.deserialize(der.reborrow())?;
+        der.end_range_from()?;
+        Ok(num)
+    }
+}
+
+struct RangeAccessor<'a, R, const INCLUSIVE: bool> {
+    der: Option<DeserializerWrapper<'a, R>>,
+    end: bool,
+}
+
+impl<'a, R, const INCLUSIVE: bool> RangeAccessor<'a, R, INCLUSIVE> {
+    fn new(der: DeserializerWrapper<'a, R>) -> Self {
+        Self {
+            der: Some(der),
+            end: false,
+        }
+    }
+}
+
+impl<'de, R: Source<'de>, const INCLUSIVE: bool> MapAccess<'de> for RangeAccessor<'_, R, INCLUSIVE> {
+    type Error = ErrorKind;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+        if let Some(der) = self.der.as_mut() {
+            if !self.end {
+                Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("start"))?))
+            } else {
+                der.eat_ws()?;
+                der.try_range_to(INCLUSIVE)?.then_some(()).ok_or(match INCLUSIVE {
+                    true => ErrorKind::ExpectedRangeDotDotEq,
+                    false => ErrorKind::ExpectedRangeDotDot,
+                })?;
+                der.adjacent_to_number_expected()?;
+                Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("end"))?))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+        let der = if !self.end {
+            self.end = true;
+            self.der.as_mut().unwrap()
+        } else {
+            &mut self.der.take().expect("contract violation")
+        };
+        seed.deserialize(der.reborrow())
+    }
+}
+
+//------------------------------------------------------------------------------
+
 struct EnumAccessor<'a, R> {
     der: DeserializerWrapper<'a, R>,
     name: &'static str,
@@ -335,12 +475,7 @@ impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
     }
 
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(mut self, seed: T) -> ResultKind<T::Value> {
-        recursion_guard!(self, {
-            self.begin_tuple()?;
-            let val = seed.deserialize(self.reborrow())?;
-            self.end_tuple()?;
-            Ok(val)
-        })
+        recursion_guard!(self, Ok(seed.deserialize(self.reborrow())?))
     }
 
     fn tuple_variant<V: Visitor<'de>>(self, len: usize, visitor: V) -> ResultKind<V::Value> {

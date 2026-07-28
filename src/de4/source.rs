@@ -23,6 +23,22 @@ pub(crate) enum Initiator {
     /** `[` */ Array,
     /** `(` */ Tuple,
     /** `{` */ MapLike,
+    /**`..` */ DotDot,
+    /**`..=`*/ DotDotEq,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RangeSeparator {
+    /**`..` */ DotDot,
+    /**`..=`*/ DotDotEq,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NominalBodyInitiator {
+    /** `(` */ Tuple,
+    /** `{` */ Struct,
 }
 
 #[rustfmt::skip]
@@ -228,15 +244,31 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
     where
         'de: 't;
+
+    fn parse_newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
+    where
+        'de: 't;
+
+    /// If the subsequent content starts with `..` (not inclusive) or `..=` (inclusive), consume it and return true.
+    fn try_range_to(&mut self, inclusive: bool) -> ResultKind<bool>;
+
+    /// If the subsequent content appears to be a range, return true.
+    fn try_range_from(&mut self) -> ResultKind<bool>;
+
+    /// Skips WS and consumes the subsequent `..`. Returns `Err` if not found.
+    fn end_range_from(&mut self) -> ResultKind;
+
+    /// Skips WS and checks the presence of a subsequent number. Returns `Err` if not found.
+    fn adjacent_to_number_expected(&mut self) -> ResultKind;
 }
 
 pub(crate) trait ParseToValue<'de>: ParseHelper<'de> {
     fn begin(&mut self) -> ResultKind<Indicator<'de>>;
 
-    /// Skips WS and consumes the subsequent initiator. Returns `None` if not found.
-    fn initiator(&mut self) -> ResultKind<Option<Initiator>>;
+    /// Skips WS and consumes the subsequent nominal body initiator. Returns `None` if not found.
+    fn nominal_body_initiator(&mut self) -> ResultKind<Option<NominalBodyInitiator>>;
 
-    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Either<Number2, NumberNoSuffix2>>;
+    fn parse_number_or_range(&mut self, kind: NumberKind) -> ResultKind<Value2>;
 }
 
 //==================================================================================================
@@ -328,39 +360,40 @@ impl<'de> SliceSource<'de> {
 
     /// Consumes the subsequent whitespaces. Refer to [`char::is_whitespace`].
     fn eat_ws_pure(&mut self) {
-        loop {
-            let len = match self.rest() {
-                [b'\x09'..=b'\x0D', ..] => 1,                   // 0009..000D <control-0009>..<control-000D>
-                [b'\x20', ..] => 1,                             // 0020       SPACE
-                [b'\xC2', b'\x85', ..] => 2,                    // 0085       <control-0085>
-                [b'\xC2', b'\xA0', ..] => 2,                    // 00A0       NO-BREAK SPACE
-                [b'\xE1', b'\x9A', b'\x80', ..] => 3,           // 1680       OGHAM SPACE MARK
-                [b'\xE2', b'\x80', b'\x80'..=b'\x8A', ..] => 3, // 2000..200A EN QUAD..HAIR SPACE
-                [b'\xE2', b'\x80', b'\xA8', ..] => 3,           // 2028       LINE SEPARATOR
-                [b'\xE2', b'\x80', b'\xA9', ..] => 3,           // 2029       PARAGRAPH SEPARATOR
-                [b'\xE2', b'\x80', b'\xAF', ..] => 3,           // 202F       NARROW NO-BREAK SPACE
-                [b'\xE2', b'\x81', b'\x9F', ..] => 3,           // 205F       MEDIUM MATHEMATICAL SPACE
-                [b'\xE3', b'\x80', b'\x80', ..] => 3,           // 3000       IDEOGRAPHIC SPACE
-                _ => break,
-            };
-            self.bump(len);
-        }
+        self.bump(self.rest().len() - Self::trim_start(self.rest()).len());
+    }
+
+    fn trim_start(mut bytes: &[u8]) -> &[u8] {
+        while let
+            | [b'\x09'..=b'\x0D', end @ ..]                     // 0009..000D <control-0009>..<control-000D>
+            | [b'\x20', end @ ..]                               // 0020       SPACE
+            | [b'\xC2', b'\x85', end @ ..]                      // 0085       <control-0085>
+            | [b'\xC2', b'\xA0', end @ ..]                      // 00A0       NO-BREAK SPACE
+            | [b'\xE1', b'\x9A', b'\x80', end @ ..]             // 1680       OGHAM SPACE MARK
+            | [b'\xE2', b'\x80', b'\x80'..=b'\x8A', end @ ..]   // 2000..200A EN QUAD..HAIR SPACE
+            | [b'\xE2', b'\x80', b'\xA8', end @ ..]             // 2028       LINE SEPARATOR
+            | [b'\xE2', b'\x80', b'\xA9', end @ ..]             // 2029       PARAGRAPH SEPARATOR
+            | [b'\xE2', b'\x80', b'\xAF', end @ ..]             // 202F       NARROW NO-BREAK SPACE
+            | [b'\xE2', b'\x81', b'\x9F', end @ ..]             // 205F       MEDIUM MATHEMATICAL SPACE
+            | [b'\xE3', b'\x80', b'\x80', end @ ..]             // 3000       IDEOGRAPHIC SPACE
+            = bytes { bytes = end }
+        bytes
     }
 
     fn trim_end(mut bytes: &[u8]) -> &[u8] {
         while let
-            | [left @ .., b'\x09'..=b'\x0D']                    // 0009..000D <control-0009>..<control-000D>
-            | [left @ .., b'\x20']                              // 0020       SPACE
-            | [left @ .., b'\xC2', b'\x85']                     // 0085       <control-0085>
-            | [left @ .., b'\xC2', b'\xA0']                     // 00A0       NO-BREAK SPACE
-            | [left @ .., b'\xE1', b'\x9A', b'\x80']            // 1680       OGHAM SPACE MARK
-            | [left @ .., b'\xE2', b'\x80', b'\x80'..=b'\x8A']  // 2000..200A EN QUAD..HAIR SPACE
-            | [left @ .., b'\xE2', b'\x80', b'\xA8']            // 2028       LINE SEPARATOR
-            | [left @ .., b'\xE2', b'\x80', b'\xA9']            // 2029       PARAGRAPH SEPARATOR
-            | [left @ .., b'\xE2', b'\x80', b'\xAF']            // 202F       NARROW NO-BREAK SPACE
-            | [left @ .., b'\xE2', b'\x81', b'\x9F']            // 205F       MEDIUM MATHEMATICAL SPACE
-            | [left @ .., b'\xE3', b'\x80', b'\x80']            // 3000       IDEOGRAPHIC SPACE
-            = bytes { bytes = left }
+            | [start @ .., b'\x09'..=b'\x0D']                   // 0009..000D <control-0009>..<control-000D>
+            | [start @ .., b'\x20']                             // 0020       SPACE
+            | [start @ .., b'\xC2', b'\x85']                    // 0085       <control-0085>
+            | [start @ .., b'\xC2', b'\xA0']                    // 00A0       NO-BREAK SPACE
+            | [start @ .., b'\xE1', b'\x9A', b'\x80']           // 1680       OGHAM SPACE MARK
+            | [start @ .., b'\xE2', b'\x80', b'\x80'..=b'\x8A'] // 2000..200A EN QUAD..HAIR SPACE
+            | [start @ .., b'\xE2', b'\x80', b'\xA8']           // 2028       LINE SEPARATOR
+            | [start @ .., b'\xE2', b'\x80', b'\xA9']           // 2029       PARAGRAPH SEPARATOR
+            | [start @ .., b'\xE2', b'\x80', b'\xAF']           // 202F       NARROW NO-BREAK SPACE
+            | [start @ .., b'\xE2', b'\x81', b'\x9F']           // 205F       MEDIUM MATHEMATICAL SPACE
+            | [start @ .., b'\xE3', b'\x80', b'\x80']           // 3000       IDEOGRAPHIC SPACE
+            = bytes { bytes = start }
         bytes
     }
 
@@ -400,9 +433,9 @@ impl<'de> SliceSource<'de> {
     fn consume_ticks_peek_initiator(&mut self) -> (usize, Option<u8>) {
         let ticks = self.rest().iter().take_while(|&&byte| byte == b'`').count();
         self.bump(ticks);
-        if let Some(initiator) = self.rest().first().copied() {
-            if initiator < 0x80 {
-                return (ticks, Some(initiator));
+        if let Some(init) = self.rest().first().copied() {
+            if init < 0x80 {
+                return (ticks, Some(init));
             }
         }
         (ticks, None)
@@ -619,7 +652,7 @@ impl<'de> SliceSource<'de> {
     }
 }
 
-impl<'de> Source<'de> for SliceSource<'de> {}
+// impl<'de> Source<'de> for SliceSource<'de> {}
 
 impl<'de> ParseHelper<'de> for SliceSource<'de> {
     fn position(&self) -> Position {
@@ -992,14 +1025,14 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                     if self.adjacent_to_delim()? {
                         break;
                     }
-                    let (r_ticks, Some(initiator @ (b'|' | b'<' | b'>'))) = self.consume_ticks_peek_initiator() else {
+                    let (r_ticks, Some(init @ (b'|' | b'<' | b'>'))) = self.consume_ticks_peek_initiator() else {
                         return Err(ErrorKind::InvalidParagraphLineInitiator);
                     };
                     if ticks != r_ticks {
                         return Err(ErrorKind::UnbalancedRawTicks);
                     }
                     self.bump(1);
-                    line_type = initiator;
+                    line_type = init;
                 }
 
                 let content = if !scratched {
@@ -1183,18 +1216,53 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         self.parse_identifier_or_underscore()?
             .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
     }
-}
 
-impl<'de> ParseToValue<'de> for SliceSource<'de> {
-    fn begin(&mut self) -> ResultKind<Indicator<'de>> {
-        todo!()
+    fn parse_newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
+    where
+        'de: 't,
+    {
+        if self.consume(b"!") {
+            self.parse_identifier(scratch).map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
-    fn initiator(&mut self) -> ResultKind<Option<Initiator>> {
-        todo!()
+    fn try_range_to(&mut self, inclusive: bool) -> ResultKind<bool> {
+        if self.consume(b"..=") {
+            match inclusive {
+                true => Ok(true),
+                false => Err(ErrorKind::ExpectedRangeDotDot),
+            }
+        } else if self.consume(b"..") {
+            match !inclusive {
+                true => Ok(true),
+                false => Err(ErrorKind::ExpectedRangeDotDotEq),
+            }
+        } else {
+            Ok(false)
+        }
     }
 
-    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Either<Number2, NumberNoSuffix2>> {
-        todo!()
+    fn try_range_from(&mut self) -> ResultKind<bool> {
+        let appears = match self.rest() {
+            [b'0'..=b'9' | b'-', ..] => true,
+            [b'i', b'n', b'f', ..] | [b'N', b'a', b'N', ..] => match self.decode_from(3)? {
+                Some((ch, _)) => !unicode_ident::is_xid_continue(ch),
+                None => true, // Propagate and report more specific errors.
+            },
+            _ => false,
+        };
+        Ok(appears)
+    }
+
+    fn end_range_from(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"..", ErrorKind::ExpectedRangeDotDot)
+    }
+
+    fn adjacent_to_number_expected(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.try_range_from()?.then_some(()).ok_or(ErrorKind::ExpectedNumber)
     }
 }

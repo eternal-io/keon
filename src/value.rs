@@ -155,7 +155,6 @@ impl_into!(v: f64  => NumberNoSuffix::Float(v.into()));
 //------------------------------------------------------------------------------
 
 impl_into!(v: Number2 => Value2::Number(v));
-impl_into!(v: NumberNoSuffix2 => Value2::NumberNoSuffix(v));
 
 impl_into!(v: i8   => Number2::Int8(v));
 impl_into!(v: i16  => Number2::Int16(v));
@@ -169,17 +168,6 @@ impl_into!(v: u64  => Number2::UInt64(v));
 impl_into!(v: u128 => Number2::UInt128 { lo: v as _, hi: (v >> 64) as _ });
 impl_into!(v: f32  => Number2::Float32(v.into()));
 impl_into!(v: f64  => Number2::Float64(v.into()));
-
-impl_into!(v: i8   => NumberNoSuffix2::Int(v as _));
-impl_into!(v: i16  => NumberNoSuffix2::Int(v as _));
-impl_into!(v: i32  => NumberNoSuffix2::Int(v as _));
-impl_into!(v: i64  => NumberNoSuffix2::Int(v));
-impl_into!(v: u8   => NumberNoSuffix2::UInt(v as _));
-impl_into!(v: u16  => NumberNoSuffix2::UInt(v as _));
-impl_into!(v: u32  => NumberNoSuffix2::UInt(v as _));
-impl_into!(v: u64  => NumberNoSuffix2::UInt(v));
-impl_into!(v: f32  => NumberNoSuffix2::Float(v.into()));
-impl_into!(v: f64  => NumberNoSuffix2::Float(v.into()));
 
 impl_into!(v: f32  => Float32(v));
 impl_into!(v: f32  => Float64(v as _));
@@ -203,13 +191,10 @@ pub enum Number2 {
     UInt128 { lo: u64, hi: u64 },
     Float32(Float32),
     Float64(Float64),
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NumberNoSuffix2 {
-    Int(i64),
-    UInt(u64),
-    Float(Float64),
+    IntNoSuffix(i64),
+    UIntNoSuffix(u64),
+    FloatNoSuffix(Float64),
 }
 
 #[repr(transparent)]
@@ -270,8 +255,6 @@ pub enum Value2 {
     Char(char),
     /// Literal number.
     Number(Number2),
-    /// Literal number with no suffix.
-    NumberNoSuffix(NumberNoSuffix2),
     /// Literal string.
     String(Box<str>),
     /// Literal byte string.
@@ -298,6 +281,13 @@ pub enum Value2 {
     Map(Box<ValuesMap2>),
     /// Nominal map (`struct`).
     MapStruct(Box<(NominalPath2, Struct2)>),
+
+    RangeFull,
+    RangeTo(Number),
+    RangeToInclusive(Number),
+    RangeFrom(Number),
+    Range(Box<(Number, Number)>),
+    RangeInclusive(Box<(Number, Number)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

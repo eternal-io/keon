@@ -8,15 +8,16 @@ impl<'de> Deserialize<'de> for Value2 {
             Indicator::Unit => Self::Unit,
             Indicator::Bool(b) => Self::Bool(b),
             Indicator::Char(ch) => Self::Char(ch),
-            Indicator::Byte(byte) => Self::NumberNoSuffix(byte.into()),
+            Indicator::Byte(byte) => Self::Number(byte.into()),
             Indicator::String(kind) => Self::String(der.src.parse_string(kind, &mut der.buf)?.either_into()),
             Indicator::Bytes(kind) => Self::ByteBuf(der.src.parse_bytes(kind, &mut der.buf)?.either_into()),
-            Indicator::Number(kind) => match kind {
-                NumberKind::Normal => der.src.parse_number(kind)?.either_into(),
-                NumberKind::Infinity => Self::NumberNoSuffix(f64::INFINITY.into()),
-                NumberKind::NegInfinity => Self::NumberNoSuffix(f64::NEG_INFINITY.into()),
-                NumberKind::NotANumber => Self::NumberNoSuffix(f64::NAN.into()),
-            },
+            Indicator::Number(kind) => der.src.parse_number_or_range(kind)?,
+            // match kind {
+            //     NumberKind::Normal => der.src.parse_number(kind)?.either_into(),
+            //     NumberKind::Infinity => Self::NumberNoSuffix(f64::INFINITY.into()),
+            //     NumberKind::NegInfinity => Self::NumberNoSuffix(f64::NEG_INFINITY.into()),
+            //     NumberKind::NotANumber => Self::NumberNoSuffix(f64::NAN.into()),
+            // },
             Indicator::Initiator(init) => match init {
                 Initiator::Maybe => Self::Maybe(if !der.src.adjacent_to_delim()? {
                     Some(Box::new(deserialize_value(der)?))
@@ -38,20 +39,21 @@ impl<'de> Deserialize<'de> for Value2 {
                     der.src.end_map_like()?;
                     val
                 }
+                Initiator::DotDot => todo!(),
+                Initiator::DotDotEq => todo!(),
             },
-            Indicator::NominalPath(path) => match der.src.initiator()? {
+            Indicator::NominalPath(path) => match der.src.nominal_body_initiator()? {
                 Some(init) => match init {
-                    Initiator::Tuple => {
+                    NominalBodyInitiator::Tuple => {
                         let val = Self::TupleStruct(Box::new((path.into(), deserialize_values(der)?)));
                         der.src.end_tuple()?;
                         val
                     }
-                    Initiator::MapLike => {
+                    NominalBodyInitiator::Struct => {
                         let val = Self::MapStruct(Box::new((path.into(), deserialize_fields_map(der)?)));
                         der.src.end_map_like()?;
                         val
                     }
-                    _ => return Err(ErrorKind::InvalidNominalStructureBody),
                 },
                 None => Self::UnitStruct(Box::new(path.into())),
             },

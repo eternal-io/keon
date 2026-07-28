@@ -26,8 +26,6 @@ pub enum ErrorKind {
     UnexpectedCarriageReturn,
     UnbalancedRawTicks,
 
-    // ExpectedIdentifier,
-    // ExpectedNominalPath,
     ExpectedVariantName,
     ExpectedDifferentEnumName { expected: &'static str, found: String },
     ExpectedDifferentStructName { expected: &'static str, found: String },
@@ -63,11 +61,15 @@ pub enum ErrorKind {
     ExpectedMapLikeEnd,
     UnexpectedUnitBody,
 
+    ExpectedNumber,
+    ExpectedRangeDotDot,
+    ExpectedRangeDotDotEq,
+
     ExpectedUnquote,
     ExpectedColon,
     ExpectedFatArrow,
     ExpectedDelimiter,
-    InvalidNominalStructureBody,
+    InvalidNominalBody,
 
     DuplicatedComma,
 

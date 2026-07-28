@@ -89,7 +89,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
             },
         })?;
         self.serialize(value)?;
-        self.push(Token::TupleLikeEnd)
+        self.push(Token::TupleEnd)
     }
     fn serialize_newtype_variant<T: ?Sized + Serialize>(
         self,
@@ -107,7 +107,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
             },
         })?;
         self.serialize(value)?;
-        self.push(Token::TupleLikeEnd)
+        self.push(Token::TupleEnd)
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
@@ -199,7 +199,7 @@ impl<Impl: SerializerImpl> SerializeTuple for &mut super::Serializer<Impl> {
         self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        self.push(Token::TupleLikeEnd)
+        self.push(Token::TupleEnd)
     }
 }
 impl<Impl: SerializerImpl> SerializeTupleStruct for &mut super::Serializer<Impl> {
@@ -210,7 +210,7 @@ impl<Impl: SerializerImpl> SerializeTupleStruct for &mut super::Serializer<Impl>
         self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        self.push(Token::TupleLikeEnd)
+        self.push(Token::TupleEnd)
     }
 }
 impl<Impl: SerializerImpl> SerializeTupleVariant for &mut super::Serializer<Impl> {
@@ -221,7 +221,7 @@ impl<Impl: SerializerImpl> SerializeTupleVariant for &mut super::Serializer<Impl
         self.push(Token::Comma)
     }
     fn end(self) -> fmt::Result {
-        self.push(Token::TupleLikeEnd)
+        self.push(Token::TupleEnd)
     }
 }
 
