@@ -170,9 +170,9 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     //------------------------------------------------------------------------------
 
     fn deserialize_unit_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
-        self.eat_ws()?;
-        if name == "RangeFull" && self.try_range_to(false)? {
+        if name == "RangeFull" && self.range_to(false)? {
         } else {
+            self.eat_ws()?;
             self.deserialize_struct_name(name)?;
             self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
         }
@@ -199,34 +199,33 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         fields: &'static [&'static str],
         visitor: V,
     ) -> ResultKind<V::Value> {
-        self.eat_ws()?;
         match name {
             "RangeTo" if matches!(fields, ["end"]) => {
-                if self.try_range_to(false)? {
+                if self.range_to(false)? {
                     return visitor.visit_map(RangeToAccessor { der: Some(self) });
                 }
             }
             "RangeToInclusive" if matches!(fields, ["end"]) => {
-                if self.try_range_to(true)? {
+                if self.range_to(true)? {
                     return visitor.visit_map(RangeToAccessor { der: Some(self) });
                 }
             }
             "RangeFrom" if matches!(fields, ["start"]) => {
-                if self.try_range_from()? {
+                if self.adjacent_to_scalar()? {
                     return visitor.visit_map(RangeFromAccessor { der: Some(self) });
                 }
             }
             "Range" if matches!(fields, ["start", "end"]) => {
-                if self.try_range_from()? {
+                if self.adjacent_to_scalar()? {
                     return visitor.visit_map(RangeAccessor::<R, false>::new(self));
                 }
             }
             "RangeInclusive" if matches!(fields, ["start", "end"]) => {
-                if self.try_range_from()? {
+                if self.adjacent_to_scalar()? {
                     return visitor.visit_map(RangeAccessor::<R, true>::new(self));
                 }
             }
-            _ => (),
+            _ => self.eat_ws()?,
         }
         self.deserialize_struct_name(name)?;
         self.deserialize_map_like::<V, true>(visitor)
@@ -346,7 +345,7 @@ impl<'de, R: Source<'de>> MapAccess<'de> for RangeToAccessor<'_, R> {
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if let Some(der) = self.der.as_mut() {
-            der.adjacent_to_number_expected()?;
+            der.adjacent_to_scalar_expected()?;
             Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("end"))?))
         } else {
             Ok(None)
@@ -408,12 +407,11 @@ impl<'de, R: Source<'de>, const INCLUSIVE: bool> MapAccess<'de> for RangeAccesso
             if !self.end {
                 Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("start"))?))
             } else {
-                der.eat_ws()?;
-                der.try_range_to(INCLUSIVE)?.then_some(()).ok_or(match INCLUSIVE {
+                der.range_to(INCLUSIVE)?.then_some(()).ok_or(match INCLUSIVE {
                     true => ErrorKind::ExpectedRangeDotDotEq,
                     false => ErrorKind::ExpectedRangeDotDot,
                 })?;
-                der.adjacent_to_number_expected()?;
+                der.adjacent_to_scalar_expected()?;
                 Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("end"))?))
             }
         } else {

@@ -197,6 +197,21 @@ pub enum Number2 {
     FloatNoSuffix(Float64),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Scalar {
+    Char(char),
+    Number(Number2),
+}
+
+impl From<Scalar> for Value2 {
+    fn from(value: Scalar) -> Self {
+        match value {
+            Scalar::Char(ch) => Self::Char(ch),
+            Scalar::Number(num) => Self::Number(num),
+        }
+    }
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ident(Box<str>);
@@ -282,12 +297,18 @@ pub enum Value2 {
     /// Nominal map (`struct`).
     MapStruct(Box<(NominalPath2, Struct2)>),
 
+    /// `..`
     RangeFull,
-    RangeTo(Number),
-    RangeToInclusive(Number),
-    RangeFrom(Number),
-    Range(Box<(Number, Number)>),
-    RangeInclusive(Box<(Number, Number)>),
+    /// `..q`
+    RangeTo(Scalar),
+    /// `..=q`
+    RangeToInclusive(Scalar),
+    /// `p..`
+    RangeFrom(Scalar),
+    /// `p..q`
+    Range(Box<(Scalar, Scalar)>),
+    /// `p..=q`
+    RangeInclusive(Box<(Scalar, Scalar)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

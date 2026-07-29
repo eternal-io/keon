@@ -9,9 +9,9 @@ pub(crate) enum Indicator<'de> {
     Bool(bool),
     Char(char),
     Byte(u8),
+    Number(NumberKind),
     String(StringKind),
     Bytes(BytesKind),
-    Number(NumberKind),
     Initiator(Initiator),
     NominalPath(NominalPathRef<'de>),
 }
@@ -155,6 +155,16 @@ pub(crate) trait ParseHelper<'de> {
     fn adjacent_to_delim_expected(&mut self, reason: ErrorKind) -> ResultKind {
         self.adjacent_to_delim()?.then_some(()).ok_or(reason)
     }
+
+    /// Skips WS and checks whether the subsequent content appears to be a scalar.
+    fn adjacent_to_scalar(&mut self) -> ResultKind<bool>;
+
+    /// Skips WS and checks whether the subsequent content appears to be a scalar. Returns `Err` if false.
+    fn adjacent_to_scalar_expected(&mut self) -> ResultKind {
+        self.adjacent_to_scalar()?
+            .then_some(())
+            .ok_or(ErrorKind::ExpectedScalar)
+    }
 }
 
 pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
@@ -208,6 +218,13 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
         }
     }
 
+    /// Skips WS and consumes the specified range separator if possible,
+    /// either `..` (not inclusive) or `..=` (inclusive). Returns true on success.
+    fn range_to(&mut self, inclusive: bool) -> ResultKind<bool>;
+
+    /// Skips WS and consumes the subsequent `..`. Returns `Err` if not found.
+    fn end_range_from(&mut self) -> ResultKind;
+
     fn parse_unit(&mut self) -> ResultKind;
 
     fn parse_bool(&mut self) -> ResultKind<bool>;
@@ -248,27 +265,18 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn parse_newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
     where
         'de: 't;
-
-    /// If the subsequent content starts with `..` (not inclusive) or `..=` (inclusive), consume it and return true.
-    fn try_range_to(&mut self, inclusive: bool) -> ResultKind<bool>;
-
-    /// If the subsequent content appears to be a range, return true.
-    fn try_range_from(&mut self) -> ResultKind<bool>;
-
-    /// Skips WS and consumes the subsequent `..`. Returns `Err` if not found.
-    fn end_range_from(&mut self) -> ResultKind;
-
-    /// Skips WS and checks the presence of a subsequent number. Returns `Err` if not found.
-    fn adjacent_to_number_expected(&mut self) -> ResultKind;
 }
 
 pub(crate) trait ParseToValue<'de>: ParseHelper<'de> {
     fn begin(&mut self) -> ResultKind<Indicator<'de>>;
 
+    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number2>;
+
+    /// Skips WS and consumes the subsequent range separator. Returns `None` if not found.
+    fn range_separator(&mut self) -> ResultKind<Option<RangeSeparator>>;
+
     /// Skips WS and consumes the subsequent nominal body initiator. Returns `None` if not found.
     fn nominal_body_initiator(&mut self) -> ResultKind<Option<NominalBodyInitiator>>;
-
-    fn parse_number_or_range(&mut self, kind: NumberKind) -> ResultKind<Value2>;
 }
 
 //==================================================================================================
@@ -716,6 +724,21 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
     fn adjacent_to_delim(&mut self) -> ResultKind<bool> {
         Ok(self.seek_delim()?.is_some())
     }
+
+    fn adjacent_to_scalar(&mut self) -> ResultKind<bool> {
+        self.eat_ws()?;
+        let appear = match self.rest() {
+            [b'0'..=b'9' | b'-', ..] => true,
+            [b'b', b'\'', ..] => true,
+            [b'\'', ..] => true,
+            [b'i', b'n', b'f', ..] | [b'N', b'a', b'N', ..] => match self.decode_from(3)? {
+                Some((ch, _)) => !unicode_ident::is_xid_continue(ch),
+                None => true,
+            },
+            _ => false,
+        };
+        Ok(appear)
+    }
 }
 
 impl<'de> ParseToConcr<'de> for SliceSource<'de> {
@@ -791,7 +814,29 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         self.consume_expected(b")", ErrorKind::ExpectedUnitEnd)
     }
 
-    // NOTE: The following would not eat leading ws.
+    fn range_to(&mut self, inclusive: bool) -> ResultKind<bool> {
+        self.eat_ws()?;
+        if self.consume(b"..=") {
+            match inclusive {
+                true => Ok(true),
+                false => Err(ErrorKind::ExpectedRangeDotDot),
+            }
+        } else if self.consume(b"..") {
+            match !inclusive {
+                true => Ok(true),
+                false => Err(ErrorKind::ExpectedRangeDotDotEq),
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn end_range_from(&mut self) -> ResultKind {
+        self.eat_ws()?;
+        self.consume_expected(b"..", ErrorKind::ExpectedRangeDotDot)
+    }
+
+    // NOTE: The following methods would not `eat_ws()` at the leading.
 
     fn parse_bool(&mut self) -> ResultKind<bool> {
         if self.consume(b"true") {
@@ -1226,43 +1271,5 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         } else {
             Ok(None)
         }
-    }
-
-    fn try_range_to(&mut self, inclusive: bool) -> ResultKind<bool> {
-        if self.consume(b"..=") {
-            match inclusive {
-                true => Ok(true),
-                false => Err(ErrorKind::ExpectedRangeDotDot),
-            }
-        } else if self.consume(b"..") {
-            match !inclusive {
-                true => Ok(true),
-                false => Err(ErrorKind::ExpectedRangeDotDotEq),
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn try_range_from(&mut self) -> ResultKind<bool> {
-        let appears = match self.rest() {
-            [b'0'..=b'9' | b'-', ..] => true,
-            [b'i', b'n', b'f', ..] | [b'N', b'a', b'N', ..] => match self.decode_from(3)? {
-                Some((ch, _)) => !unicode_ident::is_xid_continue(ch),
-                None => true, // Propagate and report more specific errors.
-            },
-            _ => false,
-        };
-        Ok(appears)
-    }
-
-    fn end_range_from(&mut self) -> ResultKind {
-        self.eat_ws()?;
-        self.consume_expected(b"..", ErrorKind::ExpectedRangeDotDot)
-    }
-
-    fn adjacent_to_number_expected(&mut self) -> ResultKind {
-        self.eat_ws()?;
-        self.try_range_from()?.then_some(()).ok_or(ErrorKind::ExpectedNumber)
     }
 }

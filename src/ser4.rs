@@ -710,26 +710,6 @@ impl From<Number2> for Numeric {
     }
 }
 
-macro_rules! write_number {
-    (
-        $label:lifetime,
-        $dst:ident,
-        $variant:pat,
-        $numeric:ident,
-        $x:expr,
-        $buf:ident,
-        $write_opts:path
-    ) => {
-        if let $variant = $numeric {
-            let slice = lexical_core::write_with_options::<_, NUMBER_FORMAT>($x, &mut $buf, &$write_opts);
-
-            $dst.write_str(unsafe { ::core::str::from_utf8_unchecked(slice) })?;
-
-            break $label;
-        }
-    };
-}
-
 fn write_number(dst: &mut impl Write, number: Number2, suffix_control: NumericSuffix) -> fmt::Result {
     let mut buf = [0x00u8; lexical_core::BUFFER_SIZE];
 

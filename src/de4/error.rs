@@ -61,9 +61,10 @@ pub enum ErrorKind {
     ExpectedMapLikeEnd,
     UnexpectedUnitBody,
 
-    ExpectedNumber,
+    ExpectedScalar,
     ExpectedRangeDotDot,
     ExpectedRangeDotDotEq,
+    UnexpectedRangeDotDotEq,
 
     ExpectedUnquote,
     ExpectedColon,

@@ -236,11 +236,15 @@ RangeType ->
     | RangeInclusive
 
 RangeFull        ->        `..`
-RangeTo          ->        `..`  NUMBER
-RangeToInclusive ->        `..=` NUMBER
-RangeFrom        -> NUMBER `..`
-Range            -> NUMBER `..`  NUMBER
-RangeInclusive   -> NUMBER `..=` NUMBER
+RangeTo          ->        `..`  SCALAR
+RangeToInclusive ->        `..=` SCALAR
+RangeFrom        -> SCALAR `..`
+Range            -> SCALAR `..`  SCALAR
+RangeInclusive   -> SCALAR `..=` SCALAR
 
-NUMBER -> INTEGER_LITERAL | FLOAT_LITERAL
+SCALAR ->
+      INTEGER_LITERAL
+    | FLOAT_LITERAL
+    | CHAR_LITERAL
+    | BYTE_LITERAL
 ```
