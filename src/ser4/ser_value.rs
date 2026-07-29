@@ -84,6 +84,7 @@ impl super::Serialize for Value2 {
                 ser_fields_map(ser, fields_map)?;
                 ser.push(Token::MapLikeEnd)
             }
+            Value2::Newtype(_) => todo!(),
             Value2::RangeFull => todo!(),
             Value2::RangeTo(number) => todo!(),
             Value2::RangeToInclusive(number) => todo!(),

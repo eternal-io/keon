@@ -13,6 +13,7 @@ pub(crate) enum Indicator<'de> {
     String(StringKind),
     Bytes(BytesKind),
     Initiator(Initiator),
+    ExplicitNewtype(IdentRef<'de>),
     NominalPath(NominalPathRef<'de>),
 }
 
@@ -70,13 +71,12 @@ pub(crate) enum NumberSuffix {
 }
 
 pub(crate) enum NumberKind {
-    Normal,
+    Common,
     Infinity,
-    NegInfinity,
     NotANumber,
 }
 
-pub(crate) enum IntegerKind {
+pub(crate) enum Radix {
     Dec = 10,
     Hex = 16,
     Oct = 8,
@@ -262,13 +262,15 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     where
         'de: 't;
 
-    fn parse_newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
+    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
     where
         'de: 't;
 }
 
-pub(crate) trait ParseToValue<'de>: ParseHelper<'de> {
-    fn begin(&mut self) -> ResultKind<Indicator<'de>>;
+pub(crate) trait ParseToValue<'de>: ParseToConcr<'de> {
+    fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Indicator<'t>>
+    where
+        'de: 't;
 
     fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number2>;
 
@@ -286,11 +288,11 @@ macro_rules! fn_parse_integer {
         fn $name(&mut self) -> ResultKind<$ty> {
             use lexical_core::parse_partial_with_options as parse;
 
-            let (n, len) = match self.peek_integer_kind() {
-                IntegerKind::Dec => parse::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTS),
-                IntegerKind::Hex => parse::<$ty, NUMBER_FORMAT_HEX>(self.rest(), &PARSE_INTEGER_OPTS),
-                IntegerKind::Oct => parse::<$ty, NUMBER_FORMAT_OCT>(self.rest(), &PARSE_INTEGER_OPTS),
-                IntegerKind::Bin => parse::<$ty, NUMBER_FORMAT_BIN>(self.rest(), &PARSE_INTEGER_OPTS),
+            let (n, len) = match self.peek_integer_radix() {
+                Radix::Dec => parse::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTS),
+                Radix::Hex => parse::<$ty, NUMBER_FORMAT_HEX>(self.rest(), &PARSE_INTEGER_OPTS),
+                Radix::Oct => parse::<$ty, NUMBER_FORMAT_OCT>(self.rest(), &PARSE_INTEGER_OPTS),
+                Radix::Bin => parse::<$ty, NUMBER_FORMAT_BIN>(self.rest(), &PARSE_INTEGER_OPTS),
             }?;
             self.bump(len);
 
@@ -453,12 +455,12 @@ impl<'de> SliceSource<'de> {
         self.rest()[offset..].iter().take_while(|&&byte| byte == b'`').count()
     }
 
-    fn peek_integer_kind(&self) -> IntegerKind {
+    fn peek_integer_radix(&self) -> Radix {
         match self.rest() {
-            [b'-', b'0', b'b', ..] | [b'0', b'b', ..] => IntegerKind::Bin,
-            [b'-', b'0', b'o', ..] | [b'0', b'o', ..] => IntegerKind::Oct,
-            [b'-', b'0', b'x', ..] | [b'0', b'x', ..] => IntegerKind::Hex,
-            _ => IntegerKind::Dec,
+            [b'-', b'0', b'b', ..] | [b'0', b'b', ..] => Radix::Bin,
+            [b'-', b'0', b'o', ..] | [b'0', b'o', ..] => Radix::Oct,
+            [b'-', b'0', b'x', ..] | [b'0', b'x', ..] => Radix::Hex,
+            _ => Radix::Dec,
         }
     }
 
@@ -615,6 +617,20 @@ impl<'de> SliceSource<'de> {
     }
 
     fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<IdentRef<'de>>> {
+        if let Some((raw_mode, ident)) = self.parse_identifier_or_underscore_raw()? {
+            if !raw_mode && matches!(ident.as_ref(), "true" | "false" | "inf" | "NaN") {
+                Err(ErrorKind::UnexpectedKeywordAsIdentifier)
+            } else {
+                self.bump(ident.len());
+                Ok(Some(ident))
+            }
+        } else {
+            self.bump(1);
+            Ok(None)
+        }
+    }
+
+    fn parse_identifier_or_underscore_raw(&mut self) -> ResultKind<Option<(bool, IdentRef<'de>)>> {
         let raw_mode = self.consume(b"`");
         let mut contd = false;
         let mut offset = 0;
@@ -646,16 +662,10 @@ impl<'de> SliceSource<'de> {
             if raw_mode {
                 Err(ErrorKind::UnexpectedUnderscoreIdentifier)
             } else {
-                self.bump(offset);
                 Ok(None)
             }
         } else {
-            if !raw_mode && matches!(ident, "true" | "false" | "inf" | "NaN") {
-                Err(ErrorKind::UnexpectedKeywordAsIdentifier)
-            } else {
-                self.bump(offset);
-                Ok(Some(IdentRef::new_unchecked(ident)))
-            }
+            Ok(Some((raw_mode, IdentRef::new_unchecked(ident))))
         }
     }
 }
@@ -1262,12 +1272,245 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
     }
 
-    fn parse_newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
+    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
     where
         'de: 't,
     {
         if self.consume(b"!") {
             self.parse_identifier(scratch).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<'de> ParseToValue<'de> for SliceSource<'de> {
+    fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Indicator<'t>>
+    where
+        'de: 't,
+    {
+        self.eat_ws()?;
+        let indicator = if self.consume(b"!") {
+            Indicator::ExplicitNewtype(self.parse_identifier(scratch)?)
+        } else if self.consume(b"?") {
+            Indicator::Initiator(Initiator::Maybe)
+        } else if self.consume(b"(") {
+            self.eat_ws()?;
+            if self.consume(b")") {
+                Indicator::Unit
+            } else {
+                Indicator::Initiator(Initiator::Tuple)
+            }
+        } else if self.consume(b"[") {
+            Indicator::Initiator(Initiator::Array)
+        } else if self.consume(b"{") {
+            Indicator::Initiator(Initiator::MapLike)
+        } else if self.consume(b"..=") {
+            Indicator::Initiator(Initiator::DotDotEq)
+        } else if self.consume(b"..") {
+            Indicator::Initiator(Initiator::DotDot)
+        } else {
+            match self.rest() {
+                [b'\'', ..] => {
+                    self.bump(1);
+                    Indicator::Char(self.parse_char()?)
+                }
+                [b'b', b'\'', ..] => {
+                    self.bump(2);
+                    Indicator::Byte(self.parse_byte()?)
+                }
+                [b'0'..=b'9' | b'-', ..] => Indicator::Number(NumberKind::Common),
+
+                /* String */
+                [b'"', ..] | [b'`', b'`' | b'"' | b'|', ..] => {
+                    let (ticks, init) = self.consume_ticks_peek_initiator();
+                    if let Some(b'"') = init {
+                        self.bump(1);
+                        match ticks {
+                            0 => Indicator::String(StringKind::Normal),
+                            _ => Indicator::String(StringKind::Raw { ticks }),
+                        }
+                    } else if let Some(b'|') = init {
+                        self.bump(1);
+                        Indicator::String(StringKind::Paragraph { ticks })
+                    } else {
+                        return Err(ErrorKind::ExpectedQuote);
+                    }
+                }
+
+                /* Byte String */
+                [b'b', b'"' | b'`', ..] => {
+                    self.bump(1);
+                    let (ticks, init) = self.consume_ticks_peek_initiator();
+                    if let Some(b'"') = init {
+                        self.bump(1);
+                        match ticks {
+                            0 => Indicator::Bytes(BytesKind::Normal),
+                            _ => Indicator::Bytes(BytesKind::Raw { ticks }),
+                        }
+                    } else {
+                        return Err(ErrorKind::ExpectedQuote);
+                    }
+                }
+                [b'b', b'6', b'4', b'"', ..] => {
+                    self.bump(4);
+                    Indicator::Bytes(BytesKind::Base64)
+                }
+                [b'b', b'3', b'2', b'"', ..] => {
+                    self.bump(4);
+                    Indicator::Bytes(BytesKind::Base32)
+                }
+                [b'b', b'1', b'6', b'"', ..] => {
+                    self.bump(4);
+                    Indicator::Bytes(BytesKind::Base16)
+                }
+
+                _ => 'nominal: {
+                    if let Some((raw_mode, ident)) = self.parse_identifier_or_underscore_raw()? {
+                        self.bump(ident.len());
+                        if !raw_mode {
+                            match ident.as_ref() {
+                                "true" => break 'nominal Indicator::Bool(true),
+                                "false" => break 'nominal Indicator::Bool(false),
+                                "inf" => break 'nominal Indicator::Number(NumberKind::Infinity),
+                                "NaN" => break 'nominal Indicator::Number(NumberKind::NotANumber),
+                                _ => (),
+                            }
+                        }
+                        if !self.consume(b"::") {
+                            Indicator::NominalPath(NominalPathRef::Single { name: ident })
+                        } else {
+                            Indicator::NominalPath(NominalPathRef::Dual {
+                                name: self.parse_identifier(scratch)?,
+                                parent: ident,
+                            })
+                        }
+                    } else {
+                        self.bump(1);
+                        Indicator::NominalPath(NominalPathRef::Underscore)
+                    }
+                }
+            }
+        };
+        Ok(indicator)
+    }
+
+    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number2> {
+        const BIN_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'1' | b'_');
+        const OCT_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'7' | b'_');
+        const HEX_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f' | b'_');
+        const DEC_FLOAT: fn(&&u8) -> bool =
+            |byte| matches!(byte, b'0'..=b'9' | b'.' | b'E' | b'e' | b'+' | b'-' | b'_');
+
+        macro_rules! parse_integer_case {
+            ($radix:ident, $payload:ident, $ty:ty, $type:ident) => {{
+                use lexical_core::parse_with_options as parse;
+
+                let n = match $radix {
+                    Radix::Dec => parse::<$ty, NUMBER_FORMAT>($payload, &PARSE_INTEGER_OPTS),
+                    Radix::Hex => parse::<$ty, NUMBER_FORMAT_HEX>($payload, &PARSE_INTEGER_OPTS),
+                    Radix::Oct => parse::<$ty, NUMBER_FORMAT_OCT>($payload, &PARSE_INTEGER_OPTS),
+                    Radix::Bin => parse::<$ty, NUMBER_FORMAT_BIN>($payload, &PARSE_INTEGER_OPTS),
+                }?;
+                self.bump($payload.len() + NumberSuffix::$type.len_utf8());
+
+                Number2::from(n)
+            }};
+        }
+
+        macro_rules! parse_float_case {
+            ($payload:ident, $ty:ty, $type:ident) => {{
+                let f = lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>($payload, &PARSE_FLOAT_OPTS)?;
+                self.bump($payload.len() + NumberSuffix::$type.len_utf8());
+
+                Number2::from(f)
+            }};
+        }
+
+        macro_rules! parse_no_suffix_case {
+            ($payload:ident, $ty:ty, $type:ident, $options:ident) => {{
+                let x = lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>($payload, &$options)?;
+                self.bump($payload.len());
+
+                Number2::$type(x.into())
+            }};
+        }
+
+        let num = match kind {
+            NumberKind::Common => {
+                let special = 'common: {
+                    let (off, radix, pred) = match self.rest() {
+                        [b'0', b'b', ..] => (2, Radix::Bin, BIN_DIGIT),
+                        [b'0', b'o', ..] => (2, Radix::Oct, OCT_DIGIT),
+                        [b'0', b'x', ..] => (2, Radix::Hex, HEX_DIGIT),
+                        [b'-', b'0', b'b', ..] => (3, Radix::Bin, BIN_DIGIT),
+                        [b'-', b'0', b'o', ..] => (3, Radix::Oct, OCT_DIGIT),
+                        [b'-', b'0', b'x', ..] => (3, Radix::Hex, HEX_DIGIT),
+                        [b'-', b'i', b'n', b'f', ..] => break 'common f64::NEG_INFINITY,
+                        [b'-', b'N', b'a', b'N', ..] => break 'common f64::NAN,
+                        [b'-', ..] => (1, Radix::Dec, DEC_FLOAT),
+                        [..] => (0, Radix::Dec, DEC_FLOAT),
+                    };
+                    let len = off + self.rest()[off..].iter().take_while(pred).count();
+                    let payload = &self.rest()[..len];
+                    let num = match &self.rest()[len..] {
+                        [b'i', b'8', ..] => parse_integer_case!(radix, payload, i8, Int8),
+                        [b'i', b'1', b'6', ..] => parse_integer_case!(radix, payload, i16, Int16),
+                        [b'i', b'3', b'2', ..] => parse_integer_case!(radix, payload, i32, Int32),
+                        [b'i', b'6', b'4', ..] => parse_integer_case!(radix, payload, i64, Int64),
+                        [b'i', b'1', b'2', b'8', ..] => parse_integer_case!(radix, payload, i128, Int128),
+                        [b'u', b'8', ..] => parse_integer_case!(radix, payload, u8, UInt8),
+                        [b'u', b'1', b'6', ..] => parse_integer_case!(radix, payload, u16, UInt16),
+                        [b'u', b'3', b'2', ..] => parse_integer_case!(radix, payload, u32, UInt32),
+                        [b'u', b'6', b'4', ..] => parse_integer_case!(radix, payload, u64, UInt64),
+                        [b'u', b'1', b'2', b'8', ..] => parse_integer_case!(radix, payload, u128, UInt128),
+                        [b'f', b'3', b'2', ..] => parse_float_case!(payload, f32, Float32),
+                        [b'f', b'6', b'4', ..] => parse_float_case!(payload, f64, Float64),
+                        _ => {
+                            if let Some((ch, _)) = self.decode_from(len)? {
+                                if unicode_ident::is_xid_continue(ch) {
+                                    return Err(ErrorKind::InvalidNumberSuffix);
+                                }
+                            }
+                            if memchr3(b'.', b'e', b'E', payload).is_some() {
+                                parse_no_suffix_case!(payload, f64, FloatNoSuffix, PARSE_FLOAT_OPTS)
+                            } else if off == 0 {
+                                parse_no_suffix_case!(payload, u64, UIntNoSuffix, PARSE_INTEGER_OPTS)
+                            } else {
+                                parse_no_suffix_case!(payload, i64, IntNoSuffix, PARSE_INTEGER_OPTS)
+                            }
+                        }
+                    };
+                    return Ok(num);
+                };
+                if let Some((ch, _)) = self.decode_from(4)? {
+                    if unicode_ident::is_xid_continue(ch) {
+                        return Err(ErrorKind::InvalidNumberSpecial);
+                    }
+                }
+                Number2::FloatNoSuffix(special.into())
+            }
+            NumberKind::Infinity => Number2::FloatNoSuffix(f64::INFINITY.into()),
+            NumberKind::NotANumber => Number2::FloatNoSuffix(f64::NAN.into()),
+        };
+        Ok(num)
+    }
+
+    fn range_separator(&mut self) -> ResultKind<Option<RangeSeparator>> {
+        if self.consume(b"..=") {
+            Ok(Some(RangeSeparator::DotDotEq))
+        } else if self.consume(b"..") {
+            Ok(Some(RangeSeparator::DotDot))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn nominal_body_initiator(&mut self) -> ResultKind<Option<NominalBodyInitiator>> {
+        if self.consume(b"(") {
+            Ok(Some(NominalBodyInitiator::Tuple))
+        } else if self.consume(b"{") {
+            Ok(Some(NominalBodyInitiator::Struct))
         } else {
             Ok(None)
         }

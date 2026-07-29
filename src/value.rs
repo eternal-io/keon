@@ -297,14 +297,17 @@ pub enum Value2 {
     /// Nominal map (`struct`).
     MapStruct(Box<(NominalPath2, Struct2)>),
 
+    /// Explicit newtype (unary nominal tuple).
+    Newtype(Box<(Ident, Value2)>),
+
     /// `..`
     RangeFull,
     /// `..q`
-    RangeTo(Scalar),
+    RangeTo(Box<Scalar>),
     /// `..=q`
-    RangeToInclusive(Scalar),
+    RangeToInclusive(Box<Scalar>),
     /// `p..`
-    RangeFrom(Scalar),
+    RangeFrom(Box<Scalar>),
     /// `p..q`
     Range(Box<(Scalar, Scalar)>),
     /// `p..=q`

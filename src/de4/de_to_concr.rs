@@ -251,7 +251,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
 impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     #[inline]
     fn deserialize_newtype_struct_tag(&mut self, name: &'static str) -> ResultKind {
-        if let Some(name_parsed) = self.0.src.parse_newtype_struct_tag(&mut self.0.buf)? {
+        if let Some(name_parsed) = self.0.src.newtype_struct_tag(&mut self.0.buf)? {
             if *name_parsed != *name {
                 return Err(ErrorKind::ExpectedDifferentStructName {
                     expected: name,

@@ -48,6 +48,7 @@ pub enum ErrorKind {
     ExpectedFloat64,
     ExpectedBoolean,
     InvalidNumberSuffix,
+    InvalidNumberSpecial,
     InvalidParagraphLineInitiator,
 
     ExpectedUnit,
@@ -66,6 +67,7 @@ pub enum ErrorKind {
     ExpectedRangeDotDotEq,
     UnexpectedRangeDotDotEq,
 
+    ExpectedQuote,
     ExpectedUnquote,
     ExpectedColon,
     ExpectedFatArrow,
