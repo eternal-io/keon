@@ -279,6 +279,19 @@ pub enum Value2 {
     /// Nominal unit.
     UnitStruct(Box<NominalPath2>),
 
+    /// `..`
+    RangeFull,
+    /// `..q`
+    RangeTo(Box<Scalar>),
+    /// `..=q`
+    RangeToInclusive(Box<Scalar>),
+    /// `p..`
+    RangeFrom(Box<Scalar>),
+    /// `p..q`
+    Range(Box<(Scalar, Scalar)>),
+    /// `p..=q`
+    RangeInclusive(Box<(Scalar, Scalar)>),
+
     /// Maybe value, either [`Some`] or [`None`].
     ///
     /// This is non-nominal due to [serde]'s design.
@@ -297,21 +310,8 @@ pub enum Value2 {
     /// Nominal map (`struct`).
     MapStruct(Box<(NominalPath2, Struct2)>),
 
-    /// Explicit newtype (unary nominal tuple).
+    /// Explicit newtype struct.
     Newtype(Box<(Ident, Value2)>),
-
-    /// `..`
-    RangeFull,
-    /// `..q`
-    RangeTo(Box<Scalar>),
-    /// `..=q`
-    RangeToInclusive(Box<Scalar>),
-    /// `p..`
-    RangeFrom(Box<Scalar>),
-    /// `p..q`
-    Range(Box<(Scalar, Scalar)>),
-    /// `p..=q`
-    RangeInclusive(Box<(Scalar, Scalar)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

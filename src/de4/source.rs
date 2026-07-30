@@ -13,8 +13,8 @@ pub(crate) enum Indicator<'de> {
     String(StringKind),
     Bytes(BytesKind),
     Initiator(Initiator),
-    ExplicitNewtype(IdentRef<'de>),
     NominalPath(NominalPathRef<'de>),
+    ExplicitNewtype(IdentRef<'de>),
 }
 
 #[rustfmt::skip]

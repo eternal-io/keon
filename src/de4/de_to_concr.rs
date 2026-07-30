@@ -473,7 +473,13 @@ impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
     }
 
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(mut self, seed: T) -> ResultKind<T::Value> {
-        recursion_guard!(self, Ok(seed.deserialize(self.reborrow())?))
+        recursion_guard!(self, {
+            self.begin_tuple()?;
+            let val = seed.deserialize(self.reborrow())?;
+            self.delim(Delimiter::Comma)?;
+            self.end_tuple()?;
+            Ok(val)
+        })
     }
 
     fn tuple_variant<V: Visitor<'de>>(self, len: usize, visitor: V) -> ResultKind<V::Value> {

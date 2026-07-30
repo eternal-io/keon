@@ -28,9 +28,9 @@ KeonPartial -> Value ( `;` | `;`? <EOF> )
 
 Value ->
       LITERAL
+    | RangeType
     | Structure
     | NominalStructure
-    | RangeType
 
 
 /*== Whitespaces and comments ==*/
@@ -178,6 +178,30 @@ PARAGRAPH_LITERAL ->
                 //   match the first line, to keep it "correct".
 
 
+/*== Range Types ==*/
+
+RangeType ->
+      RangeFull
+    | RangeTo
+    | RangeToInclusive
+    | RangeFrom
+    | Range
+    | RangeInclusive
+
+RangeFull        ->        `..`
+RangeTo          ->        `..`  SCALAR
+RangeToInclusive ->        `..=` SCALAR
+RangeFrom        -> SCALAR `..`
+Range            -> SCALAR `..`  SCALAR
+RangeInclusive   -> SCALAR `..=` SCALAR
+
+SCALAR ->
+      INTEGER_LITERAL
+    | FLOAT_LITERAL
+    | CHAR_LITERAL
+    | BYTE_LITERAL
+
+
 /*== Structures ==*/
 
 Structure ->
@@ -205,16 +229,14 @@ MapValue ->
 /*== Nominal Structures ==*/
 
 NominalStructure ->
-      NOMINAL_PATH ( TupleValue | StructValue )?
-    | NOMINAL_NEWTYPE
+        NEWTYPE_STRUCT_TAG     Value
+    | ( NOMINAL_PATH | `_` ) ( TupleValue | StructValue )?
 
-NOMINAL_NEWTYPE ->
-    ( `!` IDENTIFIER | NOMINAL_PATH ) WS Value
+NEWTYPE_STRUCT_TAG ->
+    `!` IDENTIFIER
 
 NOMINAL_PATH ->
-      `_`
-    | IDENTIFIER
-    | IDENTIFIER `::` IDENTIFIER
+    ( IDENTIFIER `::` )? IDENTIFIER
     // We could certainly support long paths like `path::to::Foo::Bar`,
     // but this seemed to lack usefulness and is no longer provided.
 
@@ -223,28 +245,4 @@ StructValue ->
               IDENTIFIER `:` Value
         ( `,` IDENTIFIER `:` Value )* `,`?
     )? `}`
-
-
-/*== Range Types ==*/
-
-RangeType ->
-      RangeFull
-    | RangeTo
-    | RangeToInclusive
-    | RangeFrom
-    | Range
-    | RangeInclusive
-
-RangeFull        ->        `..`
-RangeTo          ->        `..`  SCALAR
-RangeToInclusive ->        `..=` SCALAR
-RangeFrom        -> SCALAR `..`
-Range            -> SCALAR `..`  SCALAR
-RangeInclusive   -> SCALAR `..=` SCALAR
-
-SCALAR ->
-      INTEGER_LITERAL
-    | FLOAT_LITERAL
-    | CHAR_LITERAL
-    | BYTE_LITERAL
 ```
