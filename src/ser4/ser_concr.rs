@@ -150,7 +150,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         Ok(self)
     }
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
-        let _ = len; // TODO: serialize range types !!!
+        let _ = len;
         self.push(Token::MapStruct {
             kind: NominalKind::Struct,
             path: NominalPathRef::Single {

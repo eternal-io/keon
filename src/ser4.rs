@@ -183,6 +183,7 @@ enum Token<'a> {
         path: NominalPathRef<'a>,
     },
 
+    // TODO: add range types.
     Maybe,
     Array,
     Tuple,
@@ -221,7 +222,6 @@ enum NominalKind {
 }
 
 enum RangeType {
-    RangeFull,
     RangeTo,
     RangeToInclusive,
     RangeFrom,
@@ -229,14 +229,11 @@ enum RangeType {
     RangeInclusive,
 }
 
-impl TryInto<Scalar> for Literal<'_> {
-    type Error = Self;
-
-    fn try_into(self) -> Result<Scalar, Self::Error> {
-        match self {
-            Literal::Char(ch) => Ok(Scalar::Char(ch)),
-            Literal::Number(num) => Ok(Scalar::Number(num)),
-            non_scalar => Err(non_scalar),
+impl From<Scalar> for Literal<'_> {
+    fn from(value: Scalar) -> Self {
+        match value {
+            Scalar::Char(ch) => Self::Char(ch),
+            Scalar::Number(num) => Self::Number(num),
         }
     }
 }
@@ -247,11 +244,53 @@ pub struct FastImpl<W> {
     dst: W,
     cfg: SerializeConfig,
     lvl: usize,
+    range_hook: Option<RangeType>,
+    range_start: Option<Option<Scalar>>,
+    range_end: Option<Option<Scalar>>,
 }
 
 impl<W> FastImpl<W> {
     fn new(dst: W, cfg: SerializeConfig) -> Self {
-        Self { dst, cfg, lvl: 0 }
+        Self {
+            dst,
+            cfg,
+            lvl: 0,
+            range_hook: None,
+            range_start: None,
+            range_end: None,
+        }
+    }
+}
+
+impl<W: Write> FastImpl<W> {
+    fn release_range_hook(&mut self) -> fmt::Result {
+        if let Some(typ) = self.range_hook.take() {
+            self.dst.write_str(match typ {
+                RangeType::RangeTo => "RangeTo",
+                RangeType::RangeToInclusive => "RangeToInclusive",
+                RangeType::RangeFrom => "RangeFrom",
+                RangeType::Range => "Range",
+                RangeType::RangeInclusive => "RangeInclusive",
+            })?;
+            self.dst.write_str("{")?;
+        }
+        if let Some(start) = self.range_start.take() {
+            self.dst.write_str("start")?;
+            if let Some(scalar) = start {
+                self.dst.write_str(":")?;
+                write_literal(&mut self.dst, scalar.into(), self.cfg.numeric_suffix)?;
+                self.dst.write_str(",")?;
+            }
+        }
+        if let Some(end) = self.range_end.take() {
+            self.dst.write_str("end")?;
+            if let Some(scalar) = end {
+                self.dst.write_str(":")?;
+                write_literal(&mut self.dst, scalar.into(), self.cfg.numeric_suffix)?;
+                self.dst.write_str(",")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -267,10 +306,6 @@ impl<W> Sealed for FastImpl<W> {}
 impl<W: Write> SerializerImpl for FastImpl<W> {
     #[doc(hidden)]
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
-        let dst = &mut self.dst;
-        let cfg = &self.cfg;
-        let lvl = &mut self.lvl;
-
         if matches!(
             token,
             Token::Maybe
@@ -280,51 +315,158 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
                 | Token::Map
                 | Token::MapStruct { .. }
         ) {
-            *lvl += 1;
+            self.lvl += 1;
         }
 
         if matches!(
             token,
             Token::MaybeEnd | Token::ArrayEnd | Token::TupleEnd | Token::MapLikeEnd
         ) {
-            *lvl -= 1;
+            self.lvl -= 1;
         }
 
-        match token {
-            #[cfg(feature = "alloc")]
-            Token::Stringified(_) => panic!("FastImpl does not rely on alloc"),
-            Token::Literal(literal) => write_literal(dst, literal, cfg.numeric_suffix)?,
-            Token::Ident(ident) => dst.write_str(ident)?,
-            Token::Unit => dst.write_str("()")?,
-            Token::UnitStruct { kind, path } => write_nominal_path(dst, kind, path, cfg.nominal_path_style)?,
-
-            Token::Maybe => dst.write_str("?")?,
-            Token::Array => dst.write_str("[")?,
-            Token::Tuple | Token::TupleStruct { .. } => {
-                if let Token::TupleStruct { kind, path } = token {
-                    write_nominal_path(dst, kind, path, cfg.nominal_path_style)?;
+        'value: {
+            if let Some(ref typ) = self.range_hook {
+                'range: {
+                    match token {
+                        Token::Ident(ident) => {
+                            if ident == "start"
+                                && matches!(typ, RangeType::RangeFrom)
+                                && matches!(typ, RangeType::Range | RangeType::RangeInclusive)
+                            {
+                                self.range_start = Some(None);
+                            } else if ident == "end"
+                                && matches!(typ, RangeType::RangeTo | RangeType::RangeToInclusive)
+                                && matches!(typ, RangeType::Range | RangeType::RangeInclusive)
+                            {
+                                self.range_end = Some(None);
+                            } else {
+                                break 'range;
+                            }
+                        }
+                        Token::Literal(ref literal) => {
+                            let scalar = match literal {
+                                Literal::Char(ch) => Scalar::Char(*ch),
+                                Literal::Number(num) => Scalar::Number(*num),
+                                _ => break 'range,
+                            };
+                            match (self.range_start, self.range_end) {
+                                (Some(None), None | Some(Some(_))) => self.range_start = Some(Some(scalar)),
+                                (None | Some(Some(_)), Some(None)) => self.range_end = Some(Some(scalar)),
+                                _ => panic!("contract violation"),
+                            }
+                        }
+                        Token::MapLikeEnd => {
+                            match typ {
+                                RangeType::RangeTo => {
+                                    if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
+                                        self.dst.write_str("..")?;
+                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
+                                    } else {
+                                        break 'range;
+                                    }
+                                }
+                                RangeType::RangeToInclusive => {
+                                    if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
+                                        self.dst.write_str("..=")?;
+                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
+                                    } else {
+                                        break 'range;
+                                    }
+                                }
+                                RangeType::RangeFrom => {
+                                    if let (Some(Some(start)), None) = (self.range_start, self.range_end) {
+                                        write_literal(&mut self.dst, start.into(), self.cfg.numeric_suffix)?;
+                                        self.dst.write_str("..")?;
+                                    } else {
+                                        break 'range;
+                                    }
+                                }
+                                RangeType::Range => {
+                                    if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
+                                        write_literal(&mut self.dst, start.into(), self.cfg.numeric_suffix)?;
+                                        self.dst.write_str("..")?;
+                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
+                                    } else {
+                                        break 'range;
+                                    }
+                                }
+                                RangeType::RangeInclusive => {
+                                    if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
+                                        write_literal(&mut self.dst, start.into(), self.cfg.numeric_suffix)?;
+                                        self.dst.write_str("..=")?;
+                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
+                                    } else {
+                                        break 'range;
+                                    }
+                                }
+                            };
+                            self.range_hook = None;
+                            self.range_start = None;
+                            self.range_end = None;
+                        }
+                        _ => break 'range,
+                    }
+                    break 'value;
                 }
-                dst.write_str("(")?;
+                self.release_range_hook()?;
             }
-            Token::Map | Token::MapStruct { .. } => {
-                if let Token::MapStruct { kind, path } = token {
-                    write_nominal_path(dst, kind, path, cfg.nominal_path_style)?;
+
+            match token {
+                #[cfg(feature = "alloc")]
+                Token::Stringified(_) => panic!("FastImpl does not rely on alloc"),
+                Token::Literal(literal) => write_literal(&mut self.dst, literal, self.cfg.numeric_suffix)?,
+                Token::Ident(ident) => self.dst.write_str(ident)?,
+                Token::Unit => self.dst.write_str("()")?,
+                Token::UnitStruct { kind, path } => {
+                    write_nominal_path(&mut self.dst, kind, path, self.cfg.nominal_path_style)?
                 }
-                dst.write_str("{")?;
+
+                Token::Maybe => self.dst.write_str("?")?,
+                Token::Array => self.dst.write_str("[")?,
+                Token::Tuple | Token::TupleStruct { .. } => {
+                    if let Token::TupleStruct { kind, path } = token {
+                        write_nominal_path(&mut self.dst, kind, path, self.cfg.nominal_path_style)?;
+                    }
+                    self.dst.write_str("(")?;
+                }
+                Token::Map | Token::MapStruct { .. } => 'map_like: {
+                    if let Token::MapStruct { kind, path } = token {
+                        'range_type: {
+                            let NominalPathRef::Single { name } = path else {
+                                break 'range_type;
+                            };
+                            let typ = match &**name {
+                                "RangeTo" => RangeType::RangeTo,
+                                "RangeToInclusive" => RangeType::RangeToInclusive,
+                                "RangeFrom" => RangeType::RangeFrom,
+                                "Range" => RangeType::Range,
+                                "RangeInclusive" => RangeType::RangeInclusive,
+                                _ => break 'range_type,
+                            };
+
+                            self.range_hook = Some(typ);
+
+                            break 'map_like;
+                        }
+                        write_nominal_path(&mut self.dst, kind, path, self.cfg.nominal_path_style)?;
+                    }
+                    self.dst.write_str("{")?;
+                }
+
+                Token::MaybeEnd => (),
+                Token::ArrayEnd => self.dst.write_str("]")?,
+                Token::TupleEnd => self.dst.write_str(")")?,
+                Token::MapLikeEnd => self.dst.write_str("}")?,
+
+                Token::FatArrow => self.dst.write_str("=>")?,
+                Token::Colon => self.dst.write_str(":")?,
+                Token::Comma => self.dst.write_str(",")?,
             }
-
-            Token::MaybeEnd => (),
-            Token::ArrayEnd => dst.write_str("]")?,
-            Token::TupleEnd => dst.write_str(")")?,
-            Token::MapLikeEnd => dst.write_str("}")?,
-
-            Token::FatArrow => dst.write_str("=>")?,
-            Token::Colon => dst.write_str(":")?,
-            Token::Comma => dst.write_str(",")?,
         }
 
-        if *lvl == 0 {
-            dst.write_str(";")?;
+        if self.lvl == 0 {
+            self.dst.write_str(";")?;
         }
 
         Ok(())
