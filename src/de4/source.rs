@@ -4,7 +4,7 @@ use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use memchr::{memchr, memchr2, memchr3};
 use simdutf8::compat::from_utf8 as decode_utf8;
 
-pub(crate) enum Indicator<'de> {
+pub(crate) enum Indicator<'t> {
     Unit,
     Bool(bool),
     Char(char),
@@ -13,8 +13,8 @@ pub(crate) enum Indicator<'de> {
     String(StringKind),
     Bytes(BytesKind),
     Initiator(Initiator),
-    NominalPath(NominalPathRef<'de>),
-    ExplicitNewtype(IdentRef<'de>),
+    NominalPath(NominalPathRef<'t>),
+    ExplicitNewtype(&'t Ident),
 }
 
 #[rustfmt::skip]
@@ -258,11 +258,11 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     where
         'de: 't;
 
-    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
+    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<&'t Ident>
     where
         'de: 't;
 
-    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
+    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
     where
         'de: 't;
 }
@@ -616,7 +616,7 @@ impl<'de> SliceSource<'de> {
         self.decode_from(0)?.ok_or(ErrorKind::UnexpectedEof)
     }
 
-    fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<IdentRef<'de>>> {
+    fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<&'de Ident>> {
         if let Some((raw_mode, ident)) = self.parse_identifier_or_underscore_raw()? {
             if !raw_mode && matches!(ident.as_ref(), "true" | "false" | "inf" | "NaN") {
                 Err(ErrorKind::UnexpectedKeywordAsIdentifier)
@@ -630,7 +630,7 @@ impl<'de> SliceSource<'de> {
         }
     }
 
-    fn parse_identifier_or_underscore_raw(&mut self) -> ResultKind<Option<(bool, IdentRef<'de>)>> {
+    fn parse_identifier_or_underscore_raw(&mut self) -> ResultKind<Option<(bool, &'de Ident)>> {
         let raw_mode = self.consume(b"`");
         let mut contd = false;
         let mut offset = 0;
@@ -665,7 +665,7 @@ impl<'de> SliceSource<'de> {
                 Ok(None)
             }
         } else {
-            Ok(Some((raw_mode, IdentRef::new_unchecked(ident))))
+            Ok(Some((raw_mode, Ident::new_unchecked(ident))))
         }
     }
 }
@@ -1263,7 +1263,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         }
     }
 
-    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<IdentRef<'t>>
+    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<&'t Ident>
     where
         'de: 't,
     {
@@ -1272,7 +1272,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
     }
 
-    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<IdentRef<'t>>>
+    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
     where
         'de: 't,
     {

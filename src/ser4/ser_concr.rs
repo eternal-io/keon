@@ -1,5 +1,5 @@
 use super::{Literal, NominalKind, NominalPathRef, PrivateMethod, SerializerImpl, Token};
-use crate::value::IdentRef;
+use crate::value::Ident;
 use core::fmt;
 use serde::{
     ser::{
@@ -51,7 +51,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::UnitStruct {
             kind: NominalKind::Struct,
             path: NominalPathRef::Single {
-                name: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(name),
             },
         })
     }
@@ -60,8 +60,8 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::UnitStruct {
             kind: NominalKind::Variant,
             path: NominalPathRef::Dual {
-                name: IdentRef::new_unchecked(variant),
-                parent: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(variant),
+                parent: Ident::new_unchecked(name),
             },
         })
     }
@@ -85,7 +85,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::TupleStruct {
             kind: NominalKind::Struct,
             path: NominalPathRef::Single {
-                name: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(name),
             },
         })?;
         self.serialize(value)?;
@@ -102,8 +102,8 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::TupleStruct {
             kind: NominalKind::Variant,
             path: NominalPathRef::Dual {
-                name: IdentRef::new_unchecked(variant),
-                parent: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(variant),
+                parent: Ident::new_unchecked(name),
             },
         })?;
         self.serialize(value)?;
@@ -120,7 +120,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::TupleStruct {
             kind: NominalKind::Struct,
             path: NominalPathRef::Single {
-                name: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(name),
             },
         })?;
         Ok(self)
@@ -137,8 +137,8 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::TupleStruct {
             kind: NominalKind::Variant,
             path: NominalPathRef::Dual {
-                name: IdentRef::new_unchecked(variant),
-                parent: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(variant),
+                parent: Ident::new_unchecked(name),
             },
         })?;
         Ok(self)
@@ -154,7 +154,7 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::MapStruct {
             kind: NominalKind::Struct,
             path: NominalPathRef::Single {
-                name: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(name),
             },
         })?;
         Ok(self)
@@ -171,8 +171,8 @@ impl<Impl: SerializerImpl> Serializer for &mut super::Serializer<Impl> {
         self.push(Token::MapStruct {
             kind: NominalKind::Variant,
             path: NominalPathRef::Dual {
-                name: IdentRef::new_unchecked(variant),
-                parent: IdentRef::new_unchecked(name),
+                name: Ident::new_unchecked(variant),
+                parent: Ident::new_unchecked(name),
             },
         })?;
         Ok(self)

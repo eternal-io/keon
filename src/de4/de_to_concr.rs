@@ -252,7 +252,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     #[inline]
     fn deserialize_newtype_struct_tag(&mut self, name: &'static str) -> ResultKind {
         if let Some(name_parsed) = self.0.src.newtype_struct_tag(&mut self.0.buf)? {
-            if *name_parsed != *name {
+            if &**name_parsed != name {
                 return Err(ErrorKind::ExpectedDifferentStructName {
                     expected: name,
                     found: name_parsed.to_string(),
@@ -267,7 +267,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
         match self.0.src.parse_nominal_path(&mut self.0.buf)? {
             NominalPathRef::Underscore => (),
             NominalPathRef::Single { name: name_parsed } => {
-                if *name_parsed != *name {
+                if &**name_parsed != name {
                     return Err(ErrorKind::ExpectedDifferentStructName {
                         expected: name,
                         found: name_parsed.to_string(),
@@ -451,7 +451,7 @@ impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'a, R> {
                 name: variant,
                 parent: name_parsed,
             } => {
-                if *name_parsed != *name {
+                if &**name_parsed != name {
                     return Err(ErrorKind::ExpectedDifferentEnumName {
                         expected: name,
                         found: name_parsed.to_string(),

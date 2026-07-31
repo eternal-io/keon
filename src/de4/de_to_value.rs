@@ -60,7 +60,9 @@ impl<'de> Deserialize<'de> for Value2 {
                         Self::UnitStruct(Box::new(path.into()))
                     }
                 },
-                Indicator::ExplicitNewtype(ident) => Self::Newtype(Box::new((ident.into(), deserialize_value(der)?))),
+                Indicator::ExplicitNewtype(ident) => {
+                    Self::Newtype(Box::new((ident.to_owned(), deserialize_value(der)?)))
+                }
             };
             return Ok(val);
         };
@@ -154,7 +156,7 @@ fn deserialize_fields_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> Res
         if der.src.adjacent_to_delim()? {
             break;
         }
-        let field = Ident::from(der.src.parse_identifier(&mut der.buf)?);
+        let field = Ident::new_unchecked(der.src.parse_identifier(&mut der.buf)?).to_owned();
         der.src
             .delim_expected(Delimiter::FatArrow, ErrorKind::ExpectedFatArrow)?;
         let value = Value2::deserialize_with(der, PrivateMethod)?;

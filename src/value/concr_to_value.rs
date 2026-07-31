@@ -77,15 +77,15 @@ impl Serializer for MakeValue {
             Ok(Value2::RangeFull)
         } else {
             Ok(Value2::UnitStruct(Box::new(NominalPath2::Single {
-                name: Ident::new_unchecked(name),
+                name: Ident::new_unchecked(name).to_owned(),
             })))
         }
     }
     fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> Fine<Value2> {
         let _ = variant_index;
         Ok(Value2::UnitStruct(Box::new(NominalPath2::Dual {
-            name: Ident::new_unchecked(variant),
-            parent: Ident::new_unchecked(name),
+            name: Ident::new_unchecked(variant).to_owned(),
+            parent: Ident::new_unchecked(name).to_owned(),
         })))
     }
 
@@ -101,7 +101,7 @@ impl Serializer for MakeValue {
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> Fine<Value2> {
         Ok(Value2::Newtype(Box::new((
-            Ident::new_unchecked(name),
+            Ident::new_unchecked(name).to_owned(),
             value.serialize(MakeValue)?,
         ))))
     }
@@ -115,8 +115,8 @@ impl Serializer for MakeValue {
         let _ = variant_index;
         Ok(Value2::TupleStruct(Box::new((
             NominalPath2::Dual {
-                name: Ident::new_unchecked(variant),
-                parent: Ident::new_unchecked(name),
+                name: Ident::new_unchecked(variant).to_owned(),
+                parent: Ident::new_unchecked(name).to_owned(),
             },
             vec![value.serialize(MakeValue)?],
         ))))
@@ -129,7 +129,7 @@ impl Serializer for MakeValue {
         Ok(MakeValues::new(
             len,
             Some(NominalPath2::Single {
-                name: Ident::new_unchecked(name),
+                name: Ident::new_unchecked(name).to_owned(),
             }),
         ))
     }
@@ -144,8 +144,8 @@ impl Serializer for MakeValue {
         Ok(MakeValues::new(
             len,
             Some(NominalPath2::Dual {
-                name: Ident::new_unchecked(variant),
-                parent: Ident::new_unchecked(name),
+                name: Ident::new_unchecked(variant).to_owned(),
+                parent: Ident::new_unchecked(name).to_owned(),
             }),
         ))
     }
@@ -157,7 +157,7 @@ impl Serializer for MakeValue {
     fn serialize_struct(self, name: &'static str, len: usize) -> Fine<Self::SerializeStruct> {
         let _ = len;
         Ok(MakeFieldsMap::new(NominalPath2::Single {
-            name: Ident::new_unchecked(name),
+            name: Ident::new_unchecked(name).to_owned(),
         }))
     }
     fn serialize_struct_variant(
@@ -170,8 +170,8 @@ impl Serializer for MakeValue {
         let _ = len;
         let _ = variant_index;
         Ok(MakeFieldsMap::new(NominalPath2::Dual {
-            name: Ident::new_unchecked(variant),
-            parent: Ident::new_unchecked(name),
+            name: Ident::new_unchecked(variant).to_owned(),
+            parent: Ident::new_unchecked(name).to_owned(),
         }))
     }
 }
@@ -283,16 +283,16 @@ impl SerializeStruct for MakeFieldsMap {
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Fine {
         self.fields_map
-            .insert(Ident::new_unchecked(key), value.serialize(MakeValue)?);
+            .insert(Ident::new_unchecked(key).to_owned(), value.serialize(MakeValue)?);
         Ok(())
     }
     fn end(self) -> Fine<Value2> {
-        let NominalPath2::Single { ref name } = self.path else {
+        let NominalPath2::Single { name } = &self.path else {
             unreachable!()
         };
         'range_type: {
-            const KEY_START: &IdentRef<'static> = &IdentRef::new_unchecked("start");
-            const KEY_END: &IdentRef<'static> = &IdentRef::new_unchecked("end");
+            const KEY_START: &Ident = Ident::new_unchecked("start");
+            const KEY_END: &Ident = Ident::new_unchecked("end");
 
             let len = self.fields_map.len();
             if len != 1 && len != 2 {
@@ -303,7 +303,7 @@ impl SerializeStruct for MakeFieldsMap {
             let has_end = self.fields_map.contains_key(KEY_END);
 
             if len == 1 && has_start {
-                let range_value = match name.as_ref() {
+                let range_value = match &***name {
                     "RangeFrom" => Value2::RangeFrom,
                     _ => break 'range_type,
                 };
@@ -312,7 +312,7 @@ impl SerializeStruct for MakeFieldsMap {
                     return Ok(range_value(Box::new(start)));
                 }
             } else if len == 1 && has_end {
-                let range_value = match name.as_ref() {
+                let range_value = match &***name {
                     "RangeTo" => Value2::RangeTo,
                     "RangeToInclusive" => Value2::RangeToInclusive,
                     _ => break 'range_type,
@@ -322,7 +322,7 @@ impl SerializeStruct for MakeFieldsMap {
                     return Ok(range_value(Box::new(end)));
                 }
             } else if len == 2 && has_start && has_end {
-                let range_value = match name.as_ref() {
+                let range_value = match &***name {
                     "Range" => Value2::Range,
                     "RangeInclusive" => Value2::RangeInclusive,
                     _ => break 'range_type,
@@ -343,7 +343,7 @@ impl SerializeStructVariant for MakeFieldsMap {
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Fine {
         self.fields_map
-            .insert(Ident::new_unchecked(key), value.serialize(MakeValue)?);
+            .insert(Ident::new_unchecked(key).to_owned(), value.serialize(MakeValue)?);
         Ok(())
     }
     fn end(self) -> Fine<Value2> {

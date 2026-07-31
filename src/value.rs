@@ -176,7 +176,7 @@ impl_into!(v: f64  => Float64(v));
 
 pub type Values2 = Vec<Value2>;
 pub type ValuesMap2 = BTreeMap<Value2, Value2>;
-pub type Struct2 = BTreeMap<Ident, Value2>;
+pub type Struct2 = BTreeMap<Box<Ident>, Value2>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Number2 {
@@ -226,58 +226,51 @@ impl<'a> TryFrom<&'a Value2> for Scalar {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Ident(Box<str>);
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ident(str);
 
 impl Ident {
-    pub(crate) fn new_unchecked<S: AsRef<str>>(ident: S) -> Self {
-        Self(ident.as_ref().into())
+    pub fn new(ident: &str) -> Option<&Self> {
+        let mut chars = ident.chars();
+        let mut accept = true;
+        match chars.next()? {
+            '_' => accept = false,
+            ch => unicode_ident::is_xid_start(ch).then_some(())?,
+        }
+        for ch in chars {
+            unicode_ident::is_xid_continue(ch).then_some(())?;
+            accept = true;
+        }
+
+        accept.then_some(Self::new_unchecked(ident))
+    }
+
+    pub(crate) const fn new_unchecked(ident: &str) -> &Self {
+        unsafe { core::mem::transmute::<&str, &Self>(ident) }
     }
 }
 
 impl Deref for Ident {
     type Target = str;
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
+        &self.0
     }
 }
 
-impl From<IdentRef<'_>> for Ident {
-    fn from(value: IdentRef<'_>) -> Self {
-        Self(value.0.into())
+impl ToOwned for Ident {
+    type Owned = Box<Self>;
+    fn to_owned(&self) -> Self::Owned {
+        unsafe { core::mem::transmute::<Box<str>, Box<Self>>(Box::from(&self.0)) }
     }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct IdentRef<'a>(&'a str);
-
-impl<'a> IdentRef<'a> {
-    pub(crate) const fn new_unchecked(ident: &'a str) -> Self {
-        Self(ident)
+impl Clone for Box<Ident> {
+    fn clone(&self) -> Self {
+        self.to_owned()
     }
 }
 
-impl Deref for IdentRef<'_> {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
-
-impl<'a> From<&'a Ident> for IdentRef<'a> {
-    fn from(value: &'a Ident) -> Self {
-        Self(value)
-    }
-}
-
-impl<'a> Borrow<IdentRef<'a>> for Ident {
-    fn borrow(&self) -> &IdentRef<'a> {
-        todo!()
-    }
-}
-
-impl fmt::Display for IdentRef<'_> {
+impl fmt::Display for Ident {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self)
     }
@@ -332,14 +325,14 @@ pub enum Value2 {
     MapStruct(Box<(NominalPath2, Struct2)>),
 
     /// Explicit newtype struct.
-    Newtype(Box<(Ident, Value2)>),
+    Newtype(Box<(Box<Ident>, Value2)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NominalPath2 {
     Underscore,
-    Single { name: Ident },
-    Dual { name: Ident, parent: Ident },
+    Single { name: Box<Ident> },
+    Dual { name: Box<Ident>, parent: Box<Ident> },
 }
 
 impl NominalPath2 {
@@ -348,18 +341,18 @@ impl NominalPath2 {
 
 pub(crate) enum NominalPathRef<'a> {
     Underscore,
-    Single { name: IdentRef<'a> },
-    Dual { name: IdentRef<'a>, parent: IdentRef<'a> },
+    Single { name: &'a Ident },
+    Dual { name: &'a Ident, parent: &'a Ident },
 }
 
 impl From<NominalPathRef<'_>> for NominalPath2 {
     fn from(value: NominalPathRef<'_>) -> Self {
         match value {
             NominalPathRef::Underscore => NominalPath2::Underscore,
-            NominalPathRef::Single { name } => NominalPath2::Single { name: name.into() },
+            NominalPathRef::Single { name } => NominalPath2::Single { name: name.to_owned() },
             NominalPathRef::Dual { name, parent } => NominalPath2::Dual {
-                name: name.into(),
-                parent: parent.into(),
+                name: name.to_owned(),
+                parent: parent.to_owned(),
             },
         }
     }
@@ -370,10 +363,10 @@ impl<'a> From<&'a NominalPath2> for NominalPathRef<'a> {
     fn from(value: &'a NominalPath2) -> Self {
         match value {
             NominalPath2::Underscore => NominalPathRef::Underscore,
-            NominalPath2::Single { name } => NominalPathRef::Single { name: name.into() },
+            NominalPath2::Single { name } => NominalPathRef::Single { name: name.borrow() },
             NominalPath2::Dual { name, parent } => NominalPathRef::Dual {
-                name: name.into(),
-                parent: parent.into(),
+                name: name.borrow(),
+                parent: parent.borrow(),
             },
         }
     }
