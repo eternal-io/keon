@@ -1,6 +1,6 @@
 use crate::{
     format::*,
-    value::{Float32, Float64, NominalPathRef, Number2},
+    value::{Float32, Float64, NominalPathRef, Number2, Scalar},
     PrivateMethod, Sealed,
 };
 use core::{
@@ -148,7 +148,7 @@ impl Indentor {
     }
 
     #[inline(always)]
-    pub(super) fn write_to(&self, dst: &mut impl Write) -> fmt::Result {
+    fn write_to(&self, dst: &mut impl Write) -> fmt::Result {
         match self {
             Indentor::Tab => dst.write_str("\t"),
             Indentor::Space(k) => (0..k.get()).try_for_each(|_| dst.write_str(" ")),
@@ -172,7 +172,7 @@ pub enum NominalPathStyle {
 
 //==================================================================================================
 
-pub(crate) enum Token<'a> {
+enum Token<'a> {
     #[cfg(feature = "alloc")]
     Stringified(String),
     Literal(Literal<'a>),
@@ -206,7 +206,7 @@ pub(crate) enum Token<'a> {
     Comma,
 }
 
-pub(crate) enum Literal<'a> {
+enum Literal<'a> {
     Bool(bool),
     Char(char),
     Number(Number2),
@@ -214,10 +214,31 @@ pub(crate) enum Literal<'a> {
     Bytes(&'a [u8]),
 }
 
-pub(crate) enum NominalKind {
+enum NominalKind {
     Unspecified,
     Variant,
     Struct,
+}
+
+enum RangeType {
+    RangeFull,
+    RangeTo,
+    RangeToInclusive,
+    RangeFrom,
+    Range,
+    RangeInclusive,
+}
+
+impl TryInto<Scalar> for Literal<'_> {
+    type Error = Self;
+
+    fn try_into(self) -> Result<Scalar, Self::Error> {
+        match self {
+            Literal::Char(ch) => Ok(Scalar::Char(ch)),
+            Literal::Number(num) => Ok(Scalar::Number(num)),
+            non_scalar => Err(non_scalar),
+        }
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -225,18 +246,18 @@ pub(crate) enum NominalKind {
 pub struct FastImpl<W> {
     dst: W,
     cfg: SerializeConfig,
-    ctr: usize,
+    lvl: usize,
 }
 
 impl<W> FastImpl<W> {
     fn new(dst: W, cfg: SerializeConfig) -> Self {
-        Self { dst, cfg, ctr: 0 }
+        Self { dst, cfg, lvl: 0 }
     }
 }
 
 impl<W> Drop for FastImpl<W> {
     fn drop(&mut self) {
-        debug_assert!(self.ctr == 0);
+        debug_assert!(self.lvl == 0);
     }
 }
 
@@ -248,7 +269,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
         let dst = &mut self.dst;
         let cfg = &self.cfg;
-        let ctr = &mut self.ctr;
+        let lvl = &mut self.lvl;
 
         if matches!(
             token,
@@ -259,14 +280,14 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
                 | Token::Map
                 | Token::MapStruct { .. }
         ) {
-            *ctr += 1;
+            *lvl += 1;
         }
 
         if matches!(
             token,
             Token::MaybeEnd | Token::ArrayEnd | Token::TupleEnd | Token::MapLikeEnd
         ) {
-            *ctr -= 1;
+            *lvl -= 1;
         }
 
         match token {
@@ -286,7 +307,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
                 dst.write_str("(")?;
             }
             Token::Map | Token::MapStruct { .. } => {
-                if let Token::TupleStruct { kind, path } = token {
+                if let Token::MapStruct { kind, path } = token {
                     write_nominal_path(dst, kind, path, cfg.nominal_path_style)?;
                 }
                 dst.write_str("{")?;
@@ -302,7 +323,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
             Token::Comma => dst.write_str(",")?,
         }
 
-        if *ctr == 0 {
+        if *lvl == 0 {
             dst.write_str(";")?;
         }
 

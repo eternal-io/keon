@@ -44,6 +44,14 @@ impl super::Serialize for Value2 {
                 kind: NominalKind::Unspecified,
                 path: path.as_ref().into(),
             }),
+
+            Value2::RangeFull => todo!(),
+            Value2::RangeTo(number) => todo!(),
+            Value2::RangeToInclusive(number) => todo!(),
+            Value2::RangeFrom(number) => todo!(),
+            Value2::Range(_) => todo!(),
+            Value2::RangeInclusive(_) => todo!(),
+
             Value2::Maybe(maybe) => {
                 ser.push(Token::Maybe)?;
                 if let Some(value) = maybe {
@@ -85,12 +93,6 @@ impl super::Serialize for Value2 {
                 ser.push(Token::MapLikeEnd)
             }
             Value2::Newtype(_) => todo!(),
-            Value2::RangeFull => todo!(),
-            Value2::RangeTo(number) => todo!(),
-            Value2::RangeToInclusive(number) => todo!(),
-            Value2::RangeFrom(number) => todo!(),
-            Value2::Range(_) => todo!(),
-            Value2::RangeInclusive(_) => todo!(),
         }
     }
 }
