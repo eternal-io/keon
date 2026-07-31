@@ -1,5 +1,6 @@
 use alloc::collections::BTreeMap;
 use core::{
+    borrow::Borrow,
     cmp::Ordering,
     fmt,
     hash::{Hash, Hasher},
@@ -203,11 +204,23 @@ pub enum Scalar {
     Number(Number2),
 }
 
-impl From<Scalar> for Value2 {
-    fn from(value: Scalar) -> Self {
+impl Into<Value2> for Scalar {
+    fn into(self) -> Value2 {
+        match self {
+            Scalar::Char(ch) => Value2::Char(ch),
+            Scalar::Number(num) => Value2::Number(num),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Value2> for Scalar {
+    type Error = &'a Value2;
+
+    fn try_from(value: &'a Value2) -> Result<Self, Self::Error> {
         match value {
-            Scalar::Char(ch) => Self::Char(ch),
-            Scalar::Number(num) => Self::Number(num),
+            Value2::Char(ch) => Ok(Scalar::Char(*ch)),
+            Value2::Number(num) => Ok(Scalar::Number(*num)),
+            non_scalar => Err(non_scalar),
         }
     }
 }
@@ -217,7 +230,9 @@ impl From<Scalar> for Value2 {
 pub struct Ident(Box<str>);
 
 impl Ident {
-    // TODO: convenient methods
+    pub(crate) fn new_unchecked<S: AsRef<str>>(ident: S) -> Self {
+        Self(ident.as_ref().into())
+    }
 }
 
 impl Deref for Ident {
@@ -238,7 +253,7 @@ impl From<IdentRef<'_>> for Ident {
 pub(crate) struct IdentRef<'a>(&'a str);
 
 impl<'a> IdentRef<'a> {
-    pub(crate) fn new_unchecked(ident: &'a str) -> Self {
+    pub(crate) const fn new_unchecked(ident: &'a str) -> Self {
         Self(ident)
     }
 }
@@ -253,6 +268,12 @@ impl Deref for IdentRef<'_> {
 impl<'a> From<&'a Ident> for IdentRef<'a> {
     fn from(value: &'a Ident) -> Self {
         Self(value)
+    }
+}
+
+impl<'a> Borrow<IdentRef<'a>> for Ident {
+    fn borrow(&self) -> &IdentRef<'a> {
+        todo!()
     }
 }
 
