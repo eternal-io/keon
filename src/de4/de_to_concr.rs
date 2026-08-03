@@ -1,5 +1,4 @@
 use super::{error::*, source::*, PrivateMethod};
-use crate::value::NominalPathRef;
 use core::ops::{Deref, DerefMut};
 use either::Either;
 use serde::{
@@ -18,9 +17,9 @@ impl<'de, T: Deserialize<'de>> super::Deserialize<'de> for T {
 
 macro_rules! recursion_guard {
     ($self:ident, $expr:expr) => {{
-        $self.0.ttl_enter()?;
+        $self.ttl_enter()?;
         let res = $expr;
-        $self.0.ttl_leave();
+        $self.ttl_leave();
         res
     }};
 }
@@ -47,7 +46,7 @@ macro_rules! deserialize_float {
     };
 }
 
-/// Avoid direct use of [`super::Deserializer`] as [`serde::Deserializer`] that bypasses error location fix.
+/// Avoid direct use of [`super::Deserializer`] as [`serde::Deserializer`].
 struct DeserializerWrapper<'a, R>(&'a mut super::Deserializer<R>);
 
 impl<R> DeserializerWrapper<'_, R> {
@@ -57,15 +56,15 @@ impl<R> DeserializerWrapper<'_, R> {
 }
 
 impl<R> Deref for DeserializerWrapper<'_, R> {
-    type Target = R;
+    type Target = super::Deserializer<R>;
     fn deref(&self) -> &Self::Target {
-        &self.0.src
+        self.0
     }
 }
 
 impl<R> DerefMut for DeserializerWrapper<'_, R> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0.src
+        self.0
     }
 }
 
@@ -180,7 +179,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     }
     fn deserialize_newtype_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
         self.eat_ws()?;
-        self.deserialize_newtype_struct_tag(name)?;
+        self.deserialize_newtype_name(name)?;
         recursion_guard!(self, Ok(visitor.visit_newtype_struct(self.reborrow())?))
     }
     fn deserialize_tuple_struct<V: Visitor<'de>>(
@@ -250,9 +249,9 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
 
 impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     #[inline]
-    fn deserialize_newtype_struct_tag(&mut self, name: &'static str) -> ResultKind {
-        if let Some(name_parsed) = self.0.src.newtype_struct_tag(&mut self.0.buf)? {
-            if &**name_parsed != name {
+    fn deserialize_newtype_name(&mut self, name: &'static str) -> ResultKind {
+        if let Some(name_parsed) = self.0.src.parse_newtype_name(&mut self.0.buf)? {
+            if name_parsed.as_str() != name {
                 return Err(ErrorKind::ExpectedDifferentStructName {
                     expected: name,
                     found: name_parsed.to_string(),
@@ -264,17 +263,13 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
 
     #[inline]
     fn deserialize_struct_name(&mut self, name: &'static str) -> ResultKind {
-        match self.0.src.parse_nominal_path(&mut self.0.buf)? {
-            NominalPathRef::Underscore => (),
-            NominalPathRef::Single { name: name_parsed } => {
-                if &**name_parsed != name {
-                    return Err(ErrorKind::ExpectedDifferentStructName {
-                        expected: name,
-                        found: name_parsed.to_string(),
-                    });
-                }
+        if let Some(name_parsed) = self.0.src.parse_struct_name(&mut self.0.buf)? {
+            if name_parsed.as_str() != name {
+                return Err(ErrorKind::ExpectedDifferentStructName {
+                    expected: name,
+                    found: name_parsed.to_string(),
+                });
             }
-            NominalPathRef::Dual { .. } => return Err(ErrorKind::UnexpectedPathAsStructName),
         }
         Ok(())
     }
@@ -444,23 +439,16 @@ impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'a, R> {
     fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
         let EnumAccessor { mut der, name } = self;
         der.eat_ws()?;
-        let variant = match der.0.src.parse_nominal_path(&mut der.0.buf)? {
-            NominalPathRef::Underscore => return Err(ErrorKind::ExpectedVariantName),
-            NominalPathRef::Single { name: variant } => variant,
-            NominalPathRef::Dual {
-                name: variant,
-                parent: name_parsed,
-            } => {
-                if &**name_parsed != name {
-                    return Err(ErrorKind::ExpectedDifferentEnumName {
-                        expected: name,
-                        found: name_parsed.to_string(),
-                    });
-                }
-                variant
+        let (name_parsed, variant) = der.0.src.parse_variant_name(&mut der.0.buf)?;
+        if let Some(name_parsed) = name_parsed {
+            if name_parsed.as_str() != name {
+                return Err(ErrorKind::ExpectedDifferentEnumName {
+                    expected: name,
+                    found: name_parsed.to_string(),
+                });
             }
-        };
-        Ok((seed.deserialize(StrDeserializer::<ErrorKind>::new(&variant))?, der))
+        }
+        Ok((seed.deserialize(StrDeserializer::<ErrorKind>::new(variant))?, der))
     }
 }
 

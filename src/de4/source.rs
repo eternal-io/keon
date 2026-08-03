@@ -4,7 +4,7 @@ use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use memchr::{memchr, memchr2, memchr3};
 use simdutf8::compat::from_utf8 as decode_utf8;
 
-pub(crate) enum Indicator<'t> {
+pub(super) enum Indicator<'t> {
     Unit,
     Bool(bool),
     Char(char),
@@ -13,13 +13,14 @@ pub(crate) enum Indicator<'t> {
     String(StringKind),
     Bytes(BytesKind),
     Initiator(Initiator),
-    NominalPath(NominalPathRef<'t>),
-    ExplicitNewtype(&'t Ident),
+    Identifier(Option<&'t Ident>),
+    ExplicitNewtype(Option<&'t Ident>),
+    ExplicitVariant(Option<&'t Ident>, &'t Ident),
 }
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Initiator {
+pub(super) enum Initiator {
     /** `?` */ Maybe,
     /** `[` */ Array,
     /** `(` */ Tuple,
@@ -30,21 +31,21 @@ pub(crate) enum Initiator {
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RangeSeparator {
+pub(super) enum RangeSeparator {
     /**`..` */ DotDot,
     /**`..=`*/ DotDotEq,
 }
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NominalBodyInitiator {
+pub(super) enum NominalBodyInitiator {
     /** `(` */ Tuple,
     /** `{` */ Struct,
 }
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Delimiter {
+pub(super) enum Delimiter {
     /** `]` */ Array,
     /** `)` */ Tuple,
     /** `}` */ MapLike,
@@ -55,41 +56,26 @@ pub(crate) enum Delimiter {
                EOF,
 }
 
-pub(crate) enum NumberSuffix {
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    Int128,
-    UInt8,
-    UInt16,
-    UInt32,
-    UInt64,
-    UInt128,
-    Float32,
-    Float64,
-}
-
-pub(crate) enum NumberKind {
+pub(super) enum NumberKind {
     Common,
     Infinity,
     NotANumber,
 }
 
-pub(crate) enum Radix {
+pub(super) enum Radix {
     Dec = 10,
     Hex = 16,
     Oct = 8,
     Bin = 2,
 }
 
-pub(crate) enum StringKind {
+pub(super) enum StringKind {
     Normal,
     Raw { ticks: usize },
     Paragraph { ticks: usize },
 }
 
-pub(crate) enum BytesKind {
+pub(super) enum BytesKind {
     Normal,
     Raw { ticks: usize },
     Base64,
@@ -128,7 +114,7 @@ impl LenUtf8 for NumberSuffix {
 #[expect(private_bounds)]
 pub trait Source<'de>: ParseToConcr<'de> + ParseToValue<'de> {}
 
-pub(crate) trait ParseHelper<'de> {
+pub(super) trait ParseHelper<'de> {
     /// Position after the last call to `eat_ws()` or `raise()`.
     ///
     /// Note that many methods would call `eat_ws()` implicitly.
@@ -167,7 +153,7 @@ pub(crate) trait ParseHelper<'de> {
     }
 }
 
-pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
+pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
     /// If the subsequent content starts with `b'`, consume it and return true.
     fn try_byte(&mut self) -> ResultKind<bool>;
 
@@ -253,21 +239,25 @@ pub(crate) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn parse_bytes<'t>(&mut self, kind: BytesKind, scratch: &'t mut Vec<u8>)
         -> ResultKind<Either<&'de [u8], &'t [u8]>>;
 
-    // NOTE: According to the grammar spec, WS is not allowed surrounding path separators.
-    fn parse_nominal_path<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
-    where
-        'de: 't;
-
     fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<&'t Ident>
     where
         'de: 't;
 
-    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    fn parse_struct_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    where
+        'de: 't;
+
+    fn parse_newtype_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    where
+        'de: 't;
+
+    // NOTE: According to the grammar spec, WS is not allowed surrounding path separators.
+    fn parse_variant_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<(Option<&'t Ident>, &'t Ident)>
     where
         'de: 't;
 }
 
-pub(crate) trait ParseToValue<'de>: ParseToConcr<'de> {
+pub(super) trait ParseToValue<'de>: ParseToConcr<'de> {
     fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Indicator<'t>>
     where
         'de: 't;
@@ -283,6 +273,7 @@ pub(crate) trait ParseToValue<'de>: ParseToConcr<'de> {
 
 //==================================================================================================
 
+// TODO: Move parsing power-of-two to a cold path.
 macro_rules! fn_parse_integer {
     ($ty:ty, $name:ident, $number_suffix:path, $error_kind:path) => {
         fn $name(&mut self) -> ResultKind<$ty> {
@@ -614,6 +605,11 @@ impl<'de> SliceSource<'de> {
 
     fn decode_expected(&self) -> ResultKind<(char, usize)> {
         self.decode_from(0)?.ok_or(ErrorKind::UnexpectedEof)
+    }
+
+    fn parse_identifier(&mut self) -> ResultKind<&'de Ident> {
+        self.parse_identifier_or_underscore()?
+            .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
     }
 
     fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<&'de Ident>> {
@@ -1241,45 +1237,49 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         }
     }
 
-    fn parse_nominal_path<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<NominalPathRef<'t>>
-    where
-        'de: 't,
-    {
-        let _ = scratch;
-        match self.parse_identifier_or_underscore()? {
-            None => Ok(NominalPathRef::Underscore),
-            Some(name_or_parent) => {
-                if !self.consume(b"::") {
-                    Ok(NominalPathRef::Single { name: name_or_parent })
-                } else {
-                    Ok(NominalPathRef::Dual {
-                        name: self
-                            .parse_identifier_or_underscore()?
-                            .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)?,
-                        parent: name_or_parent,
-                    })
-                }
-            }
-        }
-    }
-
     fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<&'t Ident>
     where
         'de: 't,
     {
         let _ = scratch;
-        self.parse_identifier_or_underscore()?
-            .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
+        self.parse_identifier()
     }
 
-    fn newtype_struct_tag<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    fn parse_struct_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
     where
         'de: 't,
     {
-        if self.consume(b"!") {
-            self.parse_identifier(scratch).map(Some)
+        let _ = scratch;
+        self.parse_identifier_or_underscore()
+    }
+
+    fn parse_newtype_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    where
+        'de: 't,
+    {
+        let _ = scratch;
+        if self.consume(b"~") {
+            self.parse_identifier().map(Some)
         } else {
+            self.consume(b"!");
             Ok(None)
+        }
+    }
+
+    fn parse_variant_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<(Option<&'t Ident>, &'t Ident)>
+    where
+        'de: 't,
+    {
+        let _ = scratch;
+        if self.consume(b".") {
+            Ok((None, self.parse_identifier()?))
+        } else {
+            let name_or_variant = self.parse_identifier()?;
+            if self.consume(b"::") {
+                Ok((Some(name_or_variant), self.parse_identifier()?))
+            } else {
+                Ok((None, name_or_variant))
+            }
         }
     }
 }
@@ -1289,9 +1289,12 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
     where
         'de: 't,
     {
+        let _ = scratch;
         self.eat_ws()?;
-        let indicator = if self.consume(b"!") {
-            Indicator::ExplicitNewtype(self.parse_identifier(scratch)?)
+        let indicator = if self.consume(b"~") {
+            Indicator::ExplicitNewtype(Some(self.parse_identifier()?))
+        } else if self.consume(b"!") {
+            Indicator::ExplicitNewtype(None)
         } else if self.consume(b"?") {
             Indicator::Initiator(Initiator::Maybe)
         } else if self.consume(b"(") {
@@ -1309,6 +1312,8 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
             Indicator::Initiator(Initiator::DotDotEq)
         } else if self.consume(b"..") {
             Indicator::Initiator(Initiator::DotDot)
+        } else if self.consume(b".") {
+            Indicator::ExplicitVariant(None, self.parse_identifier()?)
         } else {
             match self.rest() {
                 [b'\'', ..] => {
@@ -1366,10 +1371,10 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                 }
 
                 _ => 'nominal: {
-                    if let Some((raw_mode, ident)) = self.parse_identifier_or_underscore_raw()? {
-                        self.bump(ident.len());
+                    if let Some((raw_mode, name_or_variant)) = self.parse_identifier_or_underscore_raw()? {
+                        self.bump(name_or_variant.len());
                         if !raw_mode {
-                            match ident.as_ref() {
+                            match name_or_variant.as_ref() {
                                 "true" => break 'nominal Indicator::Bool(true),
                                 "false" => break 'nominal Indicator::Bool(false),
                                 "inf" => break 'nominal Indicator::Number(NumberKind::Infinity),
@@ -1377,17 +1382,14 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                                 _ => (),
                             }
                         }
-                        if !self.consume(b"::") {
-                            Indicator::NominalPath(NominalPathRef::Single { name: ident })
+                        if self.consume(b"::") {
+                            Indicator::ExplicitVariant(Some(name_or_variant), self.parse_identifier()?)
                         } else {
-                            Indicator::NominalPath(NominalPathRef::Dual {
-                                name: self.parse_identifier(scratch)?,
-                                parent: ident,
-                            })
+                            Indicator::Identifier(Some(name_or_variant))
                         }
                     } else {
                         self.bump(1);
-                        Indicator::NominalPath(NominalPathRef::Underscore)
+                        Indicator::Identifier(None)
                     }
                 }
             }
@@ -1402,6 +1404,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
         const DEC_FLOAT: fn(&&u8) -> bool =
             |byte| matches!(byte, b'0'..=b'9' | b'.' | b'E' | b'e' | b'+' | b'-' | b'_');
 
+        // TODO: Move parsing power-of-two to a cold path.
         macro_rules! parse_integer_case {
             ($radix:ident, $payload:ident, $ty:ty, $type:ident) => {{
                 use lexical_core::parse_with_options as parse;

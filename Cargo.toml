@@ -18,20 +18,37 @@ categories = ["encoding"]
 
 [features]
 default = ["std", "alloc"]
-std = []
-alloc = []
+std = [
+    "alloc",
+    "serde/std",
+    "memchr/std",
+    "simdutf8/std",
+    "data-encoding/std",
+    "lexical-parse-float/std",
+    "lexical-parse-integer/std",
+]
+alloc = [
+    "serde/alloc",
+    "memchr/alloc",
+    "data-encoding/alloc",
+]
 
 
 [dependencies]
-serde = { version = "1.0.229", features = ["derive"] }
-either = "1.17.0"
-memchr = "2.8.3"
-simdutf8 = "0.1.5"
-lexical-core = { version = "1.0.6", features = ["format", "power-of-two"] }
-data-encoding = "2.11.0"
+itoa = "1.0.18"
+zmij = "1.0.23"
 unicode-ident = "1.0.24"
+serde = { version = "1.0.229", default-features = false }
+either = { version = "1.17.0", default-features = false }
+memchr = { version = "2.8.3", default-features = false }
+simdutf8 = { version = "0.1.5", default-features = false }
+data-encoding = { version = "2.11.0", default-features = false }
+lexical-core = { version = "1.0.6", features = ["format", "power-of-two"] }
+lexical-parse-float = { version = "1.0.6", features = ["format"] }
+lexical-parse-integer = { version = "1.0.6", features = ["format", "power-of-two"] }
 
 
 [dev-dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 serde_bytes = "0.11.19"

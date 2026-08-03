@@ -1,5 +1,5 @@
-use super::{Literal, NominalKind, PrivateMethod, SerializerImpl, Token};
-use crate::value::{Struct2, Value2, ValuesMap2};
+use super::{PrivateMethod, SerializerImpl};
+use crate::value::*;
 use core::fmt;
 
 impl super::Serialize for Value2 {
@@ -8,7 +8,7 @@ impl super::Serialize for Value2 {
         let ser_values = |ser: &mut super::Serializer<Impl>, values: &[Value2]| -> fmt::Result {
             for value in values {
                 ser.serialize(value)?;
-                ser.push(Token::Comma)?;
+                ser.push_comma()?;
             }
             Ok(())
         };
@@ -16,83 +16,114 @@ impl super::Serialize for Value2 {
         let ser_values_map = |ser: &mut super::Serializer<Impl>, values_map: &ValuesMap2| -> fmt::Result {
             for (key, value) in values_map.iter() {
                 ser.serialize(key)?;
-                ser.push(Token::FatArrow)?;
+                ser.push_fat_arrow()?;
                 ser.serialize(value)?;
-                ser.push(Token::Comma)?;
+                ser.push_comma()?;
             }
             Ok(())
         };
 
-        let ser_fields_map = |ser: &mut super::Serializer<Impl>, fields_map: &Struct2| -> fmt::Result {
+        let ser_fields_map = |ser: &mut super::Serializer<Impl>, fields_map: &FieldsMap2| -> fmt::Result {
             for (field, value) in fields_map.iter() {
-                ser.push(Token::Ident(field))?;
-                ser.push(Token::Colon)?;
+                ser.push_identifier(field)?;
+                ser.push_colon()?;
                 ser.serialize(value)?;
-                ser.push(Token::Comma)?;
+                ser.push_comma()?;
             }
             Ok(())
         };
 
         match self {
-            Value2::Bool(b) => ser.push(Token::Literal(Literal::Bool(*b))),
-            Value2::Char(ch) => ser.push(Token::Literal(Literal::Char(*ch))),
-            Value2::Number(num) => ser.push(Token::Literal(Literal::Number(*num))),
-            Value2::String(s) => ser.push(Token::Literal(Literal::Str(s.as_ref()))),
-            Value2::ByteBuf(bytes) => ser.push(Token::Literal(Literal::Bytes(bytes.as_ref()))),
-            Value2::Unit => ser.push(Token::Unit),
-            Value2::UnitStruct(path) => ser.push(Token::UnitStruct {
-                kind: NominalKind::Unspecified,
-                path: path.as_ref().into(),
-            }),
+            Value2::Bool(b) => ser.push_bool(*b),
+            Value2::Char(ch) => ser.push_char(*ch),
+            Value2::Number(num) => match *num {
+                Number2::Int8(v) => ser.push_i64(v.into(), NumberSuffix::Int8),
+                Number2::Int16(v) => ser.push_i64(v.into(), NumberSuffix::Int16),
+                Number2::Int32(v) => ser.push_i64(v.into(), NumberSuffix::Int32),
+                Number2::Int64(v) => ser.push_i64(v.into(), NumberSuffix::Int64),
+                Number2::Int128 { lo, hi } => ser.push_i128((hi as i128) << 64 | lo as i128),
+                Number2::UInt8(v) => ser.push_u64(v.into(), NumberSuffix::UInt8),
+                Number2::UInt16(v) => ser.push_u64(v.into(), NumberSuffix::UInt16),
+                Number2::UInt32(v) => ser.push_u64(v.into(), NumberSuffix::UInt32),
+                Number2::UInt64(v) => ser.push_u64(v.into(), NumberSuffix::UInt64),
+                Number2::UInt128 { lo, hi } => ser.push_u128((hi as u128) << 64 | lo as u128),
+                Number2::Float32(Float32(v)) => ser.push_f32(v),
+                Number2::Float64(Float64(v)) => ser.push_f64(v),
+                Number2::IntNoSuffix(v) => ser.push_int(v),
+                Number2::UIntNoSuffix(v) => ser.push_uint(v),
+                Number2::FloatNoSuffix(Float64(v)) => ser.push_float(v),
+            },
+            Value2::String(s) => ser.push_str(s),
+            Value2::ByteBuf(bytes) => ser.push_bytes(bytes),
+            Value2::Unit => ser.push_unit(),
+            Value2::UnitStruct(name) => ser.push_unit_struct(name.as_deref().map(AsRef::as_ref)),
+            Value2::UnitVariant(variant) => {
+                let Variant { name, variant, .. } = variant.as_ref();
+                ser.push_unit_variant(name.as_deref(), variant)
+            }
 
-            Value2::RangeFull => todo!(),
-            Value2::RangeTo(number) => todo!(),
-            Value2::RangeToInclusive(number) => todo!(),
-            Value2::RangeFrom(number) => todo!(),
-            Value2::Range(_) => todo!(),
-            Value2::RangeInclusive(_) => todo!(),
+            Value2::RangeFull => ser.push_range_full(),
+            Value2::RangeTo(end) => ser.push_range_to(end),
+            Value2::RangeToInclusive(end) => ser.push_range_to_inclusive(end),
+            Value2::RangeFrom(start) => ser.push_range_from(start),
+            Value2::Range(start_end) => ser.push_range(&start_end.0, &start_end.1),
+            Value2::RangeInclusive(start_end) => ser.push_range_inclusive(&start_end.0, &start_end.1),
 
             Value2::Maybe(maybe) => {
-                ser.push(Token::Maybe)?;
+                ser.push_maybe_begin()?;
                 if let Some(value) = maybe {
                     ser.serialize(value.as_ref())?;
                 }
-                ser.push(Token::MaybeEnd)
+                ser.push_maybe_end()
             }
             Value2::Array(values) => {
-                ser.push(Token::Array)?;
+                ser.push_array_begin()?;
                 ser_values(ser, values)?;
-                ser.push(Token::ArrayEnd)
+                ser.push_array_end()
             }
+
             Value2::Tuple(values) => {
-                ser.push(Token::Tuple)?;
+                ser.push_tuple_begin()?;
                 ser_values(ser, values)?;
-                ser.push(Token::TupleEnd)
+                ser.push_tuple_like_end()
             }
-            Value2::TupleStruct(path_values) => {
-                let (path, values) = path_values.as_ref();
-                ser.push(Token::TupleStruct {
-                    kind: NominalKind::Unspecified,
-                    path: path.into(),
-                })?;
-                ser_values(ser, values)?;
-                ser.push(Token::TupleEnd)
+            Value2::TupleStruct(r#struct) => {
+                let Struct { name, body } = r#struct.as_ref();
+                ser.push_tuple_struct_begin(name.as_deref())?;
+                ser_values(ser, body)?;
+                ser.push_tuple_like_end()
             }
+            Value2::TupleVariant(variant) => {
+                let Variant { name, variant, body } = variant.as_ref();
+                ser.push_tuple_variant_begin(name.as_deref(), variant)?;
+                ser_values(ser, body)?;
+                ser.push_tuple_like_end()
+            }
+
             Value2::Map(values_map) => {
-                ser.push(Token::Map)?;
+                ser.push_map_begin()?;
                 ser_values_map(ser, values_map)?;
-                ser.push(Token::MapLikeEnd)
+                ser.push_map_like_end()
             }
-            Value2::MapStruct(path_fields_map) => {
-                let (path, fields_map) = path_fields_map.as_ref();
-                ser.push(Token::MapStruct {
-                    kind: NominalKind::Unspecified,
-                    path: path.into(),
-                })?;
-                ser_fields_map(ser, fields_map)?;
-                ser.push(Token::MapLikeEnd)
+            Value2::MapStruct(r#struct) => {
+                let Struct { name, body } = r#struct.as_ref();
+                ser.push_map_struct_begin(name.as_deref())?;
+                ser_fields_map(ser, body)?;
+                ser.push_map_like_end()
             }
-            Value2::Newtype(_) => todo!(),
+            Value2::MapVariant(variant) => {
+                let Variant { name, variant, body } = variant.as_ref();
+                ser.push_map_variant_begin(name.as_deref(), variant)?;
+                ser_fields_map(ser, body)?;
+                ser.push_map_like_end()
+            }
+
+            Value2::Newtype(r#struct) => {
+                let Struct { name, body } = r#struct.as_ref();
+                ser.push_newtype_begin(name.as_deref())?;
+                ser.serialize(body)?;
+                ser.push_newtype_end()
+            }
         }
     }
 }

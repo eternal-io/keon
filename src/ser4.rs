@@ -1,11 +1,7 @@
-use crate::{
-    format::*,
-    value::{Float32, Float64, NominalPathRef, Number2, Scalar},
-    PrivateMethod, Sealed,
-};
+use crate::{format::*, value::*, PrivateMethod};
 use core::{
     fmt::{self, Write},
-    num::NonZeroU8,
+    ops::{Deref, DerefMut},
 };
 
 #[cfg(feature = "alloc")]
@@ -17,66 +13,150 @@ mod ser_value;
 #[cfg(feature = "alloc")]
 pub fn stringify<T: Serialize>(value: &T) -> Result<String, fmt::Error> {
     let mut stringified = String::with_capacity(256);
-    Serializer::new(&mut stringified, SerializeConfig::minimal()).serialize(value)?;
+    Serializer::new(&mut stringified).serialize(value)?;
     Ok(stringified)
 }
 
 #[cfg(feature = "alloc")]
-pub fn stringify_pretty<T: Serialize>(value: &T, cfg: SerializeConfig) -> Result<String, fmt::Error> {
+pub fn stringify_pretty<T: Serialize>(value: &T) -> Result<String, fmt::Error> {
     let mut stringified = String::with_capacity(256);
-    Serializer::new_pretty(&mut stringified, cfg).serialize(value)?;
+    Serializer::new_pretty(&mut stringified).serialize(value)?;
     Ok(stringified)
 }
 
 //------------------------------------------------------------------------------
 
+#[expect(private_interfaces, reason = "Sealed")]
 pub trait Serialize {
-    #[expect(private_interfaces)]
     #[doc(hidden)]
     fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut Serializer<Impl>, _: PrivateMethod) -> fmt::Result;
 }
 
-#[expect(private_bounds, private_interfaces, reason = "Sealed")]
-pub trait SerializerImpl: Sealed {
-    #[doc(hidden)]
-    fn push(&mut self, token: Token<'_>) -> fmt::Result;
+#[expect(private_bounds, reason = "Sealed")]
+pub trait SerializerImpl: SerializerImplDetail {}
+
+trait SerializerImplDetail {
+    #[cfg(feature = "alloc")]
+    fn push_stringified(&mut self, stringified: String) -> fmt::Result;
+
+    fn push_bool(&mut self, b: bool) -> fmt::Result;
+    fn push_char(&mut self, ch: char) -> fmt::Result;
+    fn push_i64(&mut self, n: i64, suff: NumberSuffix) -> fmt::Result;
+    fn push_i128(&mut self, n: i128) -> fmt::Result;
+    fn push_u64(&mut self, n: u64, suff: NumberSuffix) -> fmt::Result;
+    fn push_u128(&mut self, n: u128) -> fmt::Result;
+    fn push_f32(&mut self, n: f32) -> fmt::Result;
+    fn push_f64(&mut self, n: f64) -> fmt::Result;
+    fn push_int(&mut self, n: i64) -> fmt::Result;
+    fn push_uint(&mut self, n: u64) -> fmt::Result;
+    fn push_float(&mut self, n: f64) -> fmt::Result;
+    fn push_str(&mut self, s: &str) -> fmt::Result;
+    fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result;
+
+    fn push_unit(&mut self) -> fmt::Result;
+    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result;
+    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result;
+
+    fn push_range_full(&mut self) -> fmt::Result;
+    fn push_range_to(&mut self, end: &Scalar) -> fmt::Result;
+    fn push_range_to_inclusive(&mut self, end: &Scalar) -> fmt::Result;
+    fn push_range_from(&mut self, start: &Scalar) -> fmt::Result;
+    fn push_range(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result;
+    fn push_range_inclusive(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result;
+
+    fn push_maybe_begin(&mut self) -> fmt::Result;
+    fn push_maybe_end(&mut self) -> fmt::Result;
+
+    fn push_array_begin(&mut self) -> fmt::Result;
+    fn push_array_end(&mut self) -> fmt::Result;
+
+    fn push_tuple_begin(&mut self) -> fmt::Result;
+    fn push_tuple_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result;
+    fn push_tuple_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result;
+    fn push_tuple_like_end(&mut self) -> fmt::Result;
+
+    fn push_map_begin(&mut self) -> fmt::Result;
+    fn push_map_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result;
+    fn push_map_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result;
+    fn push_map_like_end(&mut self) -> fmt::Result;
+
+    fn push_newtype_begin(&mut self, name: Option<&Ident>) -> fmt::Result;
+    fn push_newtype_end(&mut self) -> fmt::Result;
+
+    fn push_identifier(&mut self, field: &Ident) -> fmt::Result;
+    fn push_fat_arrow(&mut self) -> fmt::Result;
+    fn push_colon(&mut self) -> fmt::Result;
+    fn push_comma(&mut self) -> fmt::Result;
 }
 
 pub struct Serializer<Impl> {
     ser: Impl,
-    ttl: isize,
+    ttl: u16,
+}
+
+impl<Impl> Deref for Serializer<Impl> {
+    type Target = Impl;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.ser
+    }
+}
+
+impl<Impl> DerefMut for Serializer<Impl> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ser
+    }
+}
+
+impl<Impl> Serializer<Impl> {
+    #[inline]
+    pub fn corrupted(&self) -> bool {
+        self.ttl == 0
+    }
 }
 
 impl<W: Write> Serializer<FastImpl<W>> {
-    pub fn new(dst: W, cfg: SerializeConfig) -> Self {
+    pub fn new(dst: W) -> Self {
+        Self::with_config(dst, SerializeConfig::minimal())
+    }
+
+    pub fn with_config(dst: W, cfg: SerializeConfig) -> Self {
+        Self::with_config_and_limit(dst, cfg, 160)
+    }
+
+    pub fn with_config_and_limit(dst: W, cfg: SerializeConfig, recursion_limit: u16) -> Self {
         Self {
-            ttl: cfg.recursion_limit_10x as isize * 10,
             ser: FastImpl::new(dst, cfg),
+            ttl: recursion_limit,
         }
     }
 }
 
 impl<W: Write> Serializer<PrettyImpl<W>> {
-    pub fn new_pretty(dst: W, cfg: SerializeConfig) -> Self {
+    pub fn new_pretty(dst: W) -> Self {
+        Self::with_config_pretty(dst, SerializeConfig::default())
+    }
+
+    pub fn with_config_pretty(dst: W, cfg: SerializeConfig) -> Self {
+        Self::with_config_and_limit_pretty(dst, cfg, 160)
+    }
+
+    pub fn with_config_and_limit_pretty(dst: W, cfg: SerializeConfig, recursion_limit: u16) -> Self {
         Self {
-            ttl: cfg.recursion_limit_10x as isize * 10,
             ser: PrettyImpl::new(dst, cfg),
+            ttl: recursion_limit,
         }
     }
 }
 
 impl<Impl: SerializerImpl> Serializer<Impl> {
-    #[inline(always)]
-    fn push(&mut self, token: Token<'_>) -> fmt::Result {
-        self.ser.push(token)
-    }
-
     #[inline]
     pub fn serialize<T>(&mut self, value: &T) -> fmt::Result
     where
         T: ?Sized + Serialize,
     {
-        if self.ttl < 0 {
+        if self.ttl == 0 {
             return Err(fmt::Error);
         }
         self.ttl -= 1;
@@ -91,9 +171,7 @@ impl<Impl: SerializerImpl> Serializer<Impl> {
     where
         T: ?Sized + Serialize,
     {
-        values
-            .into_iter()
-            .try_for_each(|value| value.as_ref().serialize_with(self, PrivateMethod))
+        values.into_iter().try_for_each(|value| self.serialize(value.as_ref()))
     }
 }
 
@@ -106,17 +184,15 @@ pub struct SerializeConfig {
     pub numeric_suffix: NumericSuffix,
     pub nominal_path_style: NominalPathStyle,
     pub map_like_inline_entries: u8,
-    pub recursion_limit_10x: u8,
 }
 
 impl SerializeConfig {
     pub const fn minimal() -> Self {
         Self {
-            indentor: Indentor::Tab,
+            indentor: Indentor::tab(),
             numeric_suffix: NumericSuffix::LongIntegerOnly,
             nominal_path_style: NominalPathStyle::Minimal,
             map_like_inline_entries: 3,
-            recursion_limit_10x: 16,
         }
     }
 }
@@ -128,30 +204,27 @@ impl Default for SerializeConfig {
             numeric_suffix: NumericSuffix::LongIntegerOnly,
             nominal_path_style: NominalPathStyle::Full,
             map_like_inline_entries: 3,
-            recursion_limit_10x: 16,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Indentor {
-    Tab,
-    Space(NonZeroU8),
-}
+pub struct Indentor(u8);
 
 impl Indentor {
+    pub const fn tab() -> Self {
+        Self(0)
+    }
+
     pub const fn space(n_or_tab: u8) -> Self {
-        match n_or_tab {
-            0 => Self::Tab,
-            n => Self::Space(NonZeroU8::new(n).unwrap()),
-        }
+        Self(n_or_tab)
     }
 
     #[inline(always)]
     fn write_to(&self, dst: &mut impl Write) -> fmt::Result {
-        match self {
-            Indentor::Tab => dst.write_str("\t"),
-            Indentor::Space(k) => (0..k.get()).try_for_each(|_| dst.write_str(" ")),
+        match self.0 {
+            0 => dst.write_str("\t"),
+            n => (0..n).try_for_each(|_| dst.write_str(" ")),
         }
     }
 }
@@ -172,40 +245,39 @@ pub enum NominalPathStyle {
 
 //==================================================================================================
 
-enum Token<'a> {
-    #[cfg(feature = "alloc")]
-    Stringified(String),
-    Literal(Literal<'a>),
-    Ident(&'a str),
-    Unit,
-    UnitStruct {
-        kind: NominalKind,
-        path: NominalPathRef<'a>,
-    },
+// enum Token<'a> {
+//     #[cfg(feature = "alloc")]
+//     Stringified(String),
+//     Literal(Literal<'a>),
+//     Ident(&'a str),
+//     Unit,
+//     UnitStruct {
+//         kind: NominalKind,
+//         path: NominalPathRef<'a>,
+//     },
 
-    // TODO: add range types.
-    Maybe,
-    Array,
-    Tuple,
-    TupleStruct {
-        kind: NominalKind,
-        path: NominalPathRef<'a>,
-    },
-    Map,
-    MapStruct {
-        kind: NominalKind,
-        path: NominalPathRef<'a>,
-    },
+//     Maybe,
+//     Array,
+//     Tuple,
+//     TupleStruct {
+//         kind: NominalKind,
+//         path: NominalPathRef<'a>,
+//     },
+//     Map,
+//     MapStruct {
+//         kind: NominalKind,
+//         path: NominalPathRef<'a>,
+//     },
 
-    MaybeEnd,
-    ArrayEnd,
-    TupleEnd,
-    MapLikeEnd,
+//     MaybeEnd,
+//     ArrayEnd,
+//     TupleEnd,
+//     MapLikeEnd,
 
-    FatArrow,
-    Colon,
-    Comma,
-}
+//     FatArrow,
+//     Colon,
+//     Comma,
+// }
 
 enum Literal<'a> {
     Bool(bool),
@@ -243,7 +315,7 @@ impl From<Scalar> for Literal<'_> {
 pub struct FastImpl<W> {
     dst: W,
     cfg: SerializeConfig,
-    lvl: usize,
+    lvl: u16,
     range_hook: Option<RangeType>,
     range_start: Option<Option<Scalar>>,
     range_end: Option<Option<Scalar>>,
@@ -292,6 +364,13 @@ impl<W: Write> FastImpl<W> {
         }
         Ok(())
     }
+
+    fn semicolon(&mut self) -> fmt::Result {
+        if self.lvl == 0 {
+            self.dst.write_str(";")?;
+        }
+        Ok(())
+    }
 }
 
 impl<W> Drop for FastImpl<W> {
@@ -300,10 +379,10 @@ impl<W> Drop for FastImpl<W> {
     }
 }
 
-impl<W> Sealed for FastImpl<W> {}
+impl<W: Write> SerializerImpl for FastImpl<W> {}
 
-#[expect(private_interfaces, reason = "Sealed")]
-impl<W: Write> SerializerImpl for FastImpl<W> {
+impl<W: Write> SerializerImplDetail for FastImpl<W> {
+    /*
     #[doc(hidden)]
     fn push(&mut self, token: Token<'_>) -> fmt::Result {
         if matches!(
@@ -436,7 +515,7 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
                             let NominalPathRef::Single { name } = path else {
                                 break 'range_type;
                             };
-                            let typ = match &**name {
+                            let typ = match name.as_str() {
                                 "RangeTo" => RangeType::RangeTo,
                                 "RangeToInclusive" => RangeType::RangeToInclusive,
                                 "RangeFrom" => RangeType::RangeFrom,
@@ -470,6 +549,179 @@ impl<W: Write> SerializerImpl for FastImpl<W> {
         }
 
         Ok(())
+    }
+    */
+
+    fn push_stringified(&mut self, _stringified: String) -> fmt::Result {
+        panic!("FastImpl does not rely on alloc")
+    }
+
+    fn push_range_full(&mut self) -> fmt::Result {
+        self.dst.write_str("..")?;
+        self.semicolon()
+    }
+    fn push_range_to(&mut self, end: &Scalar) -> fmt::Result {
+        self.dst.write_str("..")?;
+        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
+        self.semicolon()
+    }
+    fn push_range_to_inclusive(&mut self, end: &Scalar) -> fmt::Result {
+        self.dst.write_str("..=")?;
+        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
+        self.semicolon()
+    }
+    fn push_range_from(&mut self, start: &Scalar) -> fmt::Result {
+        write_scalar(&mut self.dst, start, self.cfg.numeric_suffix)?;
+        self.dst.write_str("..")?;
+        self.semicolon()
+    }
+    fn push_range(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
+        write_scalar(&mut self.dst, start, self.cfg.numeric_suffix)?;
+        self.dst.write_str("..")?;
+        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
+        self.semicolon()
+    }
+    fn push_range_inclusive(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
+        write_scalar(&mut self.dst, start, self.cfg.numeric_suffix)?;
+        self.dst.write_str("..=")?;
+        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
+        self.semicolon()
+    }
+
+    fn push_bool(&mut self, b: bool) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_char(&mut self, ch: char) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_i64(&mut self, n: i64, suff: NumberSuffix) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_i128(&mut self, n: i128) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_u64(&mut self, n: u64, suff: NumberSuffix) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_u128(&mut self, n: u128) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_f32(&mut self, n: f32) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_f64(&mut self, n: f64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_int(&mut self, n: i64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_uint(&mut self, n: u64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_float(&mut self, n: f64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_str(&mut self, s: &str) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_unit(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_maybe_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_maybe_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_array_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_array_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_like_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_like_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_newtype_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_newtype_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_identifier(&mut self, field: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_fat_arrow(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_colon(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_comma(&mut self) -> fmt::Result {
+        todo!()
     }
 }
 
@@ -592,11 +844,11 @@ impl CompoundKind {
 }
 
 #[cfg(feature = "alloc")]
-impl<W> Sealed for PrettyImpl<W> {}
+impl<W: Write> SerializerImpl for PrettyImpl<W> {}
 
 #[cfg(feature = "alloc")]
-#[expect(private_interfaces, reason = "Sealed")]
-impl<W: Write> SerializerImpl for PrettyImpl<W> {
+impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
+    /*
     #[doc(hidden)]
     fn push(&mut self, token: Token) -> fmt::Result {
         let dst = &mut self.dst;
@@ -837,6 +1089,182 @@ impl<W: Write> SerializerImpl for PrettyImpl<W> {
 
         Ok(())
     }
+    */
+
+    fn push_stringified(&mut self, stringified: String) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_range_full(&mut self) -> fmt::Result {
+        let stringified = String::from("..");
+        self.push_stringified(stringified)
+    }
+    fn push_range_to(&mut self, end: &Scalar) -> fmt::Result {
+        let mut stringified = String::from("..");
+        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        self.push_stringified(stringified)
+    }
+    fn push_range_to_inclusive(&mut self, end: &Scalar) -> fmt::Result {
+        let mut stringified = String::from("..=");
+        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        self.push_stringified(stringified)
+    }
+    fn push_range_from(&mut self, start: &Scalar) -> fmt::Result {
+        let mut stringified = String::new();
+        write_scalar(&mut stringified, start, self.cfg.numeric_suffix)?;
+        stringified.push_str("..");
+        self.push_stringified(stringified)
+    }
+    fn push_range(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
+        let mut stringified = String::new();
+        write_scalar(&mut stringified, start, self.cfg.numeric_suffix)?;
+        stringified.push_str("..");
+        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        self.push_stringified(stringified)
+    }
+    fn push_range_inclusive(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
+        let mut stringified = String::new();
+        write_scalar(&mut stringified, start, self.cfg.numeric_suffix)?;
+        stringified.push_str("..=");
+        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        self.push_stringified(stringified)
+    }
+
+    fn push_bool(&mut self, b: bool) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_char(&mut self, ch: char) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_i64(&mut self, n: i64, suff: NumberSuffix) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_i128(&mut self, n: i128) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_u64(&mut self, n: u64, suff: NumberSuffix) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_u128(&mut self, n: u128) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_f32(&mut self, n: f32) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_f64(&mut self, n: f64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_int(&mut self, n: i64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_uint(&mut self, n: u64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_float(&mut self, n: f64) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_str(&mut self, s: &str) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_unit(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_maybe_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_maybe_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_array_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_array_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_tuple_like_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_begin(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_map_like_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_newtype_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_newtype_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_identifier(&mut self, field: &Ident) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_fat_arrow(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_colon(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_comma(&mut self) -> fmt::Result {
+        todo!()
+    }
 }
 
 //==================================================================================================
@@ -1062,5 +1490,12 @@ fn write_literal(dst: &mut impl Write, literal: Literal<'_>, suffix_control: Num
         Literal::Number(num) => write_number(dst, num, suffix_control),
         Literal::Str(s) => write_quoted_string(dst, s),
         Literal::Bytes(bytes) => write_quoted_bytes(dst, bytes),
+    }
+}
+
+fn write_scalar(dst: &mut impl Write, scalar: &Scalar, suffix_control: NumericSuffix) -> fmt::Result {
+    match scalar {
+        Scalar::Char(ch) => write_quoted_char(dst, *ch),
+        Scalar::Number(num) => write_number(dst, *num, suffix_control),
     }
 }

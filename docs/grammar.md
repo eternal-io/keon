@@ -229,14 +229,21 @@ MapValue ->
 /*== Nominal Structures ==*/
 
 NominalStructure ->
-        NEWTYPE_STRUCT_TAG     Value
-    | ( NOMINAL_PATH | `_` ) ( TupleValue | StructValue )?
+      EXPLICIT_NEWTYPE_STRUCT Value
+    | EXPLICIT_ENUM_VARIANT ( TupleValue | StructValue )?
+    | STRUCT_OR_VARIANT     ( TupleValue | StructValue )?
 
-NEWTYPE_STRUCT_TAG ->
-    `!` IDENTIFIER
+STRUCT_OR_VARIANT ->
+      `_`
+    | IDENTIFIER
 
-NOMINAL_PATH ->
-    ( IDENTIFIER `::` )? IDENTIFIER
+EXPLICIT_NEWTYPE_STRUCT ->
+      `!`
+    | `~` IDENTIFIER
+
+EXPLICIT_ENUM_VARIANT ->
+      `.` IDENTIFIER
+    | IDENTIFIER `::` IDENTIFIER
     // We could certainly support long paths like `path::to::Foo::Bar`,
     // but this seemed to lack usefulness and is no longer provided.
 

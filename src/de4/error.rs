@@ -29,7 +29,6 @@ pub enum ErrorKind {
     ExpectedVariantName,
     ExpectedDifferentEnumName { expected: &'static str, found: String },
     ExpectedDifferentStructName { expected: &'static str, found: String },
-    UnexpectedPathAsStructName,
 
     ExpectedString,
     ExpectedCharacter,

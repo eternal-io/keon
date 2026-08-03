@@ -15,7 +15,6 @@ pub type Str = Box<str>;
 pub type ByteBuf = Vec<u8>;
 pub type Values = Vec<Value>;
 pub type ValueMap = BTreeMap<Value, Value>;
-pub type Struct = BTreeMap<Str, Value>;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
@@ -99,7 +98,7 @@ pub enum Nominal {
 pub enum NominalValue {
     Unit,
     Tuple(Values),
-    Struct(Struct),
+    Struct(BTreeMap<Str, Value>),
 }
 
 //------------------------------------------------------------------------------
@@ -176,7 +175,8 @@ impl_into!(v: f64  => Float64(v));
 
 pub type Values2 = Vec<Value2>;
 pub type ValuesMap2 = BTreeMap<Value2, Value2>;
-pub type Struct2 = BTreeMap<Box<Ident>, Value2>;
+pub type FieldsMap2 = BTreeMap<IdentBuf, Value2>;
+pub type IdentBuf = Box<Ident>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Number2 {
@@ -196,6 +196,21 @@ pub enum Number2 {
     IntNoSuffix(i64),
     UIntNoSuffix(u64),
     FloatNoSuffix(Float64),
+}
+
+pub(crate) enum NumberSuffix {
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Int128,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    UInt128,
+    Float32,
+    Float64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -245,6 +260,12 @@ impl Ident {
         accept.then_some(Self::new_unchecked(ident))
     }
 
+    #[inline]
+    pub const fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[inline]
     pub(crate) const fn new_unchecked(ident: &str) -> &Self {
         unsafe { core::mem::transmute::<&str, &Self>(ident) }
     }
@@ -253,6 +274,12 @@ impl Ident {
 impl Deref for Ident {
     type Target = str;
     fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Ident {
+    fn as_ref(&self) -> &str {
         &self.0
     }
 }
@@ -290,8 +317,10 @@ pub enum Value2 {
     ByteBuf(Box<[u8]>),
     /// Structural unit.
     Unit,
-    /// Nominal unit.
-    UnitStruct(Box<NominalPath2>),
+
+    UnitStruct(Option<Box<IdentBuf>>),
+
+    UnitVariant(Box<Variant>),
 
     /// `..`
     RangeFull,
@@ -316,23 +345,40 @@ pub enum Value2 {
 
     /// Structural tuple.
     Tuple(Box<Values2>),
-    /// Nominal tuple.
-    TupleStruct(Box<(NominalPath2, Values2)>),
+
+    TupleStruct(Box<Struct<Values2>>),
+
+    TupleVariant(Box<Variant<Values2>>),
 
     /// Structural map.
     Map(Box<ValuesMap2>),
-    /// Nominal map (`struct`).
-    MapStruct(Box<(NominalPath2, Struct2)>),
 
-    /// Explicit newtype struct.
-    Newtype(Box<(Box<Ident>, Value2)>),
+    MapStruct(Box<Struct<FieldsMap2>>),
+
+    MapVariant(Box<Variant<FieldsMap2>>),
+
+    /// Newtype struct.
+    Newtype(Box<Struct<Value2>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Struct<T> {
+    pub name: Option<IdentBuf>,
+    pub body: T,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Variant<T = ()> {
+    pub name: Option<IdentBuf>,
+    pub variant: IdentBuf,
+    pub body: T,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NominalPath2 {
     Underscore,
-    Single { name: Box<Ident> },
-    Dual { name: Box<Ident>, parent: Box<Ident> },
+    Single { name: IdentBuf },
+    Dual { name: IdentBuf, parent: IdentBuf },
 }
 
 impl NominalPath2 {
@@ -447,4 +493,10 @@ impl Nominal {
             | Nominal::FullNamed { stru: stru_, .. } => mem::replace(stru_, stru),
         }
     }
+}
+
+#[test]
+fn foo() {
+    let _a = 1_1.;
+    let _num = "1_1.".parse::<f64>().unwrap();
 }

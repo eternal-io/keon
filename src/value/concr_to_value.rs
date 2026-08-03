@@ -7,7 +7,7 @@ use serde::ser::{
 
 impl<T: Serialize> From<T> for Value2 {
     fn from(value: T) -> Self {
-        value.serialize(MakeValue).unwrap()
+        value.serialize(MakeValue).expect("never fails")
     }
 }
 
@@ -44,13 +44,13 @@ struct MakeValue;
 impl Serializer for MakeValue {
     type Ok = Value2;
     type Error = Never;
-    type SerializeSeq = MakeValues;
-    type SerializeTuple = MakeValues;
-    type SerializeTupleStruct = MakeValues;
-    type SerializeTupleVariant = MakeValues;
-    type SerializeMap = MakeValuesMap;
-    type SerializeStruct = MakeFieldsMap;
-    type SerializeStructVariant = MakeFieldsMap;
+    type SerializeSeq = MakeTuple;
+    type SerializeTuple = MakeTuple;
+    type SerializeTupleStruct = MakeTupleStruct;
+    type SerializeTupleVariant = MakeTupleVariant;
+    type SerializeMap = MakeMap;
+    type SerializeStruct = MakeMapStruct;
+    type SerializeStructVariant = MakeMapVariant;
 
     #[rustfmt::skip]    fn serialize_bool  (self, v: bool ) -> Fine<Value2> { Ok(Value2::Bool(v))           }
     #[rustfmt::skip]    fn serialize_char  (self, v: char ) -> Fine<Value2> { Ok(Value2::Char(v))           }
@@ -76,16 +76,17 @@ impl Serializer for MakeValue {
         if name == "RangeFull" {
             Ok(Value2::RangeFull)
         } else {
-            Ok(Value2::UnitStruct(Box::new(NominalPath2::Single {
-                name: Ident::new_unchecked(name).to_owned(),
-            })))
+            Ok(Value2::UnitStruct(Some(Box::new(
+                Ident::new_unchecked(name).to_owned(),
+            ))))
         }
     }
     fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> Fine<Value2> {
         let _ = variant_index;
-        Ok(Value2::UnitStruct(Box::new(NominalPath2::Dual {
-            name: Ident::new_unchecked(variant).to_owned(),
-            parent: Ident::new_unchecked(name).to_owned(),
+        Ok(Value2::UnitVariant(Box::new(Variant {
+            name: Some(Ident::new_unchecked(name).to_owned()),
+            variant: Ident::new_unchecked(variant).to_owned(),
+            body: (),
         })))
     }
 
@@ -96,14 +97,14 @@ impl Serializer for MakeValue {
         Ok(Value2::Maybe(Some(Box::new(value.serialize(MakeValue)?))))
     }
     fn serialize_seq(self, len: Option<usize>) -> Fine<Self::SerializeSeq> {
-        Ok(MakeValues::new(len.unwrap_or(8), None))
+        Ok(MakeTuple::new(len.unwrap_or(8)))
     }
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> Fine<Value2> {
-        Ok(Value2::Newtype(Box::new((
-            Ident::new_unchecked(name).to_owned(),
-            value.serialize(MakeValue)?,
-        ))))
+        Ok(Value2::Newtype(Box::new(Struct {
+            name: Some(Ident::new_unchecked(name).to_owned()),
+            body: value.serialize(MakeValue)?,
+        })))
     }
     fn serialize_newtype_variant<T: ?Sized + Serialize>(
         self,
@@ -113,25 +114,18 @@ impl Serializer for MakeValue {
         value: &T,
     ) -> Fine<Value2> {
         let _ = variant_index;
-        Ok(Value2::TupleStruct(Box::new((
-            NominalPath2::Dual {
-                name: Ident::new_unchecked(variant).to_owned(),
-                parent: Ident::new_unchecked(name).to_owned(),
-            },
-            vec![value.serialize(MakeValue)?],
-        ))))
+        Ok(Value2::TupleVariant(Box::new(Variant {
+            name: Some(Ident::new_unchecked(name).to_owned()),
+            variant: Ident::new_unchecked(variant).to_owned(),
+            body: vec![value.serialize(MakeValue)?],
+        })))
     }
 
     fn serialize_tuple(self, len: usize) -> Fine<Self::SerializeTuple> {
-        Ok(MakeValues::new(len, None))
+        Ok(MakeTuple::new(len))
     }
     fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Fine<Self::SerializeTupleStruct> {
-        Ok(MakeValues::new(
-            len,
-            Some(NominalPath2::Single {
-                name: Ident::new_unchecked(name).to_owned(),
-            }),
-        ))
+        Ok(MakeTupleStruct::new(len, Ident::new_unchecked(name).to_owned()))
     }
     fn serialize_tuple_variant(
         self,
@@ -141,24 +135,20 @@ impl Serializer for MakeValue {
         len: usize,
     ) -> Fine<Self::SerializeTupleVariant> {
         let _ = variant_index;
-        Ok(MakeValues::new(
+        Ok(MakeTupleVariant::new(
             len,
-            Some(NominalPath2::Dual {
-                name: Ident::new_unchecked(variant).to_owned(),
-                parent: Ident::new_unchecked(name).to_owned(),
-            }),
+            Ident::new_unchecked(name).to_owned(),
+            Ident::new_unchecked(variant).to_owned(),
         ))
     }
 
     fn serialize_map(self, len: Option<usize>) -> Fine<Self::SerializeMap> {
         let _ = len;
-        Ok(MakeValuesMap::new())
+        Ok(MakeMap::new())
     }
     fn serialize_struct(self, name: &'static str, len: usize) -> Fine<Self::SerializeStruct> {
         let _ = len;
-        Ok(MakeFieldsMap::new(NominalPath2::Single {
-            name: Ident::new_unchecked(name).to_owned(),
-        }))
+        Ok(MakeMapStruct::new(Ident::new_unchecked(name).to_owned()))
     }
     fn serialize_struct_variant(
         self,
@@ -169,26 +159,24 @@ impl Serializer for MakeValue {
     ) -> Fine<Self::SerializeStructVariant> {
         let _ = len;
         let _ = variant_index;
-        Ok(MakeFieldsMap::new(NominalPath2::Dual {
-            name: Ident::new_unchecked(variant).to_owned(),
-            parent: Ident::new_unchecked(name).to_owned(),
-        }))
+        Ok(MakeMapVariant::new(
+            Ident::new_unchecked(name).to_owned(),
+            Ident::new_unchecked(variant).to_owned(),
+        ))
     }
 }
 
-struct MakeValues {
-    path: Option<NominalPath2>,
+struct MakeTuple {
     vals: Values2,
 }
-impl MakeValues {
-    fn new(len: usize, path: Option<NominalPath2>) -> Self {
+impl MakeTuple {
+    fn new(len: usize) -> Self {
         Self {
-            path,
             vals: Values2::with_capacity(len),
         }
     }
 }
-impl SerializeSeq for MakeValues {
+impl SerializeSeq for MakeTuple {
     type Ok = Value2;
     type Error = Never;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
@@ -198,7 +186,7 @@ impl SerializeSeq for MakeValues {
         Ok(Value2::Array(Box::new(self.vals)))
     }
 }
-impl SerializeTuple for MakeValues {
+impl SerializeTuple for MakeTuple {
     type Ok = Value2;
     type Error = Never;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
@@ -208,46 +196,75 @@ impl SerializeTuple for MakeValues {
         Ok(Value2::Tuple(Box::new(self.vals)))
     }
 }
-impl SerializeTupleStruct for MakeValues {
-    type Ok = Value2;
-    type Error = Never;
-    fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
-        Ok(self.vals.push(value.serialize(MakeValue)?))
-    }
-    fn end(self) -> Fine<Value2> {
-        Ok(Value2::TupleStruct(Box::new((
-            self.path.expect("nominal path"),
-            self.vals,
-        ))))
+
+struct MakeTupleStruct {
+    name: IdentBuf,
+    vals: Values2,
+}
+impl MakeTupleStruct {
+    fn new(len: usize, name: IdentBuf) -> Self {
+        Self {
+            name,
+            vals: Values2::with_capacity(len),
+        }
     }
 }
-impl SerializeTupleVariant for MakeValues {
+impl SerializeTupleStruct for MakeTupleStruct {
     type Ok = Value2;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
         Ok(self.vals.push(value.serialize(MakeValue)?))
     }
     fn end(self) -> Fine<Value2> {
-        Ok(Value2::TupleStruct(Box::new((
-            self.path.expect("nominal path"),
-            self.vals,
-        ))))
+        Ok(Value2::TupleStruct(Box::new(Struct {
+            name: Some(self.name),
+            body: self.vals,
+        })))
     }
 }
 
-struct MakeValuesMap {
-    values_map: ValuesMap2,
+struct MakeTupleVariant {
+    name: IdentBuf,
+    variant: IdentBuf,
+    vals: Values2,
+}
+impl MakeTupleVariant {
+    fn new(len: usize, name: IdentBuf, variant: IdentBuf) -> Self {
+        Self {
+            name,
+            variant,
+            vals: Values2::with_capacity(len),
+        }
+    }
+}
+impl SerializeTupleVariant for MakeTupleVariant {
+    type Ok = Value2;
+    type Error = Never;
+    fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
+        Ok(self.vals.push(value.serialize(MakeValue)?))
+    }
+    fn end(self) -> Fine<Value2> {
+        Ok(Value2::TupleVariant(Box::new(Variant {
+            name: Some(self.name),
+            variant: self.variant,
+            body: self.vals,
+        })))
+    }
+}
+
+struct MakeMap {
+    vals: ValuesMap2,
     last_key: Option<Value2>,
 }
-impl MakeValuesMap {
+impl MakeMap {
     fn new() -> Self {
         Self {
-            values_map: ValuesMap2::new(),
+            vals: ValuesMap2::new(),
             last_key: None,
         }
     }
 }
-impl SerializeMap for MakeValuesMap {
+impl SerializeMap for MakeMap {
     type Ok = Value2;
     type Error = Never;
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Fine {
@@ -255,98 +272,118 @@ impl SerializeMap for MakeValuesMap {
         Ok(())
     }
     fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
-        self.values_map.insert(
+        self.vals.insert(
             self.last_key.take().expect("serialize value after serialize key"),
             value.serialize(MakeValue)?,
         );
         Ok(())
     }
     fn end(self) -> Fine<Value2> {
-        Ok(Value2::Map(Box::new(self.values_map)))
+        Ok(Value2::Map(Box::new(self.vals)))
     }
 }
 
-struct MakeFieldsMap {
-    path: NominalPath2,
-    fields_map: Struct2,
+struct MakeMapStruct {
+    name: IdentBuf,
+    vals: FieldsMap2,
 }
-impl MakeFieldsMap {
-    fn new(path: NominalPath2) -> Self {
+impl MakeMapStruct {
+    fn new(name: IdentBuf) -> Self {
         Self {
-            path,
-            fields_map: Struct2::new(),
+            name,
+            vals: FieldsMap2::new(),
         }
     }
 }
-impl SerializeStruct for MakeFieldsMap {
+impl SerializeStruct for MakeMapStruct {
     type Ok = Value2;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Fine {
-        self.fields_map
+        self.vals
             .insert(Ident::new_unchecked(key).to_owned(), value.serialize(MakeValue)?);
         Ok(())
     }
     fn end(self) -> Fine<Value2> {
-        let NominalPath2::Single { name } = &self.path else {
-            unreachable!()
-        };
         'range_type: {
             const KEY_START: &Ident = Ident::new_unchecked("start");
             const KEY_END: &Ident = Ident::new_unchecked("end");
 
-            let len = self.fields_map.len();
+            let len = self.vals.len();
             if len != 1 && len != 2 {
                 break 'range_type;
             }
 
-            let has_start = self.fields_map.contains_key(KEY_START);
-            let has_end = self.fields_map.contains_key(KEY_END);
+            let has_start = self.vals.contains_key(KEY_START);
+            let has_end = self.vals.contains_key(KEY_END);
 
+            let name = self.name.as_str();
             if len == 1 && has_start {
-                let range_value = match &***name {
+                let range_value = match name {
                     "RangeFrom" => Value2::RangeFrom,
                     _ => break 'range_type,
                 };
 
-                if let Ok(start) = Scalar::try_from(&self.fields_map[KEY_START]) {
+                if let Ok(start) = Scalar::try_from(&self.vals[KEY_START]) {
                     return Ok(range_value(Box::new(start)));
                 }
             } else if len == 1 && has_end {
-                let range_value = match &***name {
+                let range_value = match name {
                     "RangeTo" => Value2::RangeTo,
                     "RangeToInclusive" => Value2::RangeToInclusive,
                     _ => break 'range_type,
                 };
 
-                if let Ok(end) = Scalar::try_from(&self.fields_map[KEY_END]) {
+                if let Ok(end) = Scalar::try_from(&self.vals[KEY_END]) {
                     return Ok(range_value(Box::new(end)));
                 }
             } else if len == 2 && has_start && has_end {
-                let range_value = match &***name {
+                let range_value = match name {
                     "Range" => Value2::Range,
                     "RangeInclusive" => Value2::RangeInclusive,
                     _ => break 'range_type,
                 };
 
-                if let Ok(start) = Scalar::try_from(&self.fields_map[KEY_START]) {
-                    if let Ok(end) = Scalar::try_from(&self.fields_map[KEY_END]) {
+                if let Ok(start) = Scalar::try_from(&self.vals[KEY_START]) {
+                    if let Ok(end) = Scalar::try_from(&self.vals[KEY_END]) {
                         return Ok(range_value(Box::new((start, end))));
                     }
                 }
             }
         }
-        Ok(Value2::MapStruct(Box::new((self.path, self.fields_map))))
+        Ok(Value2::MapStruct(Box::new(Struct {
+            name: Some(self.name),
+            body: self.vals,
+        })))
     }
 }
-impl SerializeStructVariant for MakeFieldsMap {
+
+struct MakeMapVariant {
+    name: IdentBuf,
+    variant: IdentBuf,
+    vals: FieldsMap2,
+}
+impl MakeMapVariant {
+    fn new(name: IdentBuf, variant: IdentBuf) -> Self {
+        Self {
+            name,
+            variant,
+            vals: FieldsMap2::new(),
+        }
+    }
+}
+impl SerializeStructVariant for MakeMapVariant {
     type Ok = Value2;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Fine {
-        self.fields_map
+        self.vals
             .insert(Ident::new_unchecked(key).to_owned(), value.serialize(MakeValue)?);
         Ok(())
     }
     fn end(self) -> Fine<Value2> {
-        Ok(Value2::MapStruct(Box::new((self.path, self.fields_map))))
+        Ok(Value2::MapVariant(Box::new(Variant {
+            name: Some(self.name),
+            variant: self.variant,
+            body: self.vals,
+        })))
     }
 }

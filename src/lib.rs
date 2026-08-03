@@ -15,8 +15,6 @@ pub use crate::{
     value::Value,
 };
 
-trait Sealed {}
-
 struct PrivateMethod;
 
 mod format {

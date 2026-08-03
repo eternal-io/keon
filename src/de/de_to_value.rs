@@ -221,7 +221,7 @@ impl Value {
     fn deserialize_nominal_struct(der: &mut Parser, mut ttl: Option<u32>) -> Result<NominalValue> {
         ttl = der.recursion_guard(ttl)?;
 
-        let mut map = Struct::new();
+        let mut map = alloc::collections::BTreeMap::new();
         while !der.adjacent_to_delim() {
             let key = der.consume_ident()?.into();
             if !der.consume_ws_(":")? {
