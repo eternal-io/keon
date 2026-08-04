@@ -359,41 +359,33 @@ impl<'de> SliceSource<'de> {
         self.report_idx = self.idx;
     }
 
-    /// Consumes the subsequent whitespaces. Refer to [`char::is_whitespace`].
+    /// Consumes the subsequent characters that have `Pattern_White_Space` Unicode property.
     fn eat_ws_pure(&mut self) {
         self.bump(self.rest().len() - Self::trim_start(self.rest()).len());
     }
 
     fn trim_start(mut bytes: &[u8]) -> &[u8] {
         while let
-            | [b'\x09'..=b'\x0D', end @ ..]                     // 0009..000D <control-0009>..<control-000D>
-            | [b'\x20', end @ ..]                               // 0020       SPACE
-            | [b'\xC2', b'\x85', end @ ..]                      // 0085       <control-0085>
-            | [b'\xC2', b'\xA0', end @ ..]                      // 00A0       NO-BREAK SPACE
-            | [b'\xE1', b'\x9A', b'\x80', end @ ..]             // 1680       OGHAM SPACE MARK
-            | [b'\xE2', b'\x80', b'\x80'..=b'\x8A', end @ ..]   // 2000..200A EN QUAD..HAIR SPACE
-            | [b'\xE2', b'\x80', b'\xA8', end @ ..]             // 2028       LINE SEPARATOR
-            | [b'\xE2', b'\x80', b'\xA9', end @ ..]             // 2029       PARAGRAPH SEPARATOR
-            | [b'\xE2', b'\x80', b'\xAF', end @ ..]             // 202F       NARROW NO-BREAK SPACE
-            | [b'\xE2', b'\x81', b'\x9F', end @ ..]             // 205F       MEDIUM MATHEMATICAL SPACE
-            | [b'\xE3', b'\x80', b'\x80', end @ ..]             // 3000       IDEOGRAPHIC SPACE
+            | [b'\x09'..=b'\x0D', end @ ..]             // 0009..000D <control-0009>..<control-000D>
+            | [b'\x20', end @ ..]                       // 0020       SPACE
+            | [b'\xC2', b'\x85', end @ ..]              // 0085       <control-0085>
+            | [b'\xE2', b'\x80', b'\x8E', end @ ..]     // 200E       LEFT-TO-RIGHT MARK
+            | [b'\xE2', b'\x80', b'\x8F', end @ ..]     // 200F       RIGHT-TO-LEFT MARK
+            | [b'\xE2', b'\x80', b'\xA8', end @ ..]     // 2028       LINE SEPARATOR
+            | [b'\xE2', b'\x80', b'\xA9', end @ ..]     // 2029       PARAGRAPH SEPARATOR
             = bytes { bytes = end }
         bytes
     }
 
     fn trim_end(mut bytes: &[u8]) -> &[u8] {
         while let
-            | [start @ .., b'\x09'..=b'\x0D']                   // 0009..000D <control-0009>..<control-000D>
-            | [start @ .., b'\x20']                             // 0020       SPACE
-            | [start @ .., b'\xC2', b'\x85']                    // 0085       <control-0085>
-            | [start @ .., b'\xC2', b'\xA0']                    // 00A0       NO-BREAK SPACE
-            | [start @ .., b'\xE1', b'\x9A', b'\x80']           // 1680       OGHAM SPACE MARK
-            | [start @ .., b'\xE2', b'\x80', b'\x80'..=b'\x8A'] // 2000..200A EN QUAD..HAIR SPACE
-            | [start @ .., b'\xE2', b'\x80', b'\xA8']           // 2028       LINE SEPARATOR
-            | [start @ .., b'\xE2', b'\x80', b'\xA9']           // 2029       PARAGRAPH SEPARATOR
-            | [start @ .., b'\xE2', b'\x80', b'\xAF']           // 202F       NARROW NO-BREAK SPACE
-            | [start @ .., b'\xE2', b'\x81', b'\x9F']           // 205F       MEDIUM MATHEMATICAL SPACE
-            | [start @ .., b'\xE3', b'\x80', b'\x80']           // 3000       IDEOGRAPHIC SPACE
+            | [start @ .., b'\x09'..=b'\x0D']           // 0009..000D <control-0009>..<control-000D>
+            | [start @ .., b'\x20']                     // 0020       SPACE
+            | [start @ .., b'\xC2', b'\x85']            // 0085       <control-0085>
+            | [start @ .., b'\xE2', b'\x80', b'\x8E']   // 200E       LEFT-TO-RIGHT MARK
+            | [start @ .., b'\xE2', b'\x80', b'\x8F']   // 200F       RIGHT-TO-LEFT MARK
+            | [start @ .., b'\xE2', b'\x80', b'\xA8']   // 2028       LINE SEPARATOR
+            | [start @ .., b'\xE2', b'\x80', b'\xA9']   // 2029       PARAGRAPH SEPARATOR
             = bytes { bytes = start }
         bytes
     }
@@ -666,7 +658,7 @@ impl<'de> SliceSource<'de> {
     }
 }
 
-// impl<'de> Source<'de> for SliceSource<'de> {}
+impl<'de> Source<'de> for SliceSource<'de> {}
 
 impl<'de> ParseHelper<'de> for SliceSource<'de> {
     fn position(&self) -> Position {
@@ -813,13 +805,6 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         self.consume_expected(b"{", ErrorKind::ExpectedMapLike)
     }
 
-    fn parse_unit(&mut self) -> ResultKind {
-        self.eat_ws()?;
-        self.consume_expected(b"(", ErrorKind::ExpectedUnit)?;
-        self.eat_ws()?;
-        self.consume_expected(b")", ErrorKind::ExpectedUnitEnd)
-    }
-
     fn range_to(&mut self, inclusive: bool) -> ResultKind<bool> {
         self.eat_ws()?;
         if self.consume(b"..=") {
@@ -843,6 +828,12 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
     }
 
     // NOTE: The following methods would not `eat_ws()` at the leading.
+
+    fn parse_unit(&mut self) -> ResultKind {
+        self.consume_expected(b"(", ErrorKind::ExpectedUnit)?;
+        self.eat_ws()?;
+        self.consume_expected(b")", ErrorKind::ExpectedUnitEnd)
+    }
 
     fn parse_bool(&mut self) -> ResultKind<bool> {
         if self.consume(b"true") {
@@ -872,6 +863,9 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             self.peek_escape_byte_from(0)?
         } else {
             let (ch, len) = self.decode_expected()?;
+            if matches!(ch, '\n' | '\t' | '\r') {
+                return Err(ErrorKind::UnexpectedControlCharacter);
+            }
             if !ch.is_ascii() {
                 return Err(ErrorKind::UnexpectedNonAsciiCharacter);
             }
@@ -887,7 +881,11 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         let (ch, len) = if self.consume(b"\\") {
             self.peek_escape_char_from(0)?
         } else {
-            self.decode_expected()?
+            let (ch, len) = self.decode_expected()?;
+            if matches!(ch, '\n' | '\t' | '\r') {
+                return Err(ErrorKind::UnexpectedControlCharacter);
+            }
+            (ch, len)
         };
 
         self.bump(len);

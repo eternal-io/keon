@@ -26,6 +26,7 @@ std = [
     "data-encoding/std",
     "lexical-parse-float/std",
     "lexical-parse-integer/std",
+    "lexical-write-integer/std",
 ]
 alloc = [
     "serde/alloc",
@@ -35,8 +36,8 @@ alloc = [
 
 
 [dependencies]
-itoa = "1.0.18"
 zmij = "1.0.23"
+bitflags = "2.13.1"
 unicode-ident = "1.0.24"
 serde = { version = "1.0.229", default-features = false }
 either = { version = "1.17.0", default-features = false }
@@ -44,8 +45,9 @@ memchr = { version = "2.8.3", default-features = false }
 simdutf8 = { version = "0.1.5", default-features = false }
 data-encoding = { version = "2.11.0", default-features = false }
 lexical-core = { version = "1.0.6", features = ["format", "power-of-two"] }
-lexical-parse-float = { version = "1.0.6", features = ["format"] }
-lexical-parse-integer = { version = "1.0.6", features = ["format", "power-of-two"] }
+lexical-parse-float = { version = "1.0.6", default-features = false, features = ["format"] }
+lexical-parse-integer = { version = "1.0.6", default-features = false, features = ["format", "power-of-two"] }
+lexical-write-integer = { version = "1.0.6", default-features = false }
 
 
 [dev-dependencies]

@@ -154,6 +154,22 @@ impl_into!(v: f64  => NumberNoSuffix::Float(v.into()));
 
 //------------------------------------------------------------------------------
 
+impl_into!(v: char    => Scalar::Char(v));
+impl_into!(v: Number2 => Scalar::Number(v));
+impl_into!(v:&Number2 => Scalar::Number(*v));
+impl_into!(v: i8      => Scalar::Number(v.into()));
+impl_into!(v: i16     => Scalar::Number(v.into()));
+impl_into!(v: i32     => Scalar::Number(v.into()));
+impl_into!(v: i64     => Scalar::Number(v.into()));
+impl_into!(v: i128    => Scalar::Number(v.into()));
+impl_into!(v: u8      => Scalar::Number(v.into()));
+impl_into!(v: u16     => Scalar::Number(v.into()));
+impl_into!(v: u32     => Scalar::Number(v.into()));
+impl_into!(v: u64     => Scalar::Number(v.into()));
+impl_into!(v: u128    => Scalar::Number(v.into()));
+impl_into!(v: f32     => Scalar::Number(v.into()));
+impl_into!(v: f64     => Scalar::Number(v.into()));
+
 impl_into!(v: Number2 => Value2::Number(v));
 
 impl_into!(v: i8   => Number2::Int8(v));
@@ -211,6 +227,31 @@ pub(crate) enum NumberSuffix {
     UInt128,
     Float32,
     Float64,
+}
+
+impl Number2 {
+    #[inline]
+    pub(crate) fn suffix(&self) -> Option<NumberSuffix> {
+        'suff: {
+            let suff = match self {
+                Number2::Int8(_) => NumberSuffix::Int8,
+                Number2::Int16(_) => NumberSuffix::Int16,
+                Number2::Int32(_) => NumberSuffix::Int32,
+                Number2::Int64(_) => NumberSuffix::Int64,
+                Number2::Int128 { .. } => NumberSuffix::Int128,
+                Number2::UInt8(_) => NumberSuffix::UInt8,
+                Number2::UInt16(_) => NumberSuffix::UInt16,
+                Number2::UInt32(_) => NumberSuffix::UInt32,
+                Number2::UInt64(_) => NumberSuffix::UInt64,
+                Number2::UInt128 { .. } => NumberSuffix::UInt128,
+                Number2::Float32(_) => NumberSuffix::Float32,
+                Number2::Float64(_) => NumberSuffix::Float64,
+                _ => break 'suff,
+            };
+            return Some(suff);
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

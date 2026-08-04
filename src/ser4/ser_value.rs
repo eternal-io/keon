@@ -7,7 +7,7 @@ impl super::Serialize for Value2 {
     fn serialize_with<Impl: SerializerImpl>(&self, ser: &mut super::Serializer<Impl>, _: PrivateMethod) -> fmt::Result {
         let ser_values = |ser: &mut super::Serializer<Impl>, values: &[Value2]| -> fmt::Result {
             for value in values {
-                ser.serialize(value)?;
+                ser.serialize_inner(value)?;
                 ser.push_comma()?;
             }
             Ok(())
@@ -15,9 +15,9 @@ impl super::Serialize for Value2 {
 
         let ser_values_map = |ser: &mut super::Serializer<Impl>, values_map: &ValuesMap2| -> fmt::Result {
             for (key, value) in values_map.iter() {
-                ser.serialize(key)?;
+                ser.serialize_inner(key)?;
                 ser.push_fat_arrow()?;
-                ser.serialize(value)?;
+                ser.serialize_inner(value)?;
                 ser.push_comma()?;
             }
             Ok(())
@@ -27,7 +27,7 @@ impl super::Serialize for Value2 {
             for (field, value) in fields_map.iter() {
                 ser.push_identifier(field)?;
                 ser.push_colon()?;
-                ser.serialize(value)?;
+                ser.serialize_inner(value)?;
                 ser.push_comma()?;
             }
             Ok(())
@@ -36,23 +36,7 @@ impl super::Serialize for Value2 {
         match self {
             Value2::Bool(b) => ser.push_bool(*b),
             Value2::Char(ch) => ser.push_char(*ch),
-            Value2::Number(num) => match *num {
-                Number2::Int8(v) => ser.push_i64(v.into(), NumberSuffix::Int8),
-                Number2::Int16(v) => ser.push_i64(v.into(), NumberSuffix::Int16),
-                Number2::Int32(v) => ser.push_i64(v.into(), NumberSuffix::Int32),
-                Number2::Int64(v) => ser.push_i64(v.into(), NumberSuffix::Int64),
-                Number2::Int128 { lo, hi } => ser.push_i128((hi as i128) << 64 | lo as i128),
-                Number2::UInt8(v) => ser.push_u64(v.into(), NumberSuffix::UInt8),
-                Number2::UInt16(v) => ser.push_u64(v.into(), NumberSuffix::UInt16),
-                Number2::UInt32(v) => ser.push_u64(v.into(), NumberSuffix::UInt32),
-                Number2::UInt64(v) => ser.push_u64(v.into(), NumberSuffix::UInt64),
-                Number2::UInt128 { lo, hi } => ser.push_u128((hi as u128) << 64 | lo as u128),
-                Number2::Float32(Float32(v)) => ser.push_f32(v),
-                Number2::Float64(Float64(v)) => ser.push_f64(v),
-                Number2::IntNoSuffix(v) => ser.push_int(v),
-                Number2::UIntNoSuffix(v) => ser.push_uint(v),
-                Number2::FloatNoSuffix(Float64(v)) => ser.push_float(v),
-            },
+            Value2::Number(num) => ser.push_number(num),
             Value2::String(s) => ser.push_str(s),
             Value2::ByteBuf(bytes) => ser.push_bytes(bytes),
             Value2::Unit => ser.push_unit(),
@@ -72,7 +56,7 @@ impl super::Serialize for Value2 {
             Value2::Maybe(maybe) => {
                 ser.push_maybe_begin()?;
                 if let Some(value) = maybe {
-                    ser.serialize(value.as_ref())?;
+                    ser.serialize_inner(value.as_ref())?;
                 }
                 ser.push_maybe_end()
             }
@@ -121,7 +105,7 @@ impl super::Serialize for Value2 {
             Value2::Newtype(r#struct) => {
                 let Struct { name, body } = r#struct.as_ref();
                 ser.push_newtype_begin(name.as_deref())?;
-                ser.serialize(body)?;
+                ser.serialize_inner(body)?;
                 ser.push_newtype_end()
             }
         }

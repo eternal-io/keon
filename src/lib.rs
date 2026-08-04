@@ -11,7 +11,7 @@ pub use crate::{
         error::{Error, ErrorKind},
         parse, parse_limited, parse_many, parse_many_limited,
     },
-    ser4::{stringify, stringify_pretty, SerializeConfig, Serializer},
+    ser4::{stringify, stringify_pretty, Serializer},
     value::Value,
 };
 

@@ -6,15 +6,14 @@
 
 #### Specials
 
-- `<LF>`: `U+000A` (line feed `'\n'`)
-- `<CR>`: `U+000D` (carriage return `'\r'`)
-- `<TAB>`: `U+0009` (horizontal tab `'\t'`)
-- `<SPACE>`: `U+0020` (space `' '`)
-- `<BACKTICK>`: `U+0060` (grave accent ``'`'``)
+- `<LF>`: U+000A Line Feed, `'\n'`
+- `<CR>`: U+000D Carriage Return, `'\r'`
+- `<TAB>`: U+0009 Horizontal Tab, `'\t'`
+- `<SPACE>`: U+0020 Space, `' '`
+- `<BACKTICK>`: U+0060 Grave Accent, ``'`'``
 - `<Non-ASCII>`: Non-ASCII characters
-- `<EOF>` : end of input
-- `<XID_Start>` and `<XID_Continue>`: as specified in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/)
-- `<White_Space>`: as specified in [Unicode Character Database](https://www.unicode.org/reports/tr44/) [`PropList.txt`](https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt)
+- `<EOF>`: End of input
+- `<XID_Start>` and `<XID_Continue>`: As defined in [Unicode Standard Annex #31](https://www.unicode.org/reports/tr31/)
 
 ---
 
@@ -33,9 +32,29 @@ Value ->
     | NominalStructure
 
 
-/*== Whitespaces and comments ==*/
+/*== Whitespaces ==*/
 
-WS -> ( <White_Space>* COMMENT )* <White_Space>*
+WS -> ( WHITESPACE* COMMENT )* WHITESPACE*
+
+WHITESPACE -> !!characters that have `Pattern_White_Space` Unicode property
+
+/* Refer to [`PropList.txt`]
+ * (https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt).
+ *
+ * U+0009 (horizontal tab, '\t')
+ * U+000A (line feed, '\n')
+ * U+000B (vertical tab)
+ * U+000C (form feed)
+ * U+000D (carriage return, '\r')
+ * U+0020 (space, ' ')
+ * U+0085 (next line)
+ * U+200E (left-to-right mark)
+ * U+200F (right-to-left mark)
+ * U+2028 (line separator)
+ * U+2029 (paragraph separator)
+ */
+
+/*== Comments ==*/
 
 COMMENT ->
     LINE_COMMENT | BLOCK_COMMENT

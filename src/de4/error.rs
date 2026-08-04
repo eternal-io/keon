@@ -81,6 +81,7 @@ pub enum ErrorKind {
     InvalidUnicodeEscape,
     InvalidUtf8Sequence,
     UnexpectedNonAsciiCharacter,
+    UnexpectedControlCharacter,
     ExpectedIdentifier,
     UnexpectedKeywordAsIdentifier,
     UnexpectedUnderscoreIdentifier,

@@ -17,9 +17,9 @@ impl<'de, T: Deserialize<'de>> super::Deserialize<'de> for T {
 
 macro_rules! recursion_guard {
     ($self:ident, $expr:expr) => {{
-        $self.ttl_enter()?;
+        $self.enter_nesting()?;
         let res = $expr;
-        $self.ttl_leave();
+        $self.exit_nesting();
         res
     }};
 }
@@ -83,6 +83,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     //------------------------------------------------------------------------------
 
     fn deserialize_unit<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
+        self.eat_ws()?;
         self.parse_unit()?;
         visitor.visit_unit()
     }

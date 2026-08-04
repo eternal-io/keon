@@ -46,7 +46,7 @@ impl<R> Deserializer<R> {
         self.ttl == 0
     }
 
-    fn ttl_enter(&mut self) -> ResultKind {
+    fn enter_nesting(&mut self) -> ResultKind {
         if self.ttl > 0 {
             self.ttl -= 1;
             Ok(())
@@ -55,7 +55,7 @@ impl<R> Deserializer<R> {
         }
     }
 
-    fn ttl_leave(&mut self) {
+    fn exit_nesting(&mut self) {
         self.ttl += 1;
     }
 }

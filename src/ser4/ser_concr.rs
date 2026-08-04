@@ -48,22 +48,22 @@ impl<Impl: SerializerImpl> Serializer for SerializerWrapper<'_, Impl> {
     type SerializeStruct = Self;
     type SerializeStructVariant = Self;
 
-    #[rustfmt::skip]    fn serialize_bool  (mut self, v: bool ) -> fmt::Result { self.push_bool  (v)                              }
-    #[rustfmt::skip]    fn serialize_char  (mut self, v: char ) -> fmt::Result { self.push_char  (v)                              }
-    #[rustfmt::skip]    fn serialize_i8    (mut self, v: i8   ) -> fmt::Result { self.push_i64   (v.into(), NumberSuffix::Int8)   }
-    #[rustfmt::skip]    fn serialize_i16   (mut self, v: i16  ) -> fmt::Result { self.push_i64   (v.into(), NumberSuffix::Int16)  }
-    #[rustfmt::skip]    fn serialize_i32   (mut self, v: i32  ) -> fmt::Result { self.push_i64   (v.into(), NumberSuffix::Int32)  }
-    #[rustfmt::skip]    fn serialize_i64   (mut self, v: i64  ) -> fmt::Result { self.push_i64   (v.into(), NumberSuffix::Int64)  }
-    #[rustfmt::skip]    fn serialize_i128  (mut self, v: i128 ) -> fmt::Result { self.push_i128  (v)                              }
-    #[rustfmt::skip]    fn serialize_u8    (mut self, v: u8   ) -> fmt::Result { self.push_u64   (v.into(), NumberSuffix::UInt8)  }
-    #[rustfmt::skip]    fn serialize_u16   (mut self, v: u16  ) -> fmt::Result { self.push_u64   (v.into(), NumberSuffix::UInt16) }
-    #[rustfmt::skip]    fn serialize_u32   (mut self, v: u32  ) -> fmt::Result { self.push_u64   (v.into(), NumberSuffix::UInt32) }
-    #[rustfmt::skip]    fn serialize_u64   (mut self, v: u64  ) -> fmt::Result { self.push_u64   (v.into(), NumberSuffix::UInt64) }
-    #[rustfmt::skip]    fn serialize_u128  (mut self, v: u128 ) -> fmt::Result { self.push_u128  (v)                              }
-    #[rustfmt::skip]    fn serialize_f32   (mut self, v: f32  ) -> fmt::Result { self.push_f32   (v)                              }
-    #[rustfmt::skip]    fn serialize_f64   (mut self, v: f64  ) -> fmt::Result { self.push_f64   (v)                              }
-    #[rustfmt::skip]    fn serialize_str   (mut self, v: &str ) -> fmt::Result { self.push_str   (v)                              }
-    #[rustfmt::skip]    fn serialize_bytes (mut self, v: &[u8]) -> fmt::Result { self.push_bytes (v)                              }
+    #[rustfmt::skip]    fn serialize_bool  (mut self, v: bool ) -> fmt::Result { self.push_bool  (v) }
+    #[rustfmt::skip]    fn serialize_char  (mut self, v: char ) -> fmt::Result { self.push_char  (v) }
+    #[rustfmt::skip]    fn serialize_i8    (mut self, v: i8   ) -> fmt::Result { self.push_i8    (v) }
+    #[rustfmt::skip]    fn serialize_i16   (mut self, v: i16  ) -> fmt::Result { self.push_i16   (v) }
+    #[rustfmt::skip]    fn serialize_i32   (mut self, v: i32  ) -> fmt::Result { self.push_i32   (v) }
+    #[rustfmt::skip]    fn serialize_i64   (mut self, v: i64  ) -> fmt::Result { self.push_i64   (v) }
+    #[rustfmt::skip]    fn serialize_i128  (mut self, v: i128 ) -> fmt::Result { self.push_i128  (v) }
+    #[rustfmt::skip]    fn serialize_u8    (mut self, v: u8   ) -> fmt::Result { self.push_u8    (v) }
+    #[rustfmt::skip]    fn serialize_u16   (mut self, v: u16  ) -> fmt::Result { self.push_u16   (v) }
+    #[rustfmt::skip]    fn serialize_u32   (mut self, v: u32  ) -> fmt::Result { self.push_u32   (v) }
+    #[rustfmt::skip]    fn serialize_u64   (mut self, v: u64  ) -> fmt::Result { self.push_u64   (v) }
+    #[rustfmt::skip]    fn serialize_u128  (mut self, v: u128 ) -> fmt::Result { self.push_u128  (v) }
+    #[rustfmt::skip]    fn serialize_f32   (mut self, v: f32  ) -> fmt::Result { self.push_f32   (v) }
+    #[rustfmt::skip]    fn serialize_f64   (mut self, v: f64  ) -> fmt::Result { self.push_f64   (v) }
+    #[rustfmt::skip]    fn serialize_str   (mut self, v: &str ) -> fmt::Result { self.push_str   (v) }
+    #[rustfmt::skip]    fn serialize_bytes (mut self, v: &[u8]) -> fmt::Result { self.push_bytes (v) }
 
     fn serialize_unit(mut self) -> fmt::Result {
         self.push_unit()
@@ -82,7 +82,7 @@ impl<Impl: SerializerImpl> Serializer for SerializerWrapper<'_, Impl> {
     }
     fn serialize_some<T: ?Sized + Serialize>(mut self, value: &T) -> fmt::Result {
         self.push_maybe_begin()?;
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_maybe_end()
     }
     fn serialize_seq(mut self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
@@ -93,7 +93,7 @@ impl<Impl: SerializerImpl> Serializer for SerializerWrapper<'_, Impl> {
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(mut self, name: &'static str, value: &T) -> fmt::Result {
         self.push_newtype_begin(Some(Ident::new_unchecked(name)))?;
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_newtype_end()
     }
     fn serialize_newtype_variant<T: ?Sized + Serialize>(
@@ -105,7 +105,7 @@ impl<Impl: SerializerImpl> Serializer for SerializerWrapper<'_, Impl> {
     ) -> fmt::Result {
         let _ = variant_index;
         self.push_tuple_variant_begin(Some(Ident::new_unchecked(name)), Ident::new_unchecked(variant))?;
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_tuple_like_end()
     }
 
@@ -164,7 +164,7 @@ impl<Impl: SerializerImpl> SerializeSeq for SerializerWrapper<'_, Impl> {
     type Ok = ();
     type Error = fmt::Error;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_comma()
     }
     fn end(mut self) -> fmt::Result {
@@ -176,7 +176,7 @@ impl<Impl: SerializerImpl> SerializeTuple for SerializerWrapper<'_, Impl> {
     type Ok = ();
     type Error = fmt::Error;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_comma()
     }
     fn end(mut self) -> fmt::Result {
@@ -187,7 +187,7 @@ impl<Impl: SerializerImpl> SerializeTupleStruct for SerializerWrapper<'_, Impl> 
     type Ok = ();
     type Error = fmt::Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_comma()
     }
     fn end(mut self) -> fmt::Result {
@@ -198,7 +198,7 @@ impl<Impl: SerializerImpl> SerializeTupleVariant for SerializerWrapper<'_, Impl>
     type Ok = ();
     type Error = fmt::Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_comma()
     }
     fn end(mut self) -> fmt::Result {
@@ -210,11 +210,11 @@ impl<Impl: SerializerImpl> SerializeMap for SerializerWrapper<'_, Impl> {
     type Ok = ();
     type Error = fmt::Error;
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> fmt::Result {
-        self.serialize(key)?;
+        self.serialize_inner(key)?;
         self.push_fat_arrow()
     }
     fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_comma()
     }
     fn end(mut self) -> fmt::Result {
@@ -227,7 +227,7 @@ impl<Impl: SerializerImpl> SerializeStruct for SerializerWrapper<'_, Impl> {
     fn serialize_field<T: ?Sized + Serialize>(&mut self, field: &'static str, value: &T) -> fmt::Result {
         self.push_identifier(Ident::new_unchecked(field))?;
         self.push_colon()?;
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_comma()
     }
     fn end(mut self) -> fmt::Result {
@@ -240,7 +240,7 @@ impl<Impl: SerializerImpl> SerializeStructVariant for SerializerWrapper<'_, Impl
     fn serialize_field<T: ?Sized + Serialize>(&mut self, field: &'static str, value: &T) -> fmt::Result {
         self.push_identifier(Ident::new_unchecked(field))?;
         self.push_colon()?;
-        self.serialize(value)?;
+        self.serialize_inner(value)?;
         self.push_comma()
     }
     fn end(mut self) -> fmt::Result {

@@ -142,14 +142,14 @@ fn deserialize_scalar<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultK
 }
 
 fn deserialize_value<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Value2> {
-    der.ttl_enter()?;
+    der.enter_nesting()?;
     let value = Value2::deserialize_with(der, PrivateMethod)?;
-    der.ttl_leave();
+    der.exit_nesting();
     Ok(value)
 }
 
 fn deserialize_values<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Values2> {
-    der.ttl_enter()?;
+    der.enter_nesting()?;
     let mut values = Values2::new();
     loop {
         if der.adjacent_to_delim()? {
@@ -159,12 +159,12 @@ fn deserialize_values<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultK
         der.delim(Delimiter::Comma)?;
         values.push(value);
     }
-    der.ttl_leave();
+    der.exit_nesting();
     Ok(values)
 }
 
 fn deserialize_values_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<ValuesMap2> {
-    der.ttl_enter()?;
+    der.enter_nesting()?;
     let mut values_map = ValuesMap2::new();
     loop {
         if der.adjacent_to_delim()? {
@@ -176,12 +176,12 @@ fn deserialize_values_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> Res
         der.delim(Delimiter::Comma)?;
         values_map.insert(key, value);
     }
-    der.ttl_leave();
+    der.exit_nesting();
     Ok(values_map)
 }
 
 fn deserialize_fields_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<FieldsMap2> {
-    der.ttl_enter()?;
+    der.enter_nesting()?;
     let mut fields_map = FieldsMap2::new();
     loop {
         if der.adjacent_to_delim()? {
@@ -193,6 +193,6 @@ fn deserialize_fields_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> Res
         der.delim(Delimiter::Comma)?;
         fields_map.insert(field, value);
     }
-    der.ttl_leave();
+    der.exit_nesting();
     Ok(fields_map)
 }

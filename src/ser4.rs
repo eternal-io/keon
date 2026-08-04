@@ -1,4 +1,4 @@
-use crate::{format::*, value::*, PrivateMethod};
+use crate::{value::*, PrivateMethod};
 use core::{
     fmt::{self, Write},
     ops::{Deref, DerefMut},
@@ -41,21 +41,22 @@ trait SerializerImplDetail {
 
     fn push_bool(&mut self, b: bool) -> fmt::Result;
     fn push_char(&mut self, ch: char) -> fmt::Result;
-    fn push_i64(&mut self, n: i64, suff: NumberSuffix) -> fmt::Result;
-    fn push_i128(&mut self, n: i128) -> fmt::Result;
-    fn push_u64(&mut self, n: u64, suff: NumberSuffix) -> fmt::Result;
-    fn push_u128(&mut self, n: u128) -> fmt::Result;
-    fn push_f32(&mut self, n: f32) -> fmt::Result;
-    fn push_f64(&mut self, n: f64) -> fmt::Result;
-    fn push_int(&mut self, n: i64) -> fmt::Result;
-    fn push_uint(&mut self, n: u64) -> fmt::Result;
-    fn push_float(&mut self, n: f64) -> fmt::Result;
+    fn push_number(&mut self, num: &Number2) -> fmt::Result;
     fn push_str(&mut self, s: &str) -> fmt::Result;
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result;
 
-    fn push_unit(&mut self) -> fmt::Result;
-    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result;
-    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result;
+    fn push_i8(&mut self, n: i8) -> fmt::Result;
+    fn push_i16(&mut self, n: i16) -> fmt::Result;
+    fn push_i32(&mut self, n: i32) -> fmt::Result;
+    fn push_i64(&mut self, n: i64) -> fmt::Result;
+    fn push_i128(&mut self, n: i128) -> fmt::Result;
+    fn push_u8(&mut self, n: u8) -> fmt::Result;
+    fn push_u16(&mut self, n: u16) -> fmt::Result;
+    fn push_u32(&mut self, n: u32) -> fmt::Result;
+    fn push_u64(&mut self, n: u64) -> fmt::Result;
+    fn push_u128(&mut self, n: u128) -> fmt::Result;
+    fn push_f32(&mut self, n: f32) -> fmt::Result;
+    fn push_f64(&mut self, n: f64) -> fmt::Result;
 
     fn push_range_full(&mut self) -> fmt::Result;
     fn push_range_to(&mut self, end: &Scalar) -> fmt::Result;
@@ -69,6 +70,10 @@ trait SerializerImplDetail {
 
     fn push_array_begin(&mut self) -> fmt::Result;
     fn push_array_end(&mut self) -> fmt::Result;
+
+    fn push_unit(&mut self) -> fmt::Result;
+    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result;
+    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result;
 
     fn push_tuple_begin(&mut self) -> fmt::Result;
     fn push_tuple_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result;
@@ -87,6 +92,8 @@ trait SerializerImplDetail {
     fn push_fat_arrow(&mut self) -> fmt::Result;
     fn push_colon(&mut self) -> fmt::Result;
     fn push_comma(&mut self) -> fmt::Result;
+
+    fn semicolon(&mut self) -> fmt::Result;
 }
 
 pub struct Serializer<Impl> {
@@ -118,16 +125,16 @@ impl<Impl> Serializer<Impl> {
 
 impl<W: Write> Serializer<FastImpl<W>> {
     pub fn new(dst: W) -> Self {
-        Self::with_config(dst, SerializeConfig::minimal())
+        Self::with_flags(dst, Flags::COMPACT_OMIT_NAMES)
     }
 
-    pub fn with_config(dst: W, cfg: SerializeConfig) -> Self {
-        Self::with_config_and_limit(dst, cfg, 160)
+    pub fn with_flags(dst: W, flags: Flags) -> Self {
+        Self::with_flags_and_limit(dst, flags, 160)
     }
 
-    pub fn with_config_and_limit(dst: W, cfg: SerializeConfig, recursion_limit: u16) -> Self {
+    pub fn with_flags_and_limit(dst: W, flags: Flags, recursion_limit: u16) -> Self {
         Self {
-            ser: FastImpl::new(dst, cfg),
+            ser: FastImpl::new(dst, flags),
             ttl: recursion_limit,
         }
     }
@@ -135,162 +142,160 @@ impl<W: Write> Serializer<FastImpl<W>> {
 
 impl<W: Write> Serializer<PrettyImpl<W>> {
     pub fn new_pretty(dst: W) -> Self {
-        Self::with_config_pretty(dst, SerializeConfig::default())
+        Self::with_flags_pretty(dst, Flags::DEFAULT)
     }
 
-    pub fn with_config_pretty(dst: W, cfg: SerializeConfig) -> Self {
-        Self::with_config_and_limit_pretty(dst, cfg, 160)
+    pub fn with_flags_pretty(dst: W, flags: Flags) -> Self {
+        Self::with_flags_and_limit_pretty(dst, flags, 160)
     }
 
-    pub fn with_config_and_limit_pretty(dst: W, cfg: SerializeConfig, recursion_limit: u16) -> Self {
+    pub fn with_flags_and_limit_pretty(dst: W, flags: Flags, recursion_limit: u16) -> Self {
         Self {
-            ser: PrettyImpl::new(dst, cfg),
+            ser: PrettyImpl::new(dst, flags),
             ttl: recursion_limit,
         }
     }
 }
 
 impl<Impl: SerializerImpl> Serializer<Impl> {
-    #[inline]
     pub fn serialize<T>(&mut self, value: &T) -> fmt::Result
     where
         T: ?Sized + Serialize,
     {
+        self.serialize_inner(value)?;
+        self.semicolon()
+    }
+
+    pub fn serialize_many<T, I>(&mut self, values: I) -> fmt::Result
+    where
+        T: ?Sized + Serialize,
+        I: IntoIterator<Item: AsRef<T>>,
+    {
+        values.into_iter().try_for_each(|value| self.serialize(value.as_ref()))
+    }
+
+    fn serialize_inner<T: ?Sized + Serialize>(&mut self, value: &T) -> fmt::Result {
         if self.ttl == 0 {
             return Err(fmt::Error);
         }
         self.ttl -= 1;
         value.serialize_with(self, PrivateMethod)?;
         self.ttl += 1;
-
         Ok(())
     }
+}
 
-    #[inline]
-    pub fn serialize_many<T>(&mut self, values: impl IntoIterator<Item: AsRef<T>>) -> fmt::Result
-    where
-        T: ?Sized + Serialize,
-    {
-        values.into_iter().try_for_each(|value| self.serialize(value.as_ref()))
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct Flags: u16 {
+        const HARD_TAB              = 1 << 0;
+
+        const WRITE_INTEGER_SUFFIX  = 1 << 1;
+        const WRITE_FLOAT_SUFFIX    = 1 << 2;
+
+        const MAX_WIDTH_PLUS_8      = 1 << 3;
+        const MAX_WIDTH_PLUS_16     = 1 << 4;
+        const MAX_WIDTH_PLUS_32     = 1 << 5;
+        const MAX_WIDTH_PLUS_64     = 1 << 6;
+
+        const OMIT_STRUCT_NAME      = 1 << 7;
+        const OMIT_NEWTYPE_NAME     = 1 << 8;
+        const IMPLICIT_NEWTYPE      = 1 << 9;
+        const OMIT_ENUM_NAME        = 1 << 10;
+        const IMPLICIT_VARIANT      = 1 << 11;
+
+        const COMPACTIZE_MAP_KEY    = 1 << 12;
+        const EXPAND_ROOT_STRUCTURE = 1 << 13;
+
+        const WRITE_NUMBER_SUFFIX
+            = Self::WRITE_INTEGER_SUFFIX.bits()
+            | Self::WRITE_FLOAT_SUFFIX.bits();
+
+        const MAX_WIDTH_EQUAL_120
+            = Self::MAX_WIDTH_PLUS_8.bits()
+            | Self::MAX_WIDTH_PLUS_16.bits()
+            | Self::MAX_WIDTH_PLUS_32.bits()
+            | Self::MAX_WIDTH_PLUS_64.bits();
+
+        const OMIT_STRUCTURE_NAMES
+            = Self::OMIT_STRUCT_NAME.bits()
+            | Self::OMIT_NEWTYPE_NAME.bits()
+            | Self::OMIT_ENUM_NAME.bits();
+
+        const IMPLICIT_STRUCTURES
+            = Self::IMPLICIT_NEWTYPE.bits()
+            | Self::IMPLICIT_VARIANT.bits();
+
+        const EXPANDED
+            = Self::EXPAND_ROOT_STRUCTURE.bits();
+
+        const DEFAULT
+            = Self::MAX_WIDTH_EQUAL_120.bits()
+            | Self::COMPACTIZE_MAP_KEY.bits()
+            | Self::EXPAND_ROOT_STRUCTURE.bits();
+
+        const COMPACT_OMIT_NAMES
+            = Self::HARD_TAB.bits()
+            | Self::MAX_WIDTH_EQUAL_120.bits()
+            | Self::OMIT_STRUCTURE_NAMES.bits()
+            | Self::COMPACTIZE_MAP_KEY.bits();
+
+        const COMPACT_IMPLICIT_ALL
+            = Self::HARD_TAB.bits()
+            | Self::MAX_WIDTH_EQUAL_120.bits()
+            | Self::OMIT_STRUCTURE_NAMES.bits()
+            | Self::IMPLICIT_STRUCTURES.bits()
+            | Self::COMPACTIZE_MAP_KEY.bits();
     }
 }
 
-//------------------------------------------------------------------------------
-
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy)]
-pub struct SerializeConfig {
-    pub indentor: Indentor,
-    pub numeric_suffix: NumericSuffix,
-    pub nominal_path_style: NominalPathStyle,
-    pub map_like_inline_entries: u8,
-}
-
-impl SerializeConfig {
-    pub const fn minimal() -> Self {
-        Self {
-            indentor: Indentor::tab(),
-            numeric_suffix: NumericSuffix::LongIntegerOnly,
-            nominal_path_style: NominalPathStyle::Minimal,
-            map_like_inline_entries: 3,
-        }
+impl Flags {
+    pub fn hard_tab(&self) -> bool {
+        self.contains(Self::HARD_TAB)
     }
-}
-
-impl Default for SerializeConfig {
-    fn default() -> Self {
-        Self {
-            indentor: Indentor::space(4),
-            numeric_suffix: NumericSuffix::LongIntegerOnly,
-            nominal_path_style: NominalPathStyle::Full,
-            map_like_inline_entries: 3,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Indentor(u8);
-
-impl Indentor {
-    pub const fn tab() -> Self {
-        Self(0)
+    pub fn max_width(&self) -> usize {
+        self.intersection(Self::MAX_WIDTH_EQUAL_120).bits() as usize
     }
 
-    pub const fn space(n_or_tab: u8) -> Self {
-        Self(n_or_tab)
+    pub fn write_integer_suffix(&self) -> bool {
+        self.contains(Self::WRITE_INTEGER_SUFFIX)
+    }
+    pub fn write_float_suffix(&self) -> bool {
+        self.contains(Self::WRITE_FLOAT_SUFFIX)
     }
 
-    #[inline(always)]
-    fn write_to(&self, dst: &mut impl Write) -> fmt::Result {
-        match self.0 {
-            0 => dst.write_str("\t"),
-            n => (0..n).try_for_each(|_| dst.write_str(" ")),
-        }
+    pub fn omit_struct_name(&self) -> bool {
+        self.contains(Self::OMIT_STRUCT_NAME)
     }
-}
+    pub fn omit_newtype_name(&self) -> bool {
+        self.contains(Self::OMIT_NEWTYPE_NAME)
+    }
+    pub fn implicit_newtype(&self) -> bool {
+        self.contains(Self::IMPLICIT_NEWTYPE)
+    }
+    pub fn omit_enum_name(&self) -> bool {
+        self.contains(Self::OMIT_ENUM_NAME)
+    }
+    pub fn implicit_variant(&self) -> bool {
+        self.contains(Self::IMPLICIT_VARIANT)
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum NumericSuffix {
-    Always = 0,
-    IntegerOnly = 1,
-    LongIntegerOnly = 2,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum NominalPathStyle {
-    Full = 0,
-    Named = 1,
-    Minimal = 2,
+    pub fn compactize_map_key(&self) -> bool {
+        self.contains(Self::COMPACTIZE_MAP_KEY)
+    }
+    pub fn expand_root_structure(&self) -> bool {
+        self.contains(Self::EXPAND_ROOT_STRUCTURE)
+    }
 }
 
 //==================================================================================================
 
-// enum Token<'a> {
-//     #[cfg(feature = "alloc")]
-//     Stringified(String),
-//     Literal(Literal<'a>),
-//     Ident(&'a str),
-//     Unit,
-//     UnitStruct {
-//         kind: NominalKind,
-//         path: NominalPathRef<'a>,
-//     },
-
-//     Maybe,
-//     Array,
-//     Tuple,
-//     TupleStruct {
-//         kind: NominalKind,
-//         path: NominalPathRef<'a>,
-//     },
-//     Map,
-//     MapStruct {
-//         kind: NominalKind,
-//         path: NominalPathRef<'a>,
-//     },
-
-//     MaybeEnd,
-//     ArrayEnd,
-//     TupleEnd,
-//     MapLikeEnd,
-
-//     FatArrow,
-//     Colon,
-//     Comma,
-// }
-
-enum Literal<'a> {
-    Bool(bool),
-    Char(char),
-    Number(Number2),
-    Str(&'a str),
-    Bytes(&'a [u8]),
-}
-
-enum NominalKind {
-    Unspecified,
-    Variant,
-    Struct,
+pub struct FastImpl<W> {
+    dst: W,
+    flags: Flags,
+    range_intercept: Option<RangeType>,
+    range_start: Option<Option<Scalar>>,
+    range_end: Option<Option<Scalar>>,
 }
 
 enum RangeType {
@@ -301,33 +306,12 @@ enum RangeType {
     RangeInclusive,
 }
 
-impl From<Scalar> for Literal<'_> {
-    fn from(value: Scalar) -> Self {
-        match value {
-            Scalar::Char(ch) => Self::Char(ch),
-            Scalar::Number(num) => Self::Number(num),
-        }
-    }
-}
-
-//------------------------------------------------------------------------------
-
-pub struct FastImpl<W> {
-    dst: W,
-    cfg: SerializeConfig,
-    lvl: u16,
-    range_hook: Option<RangeType>,
-    range_start: Option<Option<Scalar>>,
-    range_end: Option<Option<Scalar>>,
-}
-
 impl<W> FastImpl<W> {
-    fn new(dst: W, cfg: SerializeConfig) -> Self {
+    fn new(dst: W, flags: Flags) -> Self {
         Self {
             dst,
-            cfg,
-            lvl: 0,
-            range_hook: None,
+            flags,
+            range_intercept: None,
             range_start: None,
             range_end: None,
         }
@@ -335,8 +319,18 @@ impl<W> FastImpl<W> {
 }
 
 impl<W: Write> FastImpl<W> {
-    fn release_range_hook(&mut self) -> fmt::Result {
-        if let Some(typ) = self.range_hook.take() {
+    #[inline(always)]
+    fn clear_range_intercept(&mut self) -> fmt::Result {
+        if self.range_intercept.is_some() {
+            self.clear_range_intercept_cold()?;
+        }
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn clear_range_intercept_cold(&mut self) -> fmt::Result {
+        if let Some(typ) = self.range_intercept.take() {
             self.dst.write_str(match typ {
                 RangeType::RangeTo => "RangeTo",
                 RangeType::RangeToInclusive => "RangeToInclusive",
@@ -350,7 +344,7 @@ impl<W: Write> FastImpl<W> {
             self.dst.write_str("start")?;
             if let Some(scalar) = start {
                 self.dst.write_str(":")?;
-                write_literal(&mut self.dst, scalar.into(), self.cfg.numeric_suffix)?;
+                write_scalar(&mut self.dst, &scalar, self.flags)?;
                 self.dst.write_str(",")?;
             }
         }
@@ -358,370 +352,320 @@ impl<W: Write> FastImpl<W> {
             self.dst.write_str("end")?;
             if let Some(scalar) = end {
                 self.dst.write_str(":")?;
-                write_literal(&mut self.dst, scalar.into(), self.cfg.numeric_suffix)?;
+                write_scalar(&mut self.dst, &scalar, self.flags)?;
                 self.dst.write_str(",")?;
             }
         }
         Ok(())
     }
 
-    fn semicolon(&mut self) -> fmt::Result {
-        if self.lvl == 0 {
-            self.dst.write_str(";")?;
-        }
-        Ok(())
-    }
-}
+    fn intercept_range_field(&mut self, field: &Ident) -> Result<bool, fmt::Error> {
+        let Some(ref typ) = self.range_intercept else {
+            return Ok(false);
+        };
 
-impl<W> Drop for FastImpl<W> {
-    fn drop(&mut self) {
-        debug_assert!(self.lvl == 0);
+        let field = field.as_str();
+        #[rustfmt::skip]
+        if field == "start"
+            && self.range_start.is_none()
+            && matches!(typ, RangeType::Range | RangeType::RangeInclusive | RangeType::RangeFrom)
+        {
+            self.range_start = Some(None);
+        } else if field == "end"
+            && self.range_end.is_none()
+            && matches!(typ, RangeType::Range | RangeType::RangeInclusive | RangeType::RangeTo | RangeType::RangeToInclusive)
+        {
+            self.range_end = Some(None);
+        } else {
+            self.clear_range_intercept_cold()?;
+            return Ok(false);
+        };
+
+        Ok(true)
+    }
+
+    fn intercept_range_bound<T, F>(&mut self, scalar: T, callback: F) -> fmt::Result
+    where
+        T: Into<Scalar>,
+        F: FnOnce(&mut Self, T) -> fmt::Result,
+    {
+        if self.range_intercept.is_some() {
+            Ok(self.intercept_range_bound_cold(scalar))
+        } else {
+            callback(self, scalar)
+        }
+    }
+
+    fn intercept_range_bound_cold<T>(&mut self, scalar: T)
+    where
+        T: Into<Scalar>,
+    {
+        if let Some(start @ None) = self.range_start.as_mut() {
+            *start = Some(scalar.into());
+        } else if let Some(end @ None) = self.range_start.as_mut() {
+            *end = Some(scalar.into());
+        } else {
+            unreachable!()
+        }
     }
 }
 
 impl<W: Write> SerializerImpl for FastImpl<W> {}
 
+macro_rules! push_concr_number_fast {
+    ($method:ident, $ty:ty, $suff:ident, $write_fn:ident) => {
+        fn $method(&mut self, n: $ty) -> fmt::Result {
+            self.intercept_range_bound(n, |ser, n| {
+                $write_fn(&mut ser.dst, n.into())?;
+                write_number_suffix(&mut ser.dst, NumberSuffix::$suff, ser.flags)
+            })
+        }
+    };
+}
+
 impl<W: Write> SerializerImplDetail for FastImpl<W> {
-    /*
-    #[doc(hidden)]
-    fn push(&mut self, token: Token<'_>) -> fmt::Result {
-        if matches!(
-            token,
-            Token::Maybe
-                | Token::Array
-                | Token::Tuple
-                | Token::TupleStruct { .. }
-                | Token::Map
-                | Token::MapStruct { .. }
-        ) {
-            self.lvl += 1;
-        }
-
-        if matches!(
-            token,
-            Token::MaybeEnd | Token::ArrayEnd | Token::TupleEnd | Token::MapLikeEnd
-        ) {
-            self.lvl -= 1;
-        }
-
-        'value: {
-            if let Some(ref typ) = self.range_hook {
-                'range: {
-                    match token {
-                        Token::Ident(ident) => {
-                            if ident == "start"
-                                && matches!(typ, RangeType::RangeFrom)
-                                && matches!(typ, RangeType::Range | RangeType::RangeInclusive)
-                            {
-                                self.range_start = Some(None);
-                            } else if ident == "end"
-                                && matches!(typ, RangeType::RangeTo | RangeType::RangeToInclusive)
-                                && matches!(typ, RangeType::Range | RangeType::RangeInclusive)
-                            {
-                                self.range_end = Some(None);
-                            } else {
-                                break 'range;
-                            }
-                        }
-                        Token::Literal(ref literal) => {
-                            let scalar = match literal {
-                                Literal::Char(ch) => Scalar::Char(*ch),
-                                Literal::Number(num) => Scalar::Number(*num),
-                                _ => break 'range,
-                            };
-                            match (self.range_start, self.range_end) {
-                                (Some(None), None | Some(Some(_))) => self.range_start = Some(Some(scalar)),
-                                (None | Some(Some(_)), Some(None)) => self.range_end = Some(Some(scalar)),
-                                _ => panic!("contract violation"),
-                            }
-                        }
-                        Token::MapLikeEnd => {
-                            match typ {
-                                RangeType::RangeTo => {
-                                    if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
-                                        self.dst.write_str("..")?;
-                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
-                                    } else {
-                                        break 'range;
-                                    }
-                                }
-                                RangeType::RangeToInclusive => {
-                                    if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
-                                        self.dst.write_str("..=")?;
-                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
-                                    } else {
-                                        break 'range;
-                                    }
-                                }
-                                RangeType::RangeFrom => {
-                                    if let (Some(Some(start)), None) = (self.range_start, self.range_end) {
-                                        write_literal(&mut self.dst, start.into(), self.cfg.numeric_suffix)?;
-                                        self.dst.write_str("..")?;
-                                    } else {
-                                        break 'range;
-                                    }
-                                }
-                                RangeType::Range => {
-                                    if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
-                                        write_literal(&mut self.dst, start.into(), self.cfg.numeric_suffix)?;
-                                        self.dst.write_str("..")?;
-                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
-                                    } else {
-                                        break 'range;
-                                    }
-                                }
-                                RangeType::RangeInclusive => {
-                                    if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
-                                        write_literal(&mut self.dst, start.into(), self.cfg.numeric_suffix)?;
-                                        self.dst.write_str("..=")?;
-                                        write_literal(&mut self.dst, end.into(), self.cfg.numeric_suffix)?;
-                                    } else {
-                                        break 'range;
-                                    }
-                                }
-                            };
-                            self.range_hook = None;
-                            self.range_start = None;
-                            self.range_end = None;
-                        }
-                        _ => break 'range,
-                    }
-                    break 'value;
-                }
-                self.release_range_hook()?;
-            }
-
-            match token {
-                #[cfg(feature = "alloc")]
-                Token::Stringified(_) => panic!("FastImpl does not rely on alloc"),
-                Token::Literal(literal) => write_literal(&mut self.dst, literal, self.cfg.numeric_suffix)?,
-                Token::Ident(ident) => self.dst.write_str(ident)?,
-                Token::Unit => self.dst.write_str("()")?,
-                Token::UnitStruct { kind, path } => {
-                    write_nominal_path(&mut self.dst, kind, path, self.cfg.nominal_path_style)?
-                }
-
-                Token::Maybe => self.dst.write_str("?")?,
-                Token::Array => self.dst.write_str("[")?,
-                Token::Tuple | Token::TupleStruct { .. } => {
-                    if let Token::TupleStruct { kind, path } = token {
-                        write_nominal_path(&mut self.dst, kind, path, self.cfg.nominal_path_style)?;
-                    }
-                    self.dst.write_str("(")?;
-                }
-                Token::Map | Token::MapStruct { .. } => 'map_like: {
-                    if let Token::MapStruct { kind, path } = token {
-                        'range_type: {
-                            let NominalPathRef::Single { name } = path else {
-                                break 'range_type;
-                            };
-                            let typ = match name.as_str() {
-                                "RangeTo" => RangeType::RangeTo,
-                                "RangeToInclusive" => RangeType::RangeToInclusive,
-                                "RangeFrom" => RangeType::RangeFrom,
-                                "Range" => RangeType::Range,
-                                "RangeInclusive" => RangeType::RangeInclusive,
-                                _ => break 'range_type,
-                            };
-
-                            self.range_hook = Some(typ);
-
-                            break 'map_like;
-                        }
-                        write_nominal_path(&mut self.dst, kind, path, self.cfg.nominal_path_style)?;
-                    }
-                    self.dst.write_str("{")?;
-                }
-
-                Token::MaybeEnd => (),
-                Token::ArrayEnd => self.dst.write_str("]")?,
-                Token::TupleEnd => self.dst.write_str(")")?,
-                Token::MapLikeEnd => self.dst.write_str("}")?,
-
-                Token::FatArrow => self.dst.write_str("=>")?,
-                Token::Colon => self.dst.write_str(":")?,
-                Token::Comma => self.dst.write_str(",")?,
-            }
-        }
-
-        if self.lvl == 0 {
-            self.dst.write_str(";")?;
-        }
-
-        Ok(())
-    }
-    */
-
     fn push_stringified(&mut self, _stringified: String) -> fmt::Result {
         panic!("FastImpl does not rely on alloc")
     }
 
+    fn push_bool(&mut self, b: bool) -> fmt::Result {
+        self.clear_range_intercept()?;
+        write_bool(&mut self.dst, b)
+    }
+    fn push_char(&mut self, ch: char) -> fmt::Result {
+        self.intercept_range_bound(ch, |ser, ch| write_quoted_char(&mut ser.dst, ch))
+    }
+    fn push_number(&mut self, num: &Number2) -> fmt::Result {
+        self.intercept_range_bound(num, |ser, num| write_number(&mut ser.dst, num, ser.flags))
+    }
+    fn push_str(&mut self, s: &str) -> fmt::Result {
+        self.clear_range_intercept()?;
+        write_quoted_string(&mut self.dst, s)
+    }
+    fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
+        self.clear_range_intercept()?;
+        write_quoted_byte_string(&mut self.dst, bytes)
+    }
+
+    push_concr_number_fast!(push_i8, i8, Int8, write_i64);
+    push_concr_number_fast!(push_i16, i16, Int16, write_i64);
+    push_concr_number_fast!(push_i32, i32, Int32, write_i64);
+    push_concr_number_fast!(push_i64, i64, Int64, write_i64);
+    push_concr_number_fast!(push_i128, i128, Int128, write_i128);
+    push_concr_number_fast!(push_u8, u8, UInt8, write_u64);
+    push_concr_number_fast!(push_u16, u16, UInt16, write_u64);
+    push_concr_number_fast!(push_u32, u32, UInt32, write_u64);
+    push_concr_number_fast!(push_u64, u64, UInt64, write_u64);
+    push_concr_number_fast!(push_u128, u128, UInt128, write_u128);
+    push_concr_number_fast!(push_f32, f32, Float32, write_f32);
+    push_concr_number_fast!(push_f64, f64, Float64, write_f64);
+
     fn push_range_full(&mut self) -> fmt::Result {
-        self.dst.write_str("..")?;
-        self.semicolon()
+        self.clear_range_intercept()?;
+        self.dst.write_str("..")
     }
     fn push_range_to(&mut self, end: &Scalar) -> fmt::Result {
+        self.clear_range_intercept()?;
         self.dst.write_str("..")?;
-        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
-        self.semicolon()
+        write_scalar(&mut self.dst, end, self.flags)
     }
     fn push_range_to_inclusive(&mut self, end: &Scalar) -> fmt::Result {
+        self.clear_range_intercept()?;
         self.dst.write_str("..=")?;
-        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
-        self.semicolon()
+        write_scalar(&mut self.dst, end, self.flags)
     }
     fn push_range_from(&mut self, start: &Scalar) -> fmt::Result {
-        write_scalar(&mut self.dst, start, self.cfg.numeric_suffix)?;
-        self.dst.write_str("..")?;
-        self.semicolon()
+        self.clear_range_intercept()?;
+        write_scalar(&mut self.dst, start, self.flags)?;
+        self.dst.write_str("..")
     }
     fn push_range(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
-        write_scalar(&mut self.dst, start, self.cfg.numeric_suffix)?;
+        self.clear_range_intercept()?;
+        write_scalar(&mut self.dst, start, self.flags)?;
         self.dst.write_str("..")?;
-        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
-        self.semicolon()
+        write_scalar(&mut self.dst, end, self.flags)
     }
     fn push_range_inclusive(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
-        write_scalar(&mut self.dst, start, self.cfg.numeric_suffix)?;
+        self.clear_range_intercept()?;
+        write_scalar(&mut self.dst, start, self.flags)?;
         self.dst.write_str("..=")?;
-        write_scalar(&mut self.dst, end, self.cfg.numeric_suffix)?;
-        self.semicolon()
-    }
-
-    fn push_bool(&mut self, b: bool) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_char(&mut self, ch: char) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_i64(&mut self, n: i64, suff: NumberSuffix) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_i128(&mut self, n: i128) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_u64(&mut self, n: u64, suff: NumberSuffix) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_u128(&mut self, n: u128) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_f32(&mut self, n: f32) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_f64(&mut self, n: f64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_int(&mut self, n: i64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_uint(&mut self, n: u64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_float(&mut self, n: f64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_str(&mut self, s: &str) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_unit(&mut self) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
-        todo!()
+        write_scalar(&mut self.dst, end, self.flags)
     }
 
     fn push_maybe_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.dst.write_str("?")
     }
-
     fn push_maybe_end(&mut self) -> fmt::Result {
-        todo!()
+        debug_assert!(self.range_intercept.is_none());
+
+        Ok(())
     }
 
     fn push_array_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.dst.write_str("[")
+    }
+    fn push_array_end(&mut self) -> fmt::Result {
+        debug_assert!(self.range_intercept.is_none());
+
+        self.dst.write_str("]")
     }
 
-    fn push_array_end(&mut self) -> fmt::Result {
-        todo!()
+    fn push_unit(&mut self) -> fmt::Result {
+        self.clear_range_intercept()?;
+        self.dst.write_str("()")
+    }
+    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
+        self.clear_range_intercept()?;
+        write_struct_name(&mut self.dst, name, self.flags)
+    }
+    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
+        self.clear_range_intercept()?;
+        write_variant_name(&mut self.dst, name, variant, self.flags)
     }
 
     fn push_tuple_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.dst.write_str("(")
     }
-
     fn push_tuple_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        write_struct_name(&mut self.dst, name, self.flags)?;
+        self.dst.write_str("(")
     }
-
     fn push_tuple_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        write_variant_name(&mut self.dst, name, variant, self.flags)?;
+        self.dst.write_str("(")
     }
-
     fn push_tuple_like_end(&mut self) -> fmt::Result {
-        todo!()
+        debug_assert!(self.range_intercept.is_none());
+
+        self.dst.write_str(")")
     }
 
     fn push_map_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.dst.write_str("{")
     }
-
     fn push_map_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        if let Some(name) = name {
+            'range_intercept: {
+                self.range_intercept = Some(match name.as_str() {
+                    "RangeTo" => RangeType::RangeTo,
+                    "RangeToInclusive" => RangeType::RangeToInclusive,
+                    "RangeFrom" => RangeType::RangeFrom,
+                    "Range" => RangeType::Range,
+                    "RangeInclusive" => RangeType::RangeInclusive,
+                    _ => break 'range_intercept,
+                });
+                return Ok(());
+            }
+        }
+        write_struct_name(&mut self.dst, name, self.flags)?;
+        self.dst.write_str("{")
     }
-
     fn push_map_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        write_variant_name(&mut self.dst, name, variant, self.flags)?;
+        self.dst.write_str("{")
     }
-
     fn push_map_like_end(&mut self) -> fmt::Result {
-        todo!()
+        if let Some(typ) = self.range_intercept.take() {
+            'range_intercept: {
+                match typ {
+                    RangeType::RangeTo => {
+                        if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
+                            self.dst.write_str("..")?;
+                            write_scalar(&mut self.dst, &end, self.flags)?;
+                        } else {
+                            break 'range_intercept;
+                        }
+                    }
+                    RangeType::RangeToInclusive => {
+                        if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
+                            self.dst.write_str("..=")?;
+                            write_scalar(&mut self.dst, &end, self.flags)?;
+                        } else {
+                            break 'range_intercept;
+                        }
+                    }
+                    RangeType::RangeFrom => {
+                        if let (Some(Some(start)), None) = (self.range_start, self.range_end) {
+                            write_scalar(&mut self.dst, &start, self.flags)?;
+                            self.dst.write_str("..")?;
+                        } else {
+                            break 'range_intercept;
+                        }
+                    }
+                    RangeType::Range => {
+                        if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
+                            write_scalar(&mut self.dst, &start, self.flags)?;
+                            self.dst.write_str("..")?;
+                            write_scalar(&mut self.dst, &end, self.flags)?;
+                        } else {
+                            break 'range_intercept;
+                        }
+                    }
+                    RangeType::RangeInclusive => {
+                        if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
+                            write_scalar(&mut self.dst, &start, self.flags)?;
+                            self.dst.write_str("..=")?;
+                            write_scalar(&mut self.dst, &end, self.flags)?;
+                        } else {
+                            break 'range_intercept;
+                        }
+                    }
+                };
+                self.range_start = None;
+                self.range_end = None;
+                return Ok(());
+            }
+            self.clear_range_intercept_cold()?;
+        }
+        self.dst.write_str("}")
     }
 
     fn push_newtype_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        write_newtype_name(&mut self.dst, name, self.flags)
     }
-
     fn push_newtype_end(&mut self) -> fmt::Result {
-        todo!()
+        debug_assert!(self.range_intercept.is_none());
+
+        Ok(())
     }
 
     fn push_identifier(&mut self, field: &Ident) -> fmt::Result {
-        todo!()
+        if self.intercept_range_field(field)? {
+            return Ok(());
+        }
+        self.dst.write_str(field)
     }
-
     fn push_fat_arrow(&mut self) -> fmt::Result {
-        todo!()
-    }
+        debug_assert!(self.range_intercept.is_none());
 
+        self.dst.write_str("=>")
+    }
     fn push_colon(&mut self) -> fmt::Result {
-        todo!()
+        if self.range_intercept.is_some() {
+            return Ok(());
+        }
+        self.dst.write_str(":")
+    }
+    fn push_comma(&mut self) -> fmt::Result {
+        if self.range_intercept.is_some() {
+            return Ok(());
+        }
+        self.dst.write_str(",")
     }
 
-    fn push_comma(&mut self) -> fmt::Result {
-        todo!()
+    fn semicolon(&mut self) -> fmt::Result {
+        debug_assert!(self.range_intercept.is_none());
+
+        self.dst.write_str(";")
     }
 }
 
@@ -730,17 +674,17 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
 #[cfg(feature = "alloc")]
 pub struct PrettyImpl<W> {
     dst: W,
-    cfg: SerializeConfig,
+    flags: Flags,
     compounds_stack: Vec<Compound>,
     inline_entries: VecDeque<String>,
 }
 
 #[cfg(feature = "alloc")]
 impl<W> PrettyImpl<W> {
-    fn new(dst: W, cfg: SerializeConfig) -> Self {
+    fn new(dst: W, flags: Flags) -> Self {
         Self {
             dst,
-            cfg,
+            flags,
             compounds_stack: Vec::new(),
             inline_entries: VecDeque::new(),
         }
@@ -845,6 +789,14 @@ impl CompoundKind {
 
 #[cfg(feature = "alloc")]
 impl<W: Write> SerializerImpl for PrettyImpl<W> {}
+
+macro_rules! push_concr_number_pretty {
+    ($method:ident, $ty:ty) => {
+        fn $method(&mut self, n: $ty) -> fmt::Result {
+            todo!()
+        }
+    };
+}
 
 #[cfg(feature = "alloc")]
 impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
@@ -1095,103 +1047,68 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
         todo!()
     }
 
+    fn push_bool(&mut self, b: bool) -> fmt::Result {
+        todo!()
+    }
+    fn push_char(&mut self, ch: char) -> fmt::Result {
+        todo!()
+    }
+    fn push_number(&mut self, num: &Number2) -> fmt::Result {
+        todo!()
+    }
+    fn push_str(&mut self, s: &str) -> fmt::Result {
+        todo!()
+    }
+    fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
+        todo!()
+    }
+
+    push_concr_number_pretty!(push_i8, i8);
+    push_concr_number_pretty!(push_i16, i16);
+    push_concr_number_pretty!(push_i32, i32);
+    push_concr_number_pretty!(push_i64, i64);
+    push_concr_number_pretty!(push_i128, i128);
+    push_concr_number_pretty!(push_u8, u8);
+    push_concr_number_pretty!(push_u16, u16);
+    push_concr_number_pretty!(push_u32, u32);
+    push_concr_number_pretty!(push_u64, u64);
+    push_concr_number_pretty!(push_u128, u128);
+    push_concr_number_pretty!(push_f32, f32);
+    push_concr_number_pretty!(push_f64, f64);
+
     fn push_range_full(&mut self) -> fmt::Result {
         let stringified = String::from("..");
         self.push_stringified(stringified)
     }
     fn push_range_to(&mut self, end: &Scalar) -> fmt::Result {
         let mut stringified = String::from("..");
-        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        write_scalar(&mut stringified, end, self.flags)?;
         self.push_stringified(stringified)
     }
     fn push_range_to_inclusive(&mut self, end: &Scalar) -> fmt::Result {
         let mut stringified = String::from("..=");
-        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        write_scalar(&mut stringified, end, self.flags)?;
         self.push_stringified(stringified)
     }
     fn push_range_from(&mut self, start: &Scalar) -> fmt::Result {
         let mut stringified = String::new();
-        write_scalar(&mut stringified, start, self.cfg.numeric_suffix)?;
+        write_scalar(&mut stringified, start, self.flags)?;
         stringified.push_str("..");
         self.push_stringified(stringified)
     }
     fn push_range(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
         let mut stringified = String::new();
-        write_scalar(&mut stringified, start, self.cfg.numeric_suffix)?;
+        write_scalar(&mut stringified, start, self.flags)?;
         stringified.push_str("..");
-        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        write_scalar(&mut stringified, end, self.flags)?;
         self.push_stringified(stringified)
     }
     fn push_range_inclusive(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
         let mut stringified = String::new();
-        write_scalar(&mut stringified, start, self.cfg.numeric_suffix)?;
+        write_scalar(&mut stringified, start, self.flags)?;
         stringified.push_str("..=");
-        write_scalar(&mut stringified, end, self.cfg.numeric_suffix)?;
+        write_scalar(&mut stringified, end, self.flags)?;
         self.push_stringified(stringified)
-    }
-
-    fn push_bool(&mut self, b: bool) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_char(&mut self, ch: char) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_i64(&mut self, n: i64, suff: NumberSuffix) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_i128(&mut self, n: i128) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_u64(&mut self, n: u64, suff: NumberSuffix) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_u128(&mut self, n: u128) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_f32(&mut self, n: f32) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_f64(&mut self, n: f64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_int(&mut self, n: i64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_uint(&mut self, n: u64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_float(&mut self, n: f64) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_str(&mut self, s: &str) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_unit(&mut self) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
-    }
-
-    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
-        todo!()
     }
 
     fn push_maybe_begin(&mut self) -> fmt::Result {
@@ -1207,6 +1124,16 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
     }
 
     fn push_array_end(&mut self) -> fmt::Result {
+        todo!()
+    }
+
+    fn push_unit(&mut self) -> fmt::Result {
+        todo!()
+    }
+    fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
+        todo!()
+    }
+    fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
         todo!()
     }
 
@@ -1265,121 +1192,69 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
     fn push_comma(&mut self) -> fmt::Result {
         todo!()
     }
+
+    fn semicolon(&mut self) -> fmt::Result {
+        todo!()
+    }
 }
 
 //==================================================================================================
 
-enum Numeric {
-    Int(i64),
-    UInt(u64),
-    Float32(f32),
-    Float64(f64),
-    LongInt { lo: u64, hi: i64 },
-    LongUInt { lo: u64, hi: u64 },
-}
-
-impl From<Number2> for Numeric {
-    fn from(value: Number2) -> Self {
-        match value {
-            Number2::Int8(x) => Numeric::Int(x as _),
-            Number2::Int16(x) => Numeric::Int(x as _),
-            Number2::Int32(x) => Numeric::Int(x as _),
-            Number2::Int64(x) => Numeric::Int(x),
-            Number2::Int128 { lo, hi } => Numeric::LongInt { lo, hi },
-            Number2::UInt8(x) => Numeric::UInt(x as _),
-            Number2::UInt16(x) => Numeric::UInt(x as _),
-            Number2::UInt32(x) => Numeric::UInt(x as _),
-            Number2::UInt64(x) => Numeric::UInt(x),
-            Number2::UInt128 { lo, hi } => Numeric::LongUInt { lo, hi },
-            Number2::Float32(Float32(x)) => Numeric::Float32(x),
-            Number2::Float64(Float64(x)) => Numeric::Float64(x),
-
-            Number2::IntNoSuffix(x) => Numeric::Int(x),
-            Number2::UIntNoSuffix(x) => Numeric::UInt(x),
-            Number2::FloatNoSuffix(Float64(x)) => Numeric::Float64(x),
-        }
+fn write_bool(dst: &mut impl Write, b: bool) -> fmt::Result {
+    match b {
+        true => dst.write_str("true"),
+        false => dst.write_str("false"),
     }
 }
 
-fn write_number(dst: &mut impl Write, number: Number2, suffix_control: NumericSuffix) -> fmt::Result {
-    let mut buf = [0x00u8; lexical_core::BUFFER_SIZE];
-
-    macro_rules! write_number_case {
-        ($x:expr, $buf:ident, $write_options:path) => {
-            dst.write_str(unsafe {
-                core::str::from_utf8_unchecked(lexical_core::write_with_options::<_, NUMBER_FORMAT>(
-                    $x,
-                    &mut $buf,
-                    &$write_options,
-                ))
-            })?
-        };
-    }
-    match Numeric::from(number) {
-        Numeric::Int(x) => write_number_case!(x, buf, WRITE_INTEGER_OPTS),
-        Numeric::UInt(x) => write_number_case!(x, buf, WRITE_INTEGER_OPTS),
-        Numeric::Float32(x) => write_number_case!(x, buf, WRITE_FLOAT_OPTS),
-        Numeric::Float64(x) => write_number_case!(x, buf, WRITE_FLOAT_OPTS),
-        Numeric::LongInt { lo, hi } => write_number_case!((hi as i128) << 64 | lo as i128, buf, WRITE_INTEGER_OPTS),
-        Numeric::LongUInt { lo, hi } => write_number_case!((hi as u128) << 64 | lo as u128, buf, WRITE_INTEGER_OPTS),
-    }
-
-    if matches!(
-        number,
-        Number2::IntNoSuffix(_) | Number2::UIntNoSuffix(_) | Number2::FloatNoSuffix(_)
-    ) {
-        return Ok(());
-    }
-    match number {
-        Number2::Int128 { .. } => dst.write_str("i128"),
-        Number2::UInt128 { .. } => dst.write_str("u128"),
-
-        _ => match suffix_control <= NumericSuffix::IntegerOnly {
-            true => match number {
-                Number2::Int8(_) => dst.write_str("i8"),
-                Number2::Int16(_) => dst.write_str("i16"),
-                Number2::Int32(_) => dst.write_str("i32"),
-                Number2::Int64(_) => dst.write_str("i64"),
-                Number2::UInt8(_) => dst.write_str("u8"),
-                Number2::UInt16(_) => dst.write_str("u16"),
-                Number2::UInt32(_) => dst.write_str("u32"),
-                Number2::UInt64(_) => dst.write_str("u64"),
-
-                _ => match suffix_control <= NumericSuffix::Always {
-                    true => match number {
-                        Number2::Float32(_) => dst.write_str("f32"),
-                        Number2::Float64(_) => dst.write_str("f64"),
-
-                        _ => unreachable!(),
-                    },
-                    false => Ok(()),
-                },
-            },
-            false => Ok(()),
-        },
-    }
+fn write_quoted_char(dst: &mut impl Write, ch: char) -> fmt::Result {
+    dst.write_str(r#"'"#)?;
+    write_escaped_char::<false>(dst, ch)?;
+    dst.write_str(r#"'"#)
 }
 
-//------------------------------------------------------------------------------
+fn write_quoted_string(dst: &mut impl Write, s: &str) -> fmt::Result {
+    dst.write_str(r#"""#)?;
+    s.chars().try_for_each(|ch| write_escaped_char::<true>(dst, ch))?;
+    dst.write_str(r#"""#)
+}
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TextualKind {
-    Char,
-    String,
+fn write_quoted_byte_string(dst: &mut impl Write, bytes: &[u8]) -> fmt::Result {
+    dst.write_str(r#"b""#)?;
+    bytes
+        .into_iter()
+        .try_for_each(|&byte| write_escaped_byte::<true>(dst, byte))?;
+    dst.write_str(r#"""#)
 }
 
 #[inline(always)]
-fn write_escaped_byte(dst: &mut impl Write, byte: u8, ctx: TextualKind) -> fmt::Result {
+fn write_escaped_char<const IN_STR: bool>(dst: &mut impl Write, ch: char) -> fmt::Result {
+    match ch {
+        '\0' => dst.write_str(r#"\0"#),
+        '\n' => dst.write_str(r#"\n"#),
+        '\t' => dst.write_str(r#"\t"#),
+        '\r' => dst.write_str(r#"\r"#),
+        '\"' if IN_STR => dst.write_str(r#"\""#),
+        '\'' if !IN_STR => dst.write_str(r#"\'"#),
+        ch if ch.is_ascii_control() => {
+            dst.write_str(r#"\x"#)?;
+            write_u8_fmt_02_hex(dst, ch as u8)
+        }
+        ch => dst.write_char(ch),
+    }
+}
+
+#[inline(always)]
+fn write_escaped_byte<const IN_STR: bool>(dst: &mut impl Write, byte: u8) -> fmt::Result {
     match byte {
         b'\0' => dst.write_str(r#"\0"#),
         b'\n' => dst.write_str(r#"\n"#),
         b'\t' => dst.write_str(r#"\t"#),
         b'\r' => dst.write_str(r#"\r"#),
-        b'\'' if ctx == TextualKind::Char => dst.write_str(r#"\'"#),
-        b'\"' if ctx == TextualKind::String => dst.write_str(r#"\""#),
-        0x20..=0x7e => dst.write_char(byte.into()),
-        _ => {
+        b'\"' if IN_STR => dst.write_str(r#"\""#),
+        b'\'' if !IN_STR => dst.write_str(r#"\'"#),
+        byte if !byte.is_ascii_control() => dst.write_char(byte.into()),
+        byte => {
             dst.write_str(r#"\x"#)?;
             write_u8_fmt_02_hex(dst, byte)
         }
@@ -1387,115 +1262,148 @@ fn write_escaped_byte(dst: &mut impl Write, byte: u8, ctx: TextualKind) -> fmt::
 }
 
 #[inline(always)]
-fn write_escaped_char(dst: &mut impl Write, ch: char, ctx: TextualKind) -> fmt::Result {
-    match ch {
-        '\0' => dst.write_str(r#"\0"#),
-        '\n' => dst.write_str(r#"\n"#),
-        '\t' => dst.write_str(r#"\t"#),
-        '\r' => dst.write_str(r#"\r"#),
-        '\'' if ctx == TextualKind::Char => dst.write_str(r#"\'"#),
-        '\"' if ctx == TextualKind::String => dst.write_str(r#"\""#),
-        '\x01'..='\x19' | '\x7f' => {
-            dst.write_str(r#"\x"#)?;
-            write_u8_fmt_02_hex(dst, ch as u8)
-        }
-        _ => dst.write_char(ch),
-    }
-}
-
-#[inline(always)]
 fn write_u8_fmt_02_hex(dst: &mut impl Write, byte: u8) -> fmt::Result {
-    const NUMBER_FORMAT_HEX_NO_PREFIX: u128 = lexical_core::NumberFormatBuilder::rebuild(NUMBER_FORMAT)
-        .mantissa_radix(16)
-        .build_strict();
+    use lexical_write_integer::{NumberFormatBuilder, Options, ToLexicalWithOptions};
 
     let mut buf = [b'0'; 2];
-
-    lexical_core::write_with_options::<u8, NUMBER_FORMAT_HEX_NO_PREFIX>(
-        byte,
+    byte.to_lexical_with_options::<{ NumberFormatBuilder::hexadecimal() }>(
         &mut buf[(byte < 0x10) as usize..],
-        &WRITE_INTEGER_OPTS,
+        &Options::new(),
     );
 
     dst.write_str(unsafe { ::core::str::from_utf8_unchecked(&buf) })
 }
 
-fn write_quoted_char(dst: &mut impl Write, ch: char) -> fmt::Result {
-    dst.write_str(r#"'"#)?;
-    write_escaped_char(dst, ch, TextualKind::Char)?;
-    dst.write_str(r#"'"#)
+//------------------------------------------------------------------------------
+
+fn write_i64(dst: &mut impl Write, n: i64) -> fmt::Result {
+    use lexical_write_integer::{FormattedSize, ToLexical};
+    let mut buf = [0; i64::FORMATTED_SIZE_DECIMAL];
+    let digits = n.to_lexical(&mut buf);
+    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
 }
 
-fn write_quoted_string(dst: &mut impl Write, s: &str) -> fmt::Result {
-    dst.write_str(r#"""#)?;
-    s.chars()
-        .try_for_each(|ch| write_escaped_char(dst, ch, TextualKind::String))?;
-    dst.write_str(r#"""#)
+fn write_i128(dst: &mut impl Write, n: i128) -> fmt::Result {
+    use lexical_write_integer::{FormattedSize, ToLexical};
+    let mut buf = [0; i128::FORMATTED_SIZE_DECIMAL];
+    let digits = n.to_lexical(&mut buf);
+    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
 }
 
-fn write_quoted_bytes(dst: &mut impl Write, bytes: &[u8]) -> fmt::Result {
-    dst.write_str(r#"b""#)?;
-    bytes
-        .into_iter()
-        .try_for_each(|&byte| write_escaped_byte(dst, byte, TextualKind::String))?;
-    dst.write_str(r#"""#)
+fn write_u64(dst: &mut impl Write, n: u64) -> fmt::Result {
+    use lexical_write_integer::{FormattedSize, ToLexical};
+    let mut buf = [0; i64::FORMATTED_SIZE_DECIMAL];
+    let digits = n.to_lexical(&mut buf);
+    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
+}
+
+fn write_u128(dst: &mut impl Write, n: u128) -> fmt::Result {
+    use lexical_write_integer::{FormattedSize, ToLexical};
+    let mut buf = [0; i128::FORMATTED_SIZE_DECIMAL];
+    let digits = n.to_lexical(&mut buf);
+    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
+}
+
+fn write_f32(dst: &mut impl Write, n: f32) -> fmt::Result {
+    dst.write_str(zmij::Buffer::new().format(n))
+}
+
+fn write_f64(dst: &mut impl Write, n: f64) -> fmt::Result {
+    dst.write_str(zmij::Buffer::new().format(n))
+}
+
+fn write_number_suffix(dst: &mut impl Write, suff: NumberSuffix, flags: Flags) -> fmt::Result {
+    macro_rules! cond_write {
+        ($dst:ident, $cond:expr, $suff:literal) => {{
+            if $cond {
+                $dst.write_str($suff)?;
+            }
+            Ok(())
+        }};
+    }
+    let int_suff = flags.write_integer_suffix();
+    let float_suff = flags.write_float_suffix();
+    match suff {
+        NumberSuffix::Int128 => dst.write_str("i128"),
+        NumberSuffix::UInt128 => dst.write_str("u128"),
+        NumberSuffix::Int8 => cond_write!(dst, int_suff, "i8"),
+        NumberSuffix::Int16 => cond_write!(dst, int_suff, "i16"),
+        NumberSuffix::Int32 => cond_write!(dst, int_suff, "i32"),
+        NumberSuffix::Int64 => cond_write!(dst, int_suff, "i64"),
+        NumberSuffix::UInt8 => cond_write!(dst, int_suff, "u8"),
+        NumberSuffix::UInt16 => cond_write!(dst, int_suff, "u16"),
+        NumberSuffix::UInt32 => cond_write!(dst, int_suff, "u32"),
+        NumberSuffix::UInt64 => cond_write!(dst, int_suff, "u64"),
+        NumberSuffix::Float32 => cond_write!(dst, float_suff, "f32"),
+        NumberSuffix::Float64 => cond_write!(dst, float_suff, "f64"),
+    }
+}
+
+fn write_number(dst: &mut impl Write, num: &Number2, flags: Flags) -> fmt::Result {
+    match *num {
+        Number2::Int8(v) => write_i64(dst, v.into()),
+        Number2::Int16(v) => write_i64(dst, v.into()),
+        Number2::Int32(v) => write_i64(dst, v.into()),
+        Number2::Int64(v) => write_i64(dst, v),
+        Number2::IntNoSuffix(v) => write_i64(dst, v),
+
+        Number2::UInt8(v) => write_u64(dst, v.into()),
+        Number2::UInt16(v) => write_u64(dst, v.into()),
+        Number2::UInt32(v) => write_u64(dst, v.into()),
+        Number2::UInt64(v) => write_u64(dst, v),
+        Number2::UIntNoSuffix(v) => write_u64(dst, v),
+
+        Number2::Float32(Float32(v)) => write_f32(dst, v),
+        Number2::Float64(Float64(v)) => write_f64(dst, v),
+        Number2::FloatNoSuffix(Float64(v)) => write_f64(dst, v),
+
+        Number2::Int128 { lo, hi } => write_i128(dst, (hi as i128) << 64 | lo as i128),
+        Number2::UInt128 { lo, hi } => write_u128(dst, (hi as u128) << 64 | lo as u128),
+    }?;
+    if let Some(suff) = num.suffix() {
+        write_number_suffix(dst, suff, flags)?;
+    }
+    Ok(())
+}
+
+fn write_scalar(dst: &mut impl Write, scalar: &Scalar, flags: Flags) -> fmt::Result {
+    match scalar {
+        Scalar::Char(ch) => write_quoted_char(dst, *ch),
+        Scalar::Number(num) => write_number(dst, num, flags),
+    }
 }
 
 //------------------------------------------------------------------------------
 
-fn write_nominal_path(
-    dst: &mut impl Write,
-    kind: NominalKind,
-    path: NominalPathRef<'_>,
-    style: NominalPathStyle,
-) -> fmt::Result {
-    use {NominalKind as Kind, NominalPathRef as Path, NominalPathStyle as Style};
-
-    match path {
-        Path::Dual { name, parent } => {
-            if matches!(kind, Kind::Unspecified) || style <= Style::Full {
-                dst.write_str(&parent)?;
-                dst.write_str("::")?;
-                dst.write_str(&name)
-            } else if matches!(kind, Kind::Variant) || style <= Style::Named {
-                dst.write_str(&name)
-            } else {
-                dst.write_str("_")
-            }
-        }
-        Path::Single { name } => {
-            if matches!(kind, Kind::Unspecified | Kind::Variant) || style <= Style::Named {
-                dst.write_str(&name)
-            } else {
-                dst.write_str("_")
-            }
-        }
-        Path::Underscore => {
-            if matches!(kind, Kind::Unspecified | Kind::Struct) {
-                dst.write_str("_")
-            } else {
-                panic!("missing variant name")
-            }
-        }
+fn write_struct_name(dst: &mut impl Write, name: Option<&Ident>, flags: Flags) -> fmt::Result {
+    if !flags.omit_struct_name() && name.is_some() {
+        dst.write_str(name.unwrap())
+    } else {
+        dst.write_str("_")
     }
 }
 
-fn write_literal(dst: &mut impl Write, literal: Literal<'_>, suffix_control: NumericSuffix) -> fmt::Result {
-    match literal {
-        Literal::Bool(b) => match b {
-            true => dst.write_str("true"),
-            false => dst.write_str("false"),
-        },
-        Literal::Char(ch) => write_quoted_char(dst, ch),
-        Literal::Number(num) => write_number(dst, num, suffix_control),
-        Literal::Str(s) => write_quoted_string(dst, s),
-        Literal::Bytes(bytes) => write_quoted_bytes(dst, bytes),
+fn write_newtype_name(dst: &mut impl Write, name: Option<&Ident>, flags: Flags) -> fmt::Result {
+    if !flags.implicit_newtype() {
+        if !flags.omit_newtype_name() && name.is_some() {
+            dst.write_str("~")?;
+            dst.write_str(name.unwrap())?;
+            dst.write_str(" ")?;
+        } else {
+            dst.write_str("!")?;
+        }
     }
+    Ok(())
 }
 
-fn write_scalar(dst: &mut impl Write, scalar: &Scalar, suffix_control: NumericSuffix) -> fmt::Result {
-    match scalar {
-        Scalar::Char(ch) => write_quoted_char(dst, *ch),
-        Scalar::Number(num) => write_number(dst, *num, suffix_control),
+fn write_variant_name(dst: &mut impl Write, name: Option<&Ident>, variant: &Ident, flags: Flags) -> fmt::Result {
+    if !flags.implicit_variant() {
+        if !flags.omit_enum_name() && name.is_some() {
+            dst.write_str(name.unwrap())?;
+            dst.write_str("::")?;
+        } else {
+            dst.write_str(".")?;
+        }
     }
+    dst.write_str(variant)
 }
