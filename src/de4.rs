@@ -1,5 +1,6 @@
 use self::{error::*, source::*};
 use crate::{format::*, value::*, PrivateMethod};
+use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 use either::Either;
 

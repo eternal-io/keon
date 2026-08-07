@@ -1,4 +1,5 @@
 use super::*;
+use alloc::vec;
 use core::fmt;
 use serde::ser::{
     Error, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,

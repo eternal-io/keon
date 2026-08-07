@@ -1,5 +1,5 @@
 use super::{PrivateMethod, SerializerImpl};
-use crate::value::{Ident, NumberSuffix};
+use crate::value::Ident;
 use core::{
     fmt,
     ops::{Deref, DerefMut},
@@ -143,7 +143,7 @@ impl<Impl: SerializerImpl> Serializer for SerializerWrapper<'_, Impl> {
     }
     fn serialize_struct(mut self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         let _ = len;
-        self.push_map_struct_begin(Some(Ident::new_unchecked(name)))?;
+        self.push_map_struct_begin(Some(Ident::new_unchecked(name)), true)?;
         Ok(self)
     }
     fn serialize_struct_variant(
@@ -210,6 +210,7 @@ impl<Impl: SerializerImpl> SerializeMap for SerializerWrapper<'_, Impl> {
     type Ok = ();
     type Error = fmt::Error;
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> fmt::Result {
+        self.hint_map_key();
         self.serialize_inner(key)?;
         self.push_fat_arrow()
     }
@@ -224,8 +225,8 @@ impl<Impl: SerializerImpl> SerializeMap for SerializerWrapper<'_, Impl> {
 impl<Impl: SerializerImpl> SerializeStruct for SerializerWrapper<'_, Impl> {
     type Ok = ();
     type Error = fmt::Error;
-    fn serialize_field<T: ?Sized + Serialize>(&mut self, field: &'static str, value: &T) -> fmt::Result {
-        self.push_identifier(Ident::new_unchecked(field))?;
+    fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> fmt::Result {
+        self.push_identifier(Ident::new_unchecked(key))?;
         self.push_colon()?;
         self.serialize_inner(value)?;
         self.push_comma()
@@ -237,8 +238,8 @@ impl<Impl: SerializerImpl> SerializeStruct for SerializerWrapper<'_, Impl> {
 impl<Impl: SerializerImpl> SerializeStructVariant for SerializerWrapper<'_, Impl> {
     type Ok = ();
     type Error = fmt::Error;
-    fn serialize_field<T: ?Sized + Serialize>(&mut self, field: &'static str, value: &T) -> fmt::Result {
-        self.push_identifier(Ident::new_unchecked(field))?;
+    fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> fmt::Result {
+        self.push_identifier(Ident::new_unchecked(key))?;
         self.push_colon()?;
         self.serialize_inner(value)?;
         self.push_comma()

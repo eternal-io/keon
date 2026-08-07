@@ -1,5 +1,6 @@
 use super::{error::*, source::*, Deserialize, Deserializer, PrivateMethod};
 use crate::value::*;
+use alloc::{borrow::ToOwned, boxed::Box};
 use either::Either;
 
 impl<'de> Deserialize<'de> for Value2 {

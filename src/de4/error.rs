@@ -1,3 +1,4 @@
+use alloc::string::String;
 use core::fmt;
 
 pub(crate) type Result<T = ()> = ::core::result::Result<T, Error>;
@@ -87,7 +88,7 @@ pub enum ErrorKind {
     UnexpectedUnderscoreIdentifier,
 }
 
-impl core::error::Error for ErrorKind {}
+impl serde::de::StdError for ErrorKind {}
 
 impl serde::de::Error for ErrorKind {
     fn custom<T: fmt::Display>(msg: T) -> Self {

@@ -15,6 +15,7 @@ impl super::Serialize for Value2 {
 
         let ser_values_map = |ser: &mut super::Serializer<Impl>, values_map: &ValuesMap2| -> fmt::Result {
             for (key, value) in values_map.iter() {
+                ser.hint_map_key();
                 ser.serialize_inner(key)?;
                 ser.push_fat_arrow()?;
                 ser.serialize_inner(value)?;
@@ -91,7 +92,7 @@ impl super::Serialize for Value2 {
             }
             Value2::MapStruct(r#struct) => {
                 let Struct { name, body } = r#struct.as_ref();
-                ser.push_map_struct_begin(name.as_deref())?;
+                ser.push_map_struct_begin(name.as_deref(), true)?;
                 ser_fields_map(ser, body)?;
                 ser.push_map_like_end()
             }

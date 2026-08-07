@@ -17,7 +17,7 @@ categories = ["encoding"]
 
 
 [features]
-default = ["std", "alloc"]
+default = ["std", "alloc", "dep:ecow"]
 std = [
     "alloc",
     "serde/std",
@@ -27,12 +27,14 @@ std = [
     "lexical-parse-float/std",
     "lexical-parse-integer/std",
     "lexical-write-integer/std",
+    "ecow/std",
 ]
 alloc = [
     "serde/alloc",
     "memchr/alloc",
     "data-encoding/alloc",
 ]
+ecow = ["alloc"]
 
 
 [dependencies]
@@ -48,6 +50,7 @@ lexical-core = { version = "1.0.6", features = ["format", "power-of-two"] }
 lexical-parse-float = { version = "1.0.6", default-features = false, features = ["format"] }
 lexical-parse-integer = { version = "1.0.6", default-features = false, features = ["format", "power-of-two"] }
 lexical-write-integer = { version = "1.0.6", default-features = false }
+ecow = { version = "0.3.0", default-features = false, optional = true }
 
 
 [dev-dependencies]

@@ -1,4 +1,5 @@
 use super::{error::*, source::*, PrivateMethod};
+use alloc::string::ToString;
 use core::ops::{Deref, DerefMut};
 use either::Either;
 use serde::{

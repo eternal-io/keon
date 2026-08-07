@@ -1,14 +1,19 @@
 use crate::{value::*, PrivateMethod};
+#[cfg(feature = "alloc")]
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::{
     fmt::{self, Write},
     ops::{Deref, DerefMut},
 };
 
-#[cfg(feature = "alloc")]
-use alloc::collections::VecDeque;
-
 mod ser_concr;
+#[cfg(feature = "alloc")]
 mod ser_value;
+
+#[cfg(feature = "ecow")]
+type EcoString = ecow::EcoString;
+#[cfg(not(feature = "ecow"))]
+type EcoString = alloc::string::String;
 
 #[cfg(feature = "alloc")]
 pub fn stringify<T: Serialize>(value: &T) -> Result<String, fmt::Error> {
@@ -37,13 +42,19 @@ pub trait SerializerImpl: SerializerImplDetail {}
 
 trait SerializerImplDetail {
     #[cfg(feature = "alloc")]
-    fn push_stringified(&mut self, stringified: String) -> fmt::Result;
+    fn push_stringified(&mut self, stringified: EcoString) -> fmt::Result;
 
     fn push_bool(&mut self, b: bool) -> fmt::Result;
     fn push_char(&mut self, ch: char) -> fmt::Result;
     fn push_number(&mut self, num: &Number2) -> fmt::Result;
     fn push_str(&mut self, s: &str) -> fmt::Result;
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result;
+    fn push_scalar(&mut self, scalar: &Scalar) -> fmt::Result {
+        match scalar {
+            Scalar::Char(ch) => self.push_char(*ch),
+            Scalar::Number(num) => self.push_number(num),
+        }
+    }
 
     fn push_i8(&mut self, n: i8) -> fmt::Result;
     fn push_i16(&mut self, n: i16) -> fmt::Result;
@@ -81,7 +92,7 @@ trait SerializerImplDetail {
     fn push_tuple_like_end(&mut self) -> fmt::Result;
 
     fn push_map_begin(&mut self) -> fmt::Result;
-    fn push_map_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result;
+    fn push_map_struct_begin(&mut self, name: Option<&Ident>, intercept_range: bool) -> fmt::Result;
     fn push_map_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result;
     fn push_map_like_end(&mut self) -> fmt::Result;
 
@@ -89,6 +100,8 @@ trait SerializerImplDetail {
     fn push_newtype_end(&mut self) -> fmt::Result;
 
     fn push_identifier(&mut self, field: &Ident) -> fmt::Result;
+
+    fn hint_map_key(&mut self);
     fn push_fat_arrow(&mut self) -> fmt::Result;
     fn push_colon(&mut self) -> fmt::Result;
     fn push_comma(&mut self) -> fmt::Result;
@@ -125,7 +138,7 @@ impl<Impl> Serializer<Impl> {
 
 impl<W: Write> Serializer<FastImpl<W>> {
     pub fn new(dst: W) -> Self {
-        Self::with_flags(dst, Flags::COMPACT_OMIT_NAMES)
+        Self::with_flags(dst, Flags::SMALLER_OMIT_NAMES)
     }
 
     pub fn with_flags(dst: W, flags: Flags) -> Self {
@@ -188,80 +201,84 @@ impl<Impl: SerializerImpl> Serializer<Impl> {
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct Flags: u16 {
-        const HARD_TAB              = 1 << 0;
-
-        const WRITE_INTEGER_SUFFIX  = 1 << 1;
-        const WRITE_FLOAT_SUFFIX    = 1 << 2;
+        const EXPAND_DEPTH_PLUS_1   = 1 << 0;
+        const EXPAND_DEPTH_PLUS_2   = 1 << 1;
+        const EXPAND_DEPTH_PLUS_4   = 1 << 2;
 
         const MAX_WIDTH_PLUS_8      = 1 << 3;
         const MAX_WIDTH_PLUS_16     = 1 << 4;
         const MAX_WIDTH_PLUS_32     = 1 << 5;
         const MAX_WIDTH_PLUS_64     = 1 << 6;
 
-        const OMIT_STRUCT_NAME      = 1 << 7;
-        const OMIT_NEWTYPE_NAME     = 1 << 8;
-        const IMPLICIT_NEWTYPE      = 1 << 9;
+        const COMPACTIZED_MAP_KEY   = 1 << 7;
+
+        const OMIT_STRUCT_NAME      = 1 << 8;
+        const OMIT_NEWTYPE_NAME     = 1 << 9;
         const OMIT_ENUM_NAME        = 1 << 10;
-        const IMPLICIT_VARIANT      = 1 << 11;
+        const IMPLICIT_NEWTYPE      = 1 << 11;
+        const IMPLICIT_VARIANT      = 1 << 12;
 
-        const COMPACTIZE_MAP_KEY    = 1 << 12;
-        const EXPAND_ROOT_STRUCTURE = 1 << 13;
+        const WRITE_INTEGER_SUFFIX  = 1 << 13;
+        const WRITE_FLOAT_SUFFIX    = 1 << 14;
 
-        const WRITE_NUMBER_SUFFIX
-            = Self::WRITE_INTEGER_SUFFIX.bits()
-            | Self::WRITE_FLOAT_SUFFIX.bits();
+        const HARD_TAB              = 1 << 15;
 
+        const EXPAND_DEPTH_EQUAL_7
+            = Self::EXPAND_DEPTH_PLUS_1.bits()
+            | Self::EXPAND_DEPTH_PLUS_2.bits()
+            | Self::EXPAND_DEPTH_PLUS_4.bits()
+            ;
         const MAX_WIDTH_EQUAL_120
             = Self::MAX_WIDTH_PLUS_8.bits()
             | Self::MAX_WIDTH_PLUS_16.bits()
             | Self::MAX_WIDTH_PLUS_32.bits()
-            | Self::MAX_WIDTH_PLUS_64.bits();
-
-        const OMIT_STRUCTURE_NAMES
+            | Self::MAX_WIDTH_PLUS_64.bits()
+            ;
+        const OMIT_NOMINAL_NAMES
             = Self::OMIT_STRUCT_NAME.bits()
             | Self::OMIT_NEWTYPE_NAME.bits()
-            | Self::OMIT_ENUM_NAME.bits();
-
-        const IMPLICIT_STRUCTURES
+            | Self::OMIT_ENUM_NAME.bits()
+            ;
+        const IMPLICIT_STRUCTURALS
             = Self::IMPLICIT_NEWTYPE.bits()
-            | Self::IMPLICIT_VARIANT.bits();
-
-        const EXPANDED
-            = Self::EXPAND_ROOT_STRUCTURE.bits();
-
+            | Self::IMPLICIT_VARIANT.bits()
+            ;
+        const WRITE_NUMBER_SUFFIX
+            = Self::WRITE_INTEGER_SUFFIX.bits()
+            | Self::WRITE_FLOAT_SUFFIX.bits()
+            ;
         const DEFAULT
-            = Self::MAX_WIDTH_EQUAL_120.bits()
-            | Self::COMPACTIZE_MAP_KEY.bits()
-            | Self::EXPAND_ROOT_STRUCTURE.bits();
-
-        const COMPACT_OMIT_NAMES
-            = Self::HARD_TAB.bits()
+            = Self::EXPAND_DEPTH_PLUS_1.bits()
             | Self::MAX_WIDTH_EQUAL_120.bits()
-            | Self::OMIT_STRUCTURE_NAMES.bits()
-            | Self::COMPACTIZE_MAP_KEY.bits();
-
-        const COMPACT_IMPLICIT_ALL
-            = Self::HARD_TAB.bits()
+            | Self::COMPACTIZED_MAP_KEY.bits()
+            ;
+        const SMALLER_OMIT_NAMES
+            = Self::EXPAND_DEPTH_PLUS_1.bits()
             | Self::MAX_WIDTH_EQUAL_120.bits()
-            | Self::OMIT_STRUCTURE_NAMES.bits()
-            | Self::IMPLICIT_STRUCTURES.bits()
-            | Self::COMPACTIZE_MAP_KEY.bits();
+            | Self::COMPACTIZED_MAP_KEY.bits()
+            | Self::OMIT_NOMINAL_NAMES.bits()
+            | Self::HARD_TAB.bits()
+            ;
+        const SMALLER_IMPLICIT_ALL
+            = Self::EXPAND_DEPTH_PLUS_1.bits()
+            | Self::MAX_WIDTH_EQUAL_120.bits()
+            | Self::COMPACTIZED_MAP_KEY.bits()
+            | Self::OMIT_NOMINAL_NAMES.bits()
+            | Self::IMPLICIT_STRUCTURALS.bits()
+            | Self::HARD_TAB.bits()
+            ;
     }
 }
 
 impl Flags {
-    pub fn hard_tab(&self) -> bool {
-        self.contains(Self::HARD_TAB)
+    pub fn expand_depth(&self) -> usize {
+        self.intersection(Self::EXPAND_DEPTH_EQUAL_7).bits() as usize
     }
     pub fn max_width(&self) -> usize {
         self.intersection(Self::MAX_WIDTH_EQUAL_120).bits() as usize
     }
-
-    pub fn write_integer_suffix(&self) -> bool {
-        self.contains(Self::WRITE_INTEGER_SUFFIX)
-    }
-    pub fn write_float_suffix(&self) -> bool {
-        self.contains(Self::WRITE_FLOAT_SUFFIX)
+    pub fn compactized_map_key(&self) -> bool {
+        self.contains(Self::COMPACTIZED_MAP_KEY)
     }
 
     pub fn omit_struct_name(&self) -> bool {
@@ -270,21 +287,24 @@ impl Flags {
     pub fn omit_newtype_name(&self) -> bool {
         self.contains(Self::OMIT_NEWTYPE_NAME)
     }
-    pub fn implicit_newtype(&self) -> bool {
-        self.contains(Self::IMPLICIT_NEWTYPE)
-    }
     pub fn omit_enum_name(&self) -> bool {
         self.contains(Self::OMIT_ENUM_NAME)
+    }
+    pub fn implicit_newtype(&self) -> bool {
+        self.contains(Self::IMPLICIT_NEWTYPE)
     }
     pub fn implicit_variant(&self) -> bool {
         self.contains(Self::IMPLICIT_VARIANT)
     }
 
-    pub fn compactize_map_key(&self) -> bool {
-        self.contains(Self::COMPACTIZE_MAP_KEY)
+    pub fn write_integer_suffix(&self) -> bool {
+        self.contains(Self::WRITE_INTEGER_SUFFIX)
     }
-    pub fn expand_root_structure(&self) -> bool {
-        self.contains(Self::EXPAND_ROOT_STRUCTURE)
+    pub fn write_float_suffix(&self) -> bool {
+        self.contains(Self::WRITE_FLOAT_SUFFIX)
+    }
+    pub fn hard_tab(&self) -> bool {
+        self.contains(Self::HARD_TAB)
     }
 }
 
@@ -293,17 +313,7 @@ impl Flags {
 pub struct FastImpl<W> {
     dst: W,
     flags: Flags,
-    range_intercept: Option<RangeType>,
-    range_start: Option<Option<Scalar>>,
-    range_end: Option<Option<Scalar>>,
-}
-
-enum RangeType {
-    RangeTo,
-    RangeToInclusive,
-    RangeFrom,
-    Range,
-    RangeInclusive,
+    interceptor: RangeInterceptor,
 }
 
 impl<W> FastImpl<W> {
@@ -311,17 +321,14 @@ impl<W> FastImpl<W> {
         Self {
             dst,
             flags,
-            range_intercept: None,
-            range_start: None,
-            range_end: None,
+            interceptor: Default::default(),
         }
     }
 }
 
 impl<W: Write> FastImpl<W> {
-    #[inline(always)]
     fn clear_range_intercept(&mut self) -> fmt::Result {
-        if self.range_intercept.is_some() {
+        if self.interceptor.is_active() {
             self.clear_range_intercept_cold()?;
         }
         Ok(())
@@ -330,87 +337,21 @@ impl<W: Write> FastImpl<W> {
     #[cold]
     #[inline(never)]
     fn clear_range_intercept_cold(&mut self) -> fmt::Result {
-        if let Some(typ) = self.range_intercept.take() {
-            self.dst.write_str(match typ {
-                RangeType::RangeTo => "RangeTo",
-                RangeType::RangeToInclusive => "RangeToInclusive",
-                RangeType::RangeFrom => "RangeFrom",
-                RangeType::Range => "Range",
-                RangeType::RangeInclusive => "RangeInclusive",
-            })?;
-            self.dst.write_str("{")?;
-        }
-        if let Some(start) = self.range_start.take() {
-            self.dst.write_str("start")?;
-            if let Some(scalar) = start {
-                self.dst.write_str(":")?;
-                write_scalar(&mut self.dst, &scalar, self.flags)?;
-                self.dst.write_str(",")?;
-            }
-        }
-        if let Some(end) = self.range_end.take() {
-            self.dst.write_str("end")?;
-            if let Some(scalar) = end {
-                self.dst.write_str(":")?;
-                write_scalar(&mut self.dst, &scalar, self.flags)?;
-                self.dst.write_str(",")?;
-            }
-        }
-        Ok(())
+        core::mem::take(&mut self.interceptor).clear(self)
     }
 
-    fn intercept_range_field(&mut self, field: &Ident) -> Result<bool, fmt::Error> {
-        let Some(ref typ) = self.range_intercept else {
-            return Ok(false);
-        };
-
-        let field = field.as_str();
-        #[rustfmt::skip]
-        if field == "start"
-            && self.range_start.is_none()
-            && matches!(typ, RangeType::Range | RangeType::RangeInclusive | RangeType::RangeFrom)
-        {
-            self.range_start = Some(None);
-        } else if field == "end"
-            && self.range_end.is_none()
-            && matches!(typ, RangeType::Range | RangeType::RangeInclusive | RangeType::RangeTo | RangeType::RangeToInclusive)
-        {
-            self.range_end = Some(None);
-        } else {
-            self.clear_range_intercept_cold()?;
-            return Ok(false);
-        };
-
-        Ok(true)
-    }
-
-    fn intercept_range_bound<T, F>(&mut self, scalar: T, callback: F) -> fmt::Result
+    fn intercept_range_bound<T, F>(&mut self, scalar: T, or_else: F) -> fmt::Result
     where
         T: Into<Scalar>,
         F: FnOnce(&mut Self, T) -> fmt::Result,
     {
-        if self.range_intercept.is_some() {
-            Ok(self.intercept_range_bound_cold(scalar))
+        if self.interceptor.is_active() {
+            Ok(self.interceptor.push_value(scalar))
         } else {
-            callback(self, scalar)
-        }
-    }
-
-    fn intercept_range_bound_cold<T>(&mut self, scalar: T)
-    where
-        T: Into<Scalar>,
-    {
-        if let Some(start @ None) = self.range_start.as_mut() {
-            *start = Some(scalar.into());
-        } else if let Some(end @ None) = self.range_start.as_mut() {
-            *end = Some(scalar.into());
-        } else {
-            unreachable!()
+            or_else(self, scalar)
         }
     }
 }
-
-impl<W: Write> SerializerImpl for FastImpl<W> {}
 
 macro_rules! push_concr_number_fast {
     ($method:ident, $ty:ty, $suff:ident, $write_fn:ident) => {
@@ -423,8 +364,10 @@ macro_rules! push_concr_number_fast {
     };
 }
 
+impl<W: Write> SerializerImpl for FastImpl<W> {}
+
 impl<W: Write> SerializerImplDetail for FastImpl<W> {
-    fn push_stringified(&mut self, _stringified: String) -> fmt::Result {
+    fn push_stringified(&mut self, _stringified: EcoString) -> fmt::Result {
         panic!("FastImpl does not rely on alloc")
     }
 
@@ -497,7 +440,7 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
         self.dst.write_str("?")
     }
     fn push_maybe_end(&mut self) -> fmt::Result {
-        debug_assert!(self.range_intercept.is_none());
+        debug_assert!(!self.interceptor.is_active());
 
         Ok(())
     }
@@ -507,7 +450,7 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
         self.dst.write_str("[")
     }
     fn push_array_end(&mut self) -> fmt::Result {
-        debug_assert!(self.range_intercept.is_none());
+        debug_assert!(!self.interceptor.is_active());
 
         self.dst.write_str("]")
     }
@@ -518,7 +461,11 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
     }
     fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
         self.clear_range_intercept()?;
-        write_struct_name(&mut self.dst, name, self.flags)
+        if let Some("RangeFull") = name.map(Ident::as_str) {
+            self.dst.write_str("..")
+        } else {
+            write_struct_name(&mut self.dst, name, self.flags)
+        }
     }
     fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
         self.clear_range_intercept()?;
@@ -540,7 +487,7 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
         self.dst.write_str("(")
     }
     fn push_tuple_like_end(&mut self) -> fmt::Result {
-        debug_assert!(self.range_intercept.is_none());
+        debug_assert!(!self.interceptor.is_active());
 
         self.dst.write_str(")")
     }
@@ -549,20 +496,10 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
         self.clear_range_intercept()?;
         self.dst.write_str("{")
     }
-    fn push_map_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
+    fn push_map_struct_begin(&mut self, name: Option<&Ident>, intercept_range: bool) -> fmt::Result {
         self.clear_range_intercept()?;
-        if let Some(name) = name {
-            'range_intercept: {
-                self.range_intercept = Some(match name.as_str() {
-                    "RangeTo" => RangeType::RangeTo,
-                    "RangeToInclusive" => RangeType::RangeToInclusive,
-                    "RangeFrom" => RangeType::RangeFrom,
-                    "Range" => RangeType::Range,
-                    "RangeInclusive" => RangeType::RangeInclusive,
-                    _ => break 'range_intercept,
-                });
-                return Ok(());
-            }
+        if self.interceptor.begin(name, intercept_range) {
+            return Ok(());
         }
         write_struct_name(&mut self.dst, name, self.flags)?;
         self.dst.write_str("{")
@@ -573,57 +510,8 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
         self.dst.write_str("{")
     }
     fn push_map_like_end(&mut self) -> fmt::Result {
-        if let Some(typ) = self.range_intercept.take() {
-            'range_intercept: {
-                match typ {
-                    RangeType::RangeTo => {
-                        if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
-                            self.dst.write_str("..")?;
-                            write_scalar(&mut self.dst, &end, self.flags)?;
-                        } else {
-                            break 'range_intercept;
-                        }
-                    }
-                    RangeType::RangeToInclusive => {
-                        if let (None, Some(Some(end))) = (self.range_start, self.range_end) {
-                            self.dst.write_str("..=")?;
-                            write_scalar(&mut self.dst, &end, self.flags)?;
-                        } else {
-                            break 'range_intercept;
-                        }
-                    }
-                    RangeType::RangeFrom => {
-                        if let (Some(Some(start)), None) = (self.range_start, self.range_end) {
-                            write_scalar(&mut self.dst, &start, self.flags)?;
-                            self.dst.write_str("..")?;
-                        } else {
-                            break 'range_intercept;
-                        }
-                    }
-                    RangeType::Range => {
-                        if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
-                            write_scalar(&mut self.dst, &start, self.flags)?;
-                            self.dst.write_str("..")?;
-                            write_scalar(&mut self.dst, &end, self.flags)?;
-                        } else {
-                            break 'range_intercept;
-                        }
-                    }
-                    RangeType::RangeInclusive => {
-                        if let (Some(Some(start)), Some(Some(end))) = (self.range_start, self.range_end) {
-                            write_scalar(&mut self.dst, &start, self.flags)?;
-                            self.dst.write_str("..=")?;
-                            write_scalar(&mut self.dst, &end, self.flags)?;
-                        } else {
-                            break 'range_intercept;
-                        }
-                    }
-                };
-                self.range_start = None;
-                self.range_end = None;
-                return Ok(());
-            }
-            self.clear_range_intercept_cold()?;
+        if core::mem::take(&mut self.interceptor).finish(self)? {
+            return Ok(());
         }
         self.dst.write_str("}")
     }
@@ -633,50 +521,55 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
         write_newtype_name(&mut self.dst, name, self.flags)
     }
     fn push_newtype_end(&mut self) -> fmt::Result {
-        debug_assert!(self.range_intercept.is_none());
+        debug_assert!(!self.interceptor.is_active());
 
         Ok(())
     }
 
     fn push_identifier(&mut self, field: &Ident) -> fmt::Result {
-        if self.intercept_range_field(field)? {
-            return Ok(());
+        match self.interceptor.push_field(field) {
+            RangeInterceptorStatus::Inactive => (),
+            RangeInterceptorStatus::Accepted => return Ok(()),
+            RangeInterceptorStatus::Rejected => self.clear_range_intercept_cold()?,
         }
         self.dst.write_str(field)
     }
+
+    fn hint_map_key(&mut self) {}
     fn push_fat_arrow(&mut self) -> fmt::Result {
-        debug_assert!(self.range_intercept.is_none());
+        debug_assert!(!self.interceptor.is_active());
 
         self.dst.write_str("=>")
     }
     fn push_colon(&mut self) -> fmt::Result {
-        if self.range_intercept.is_some() {
+        if self.interceptor.is_active() {
             return Ok(());
         }
         self.dst.write_str(":")
     }
     fn push_comma(&mut self) -> fmt::Result {
-        if self.range_intercept.is_some() {
+        if self.interceptor.is_active() {
             return Ok(());
         }
         self.dst.write_str(",")
     }
 
     fn semicolon(&mut self) -> fmt::Result {
-        debug_assert!(self.range_intercept.is_none());
+        debug_assert!(!self.interceptor.is_active());
 
-        self.dst.write_str(";")
+        self.dst.write_str(";\n")
     }
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 #[cfg(feature = "alloc")]
 pub struct PrettyImpl<W> {
     dst: W,
     flags: Flags,
-    compounds_stack: Vec<Compound>,
-    inline_entries: VecDeque<String>,
+    interceptor: RangeInterceptor,
+    line_buffer: LineBuffer<Compound>,
+    inside_map_key: u16,
 }
 
 #[cfg(feature = "alloc")]
@@ -685,520 +578,812 @@ impl<W> PrettyImpl<W> {
         Self {
             dst,
             flags,
-            compounds_stack: Vec::new(),
-            inline_entries: VecDeque::new(),
+            interceptor: Default::default(),
+            line_buffer: LineBuffer::new(),
+            inside_map_key: 0,
         }
-    }
-}
-
-#[cfg(feature = "alloc")]
-impl<W> Drop for PrettyImpl<W> {
-    fn drop(&mut self) {
-        debug_assert!(self.compounds_stack.is_empty());
-        debug_assert!(self.inline_entries.is_empty());
     }
 }
 
 #[cfg(feature = "alloc")]
 enum Compound {
-    Compact {
-        kind: CompoundKind,
-        force_compact: bool,
-        inline_entries_index: usize,
-    },
-    Expanded {
-        kind: CompoundKind,
-    },
-}
-
-#[cfg(feature = "alloc")]
-impl Compound {
-    fn kind(&self) -> &CompoundKind {
-        match self {
-            Compound::Compact { kind, .. } | Compound::Expanded { kind } => kind,
-        }
-    }
-}
-
-#[cfg(feature = "alloc")]
-enum CompoundKind {
     Maybe,
     Array,
-    TupleLike(Option<String>),
-    MapLikeLhs(Option<String>),
-    MapLikeRhs(Option<String>),
+    Tuple,
+    MapWritingKey,
+    MapWritingValue,
+    Newtype(EcoString),
+    NominalTuple(EcoString),
+    StructWritingKey(EcoString),
+    StructWritingValue(EcoString),
 }
 
 #[cfg(feature = "alloc")]
-impl CompoundKind {
-    fn new_line_child(&self) -> bool {
-        !matches!(self, CompoundKind::Maybe | CompoundKind::MapLikeRhs(_))
+impl<W: Write> PrettyImpl<W> {
+    #[inline(always)]
+    fn clear_range_intercept(&mut self) -> fmt::Result {
+        if self.interceptor.is_active() {
+            self.clear_range_intercept_cold()?;
+        }
+        Ok(())
     }
 
-    fn is_collection(&self) -> bool {
-        !matches!(self, CompoundKind::Maybe)
+    #[cold]
+    #[inline(never)]
+    fn clear_range_intercept_cold(&mut self) -> fmt::Result {
+        core::mem::take(&mut self.interceptor).clear(self)
     }
 
-    fn is_map_like(&self) -> bool {
-        matches!(self, CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_))
-    }
-
-    fn is_map_like_lhs(&self) -> bool {
-        matches!(self, CompoundKind::MapLikeLhs(_))
-    }
-
-    fn take(&mut self) -> Self {
-        match self {
-            CompoundKind::Maybe => CompoundKind::Maybe,
-            CompoundKind::Array => CompoundKind::Array,
-            CompoundKind::TupleLike(head) => CompoundKind::TupleLike(head.take()),
-            CompoundKind::MapLikeLhs(head) => CompoundKind::MapLikeLhs(head.take()),
-            CompoundKind::MapLikeRhs(head) => CompoundKind::MapLikeRhs(head.take()),
+    fn intercept_range_bound<T, F>(&mut self, scalar: T, or_writing: F) -> fmt::Result
+    where
+        T: Into<Scalar>,
+        F: FnOnce(&mut EcoString, T, Flags) -> fmt::Result,
+    {
+        if self.interceptor.is_active() {
+            Ok(self.interceptor.push_value(scalar))
+        } else {
+            self.push_stringifying(|dst, flags| or_writing(dst, scalar, flags))
         }
     }
 
-    fn write_indicator_to(&self, dst: &mut impl Write) -> fmt::Result {
-        match self {
-            CompoundKind::Maybe => dst.write_str("?"),
-            CompoundKind::Array => dst.write_str("["),
-            CompoundKind::TupleLike(head) => {
-                if let Some(head) = head {
-                    dst.write_str(head)?;
-                }
-                dst.write_str("(")
-            }
-            CompoundKind::MapLikeLhs(head) | CompoundKind::MapLikeRhs(head) => {
-                if let Some(head) = head {
-                    dst.write_str(head)?;
-                    dst.write_str(" ")?;
-                }
-                dst.write_str("{")
-            }
-        }
+    fn push_stringifying<F>(&mut self, writing: F) -> fmt::Result
+    where
+        F: FnOnce(&mut EcoString, Flags) -> fmt::Result,
+    {
+        self.push_stringified(writing_string(|dst| writing(dst, self.flags))?)
     }
 
-    fn write_terminator_to(&self, dst: &mut impl Write) -> fmt::Result {
-        match self {
-            CompoundKind::Maybe => Ok(()),
-            CompoundKind::Array => dst.write_str("]"),
-            CompoundKind::TupleLike(_) => dst.write_str(")"),
-            CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => dst.write_str("}"),
-        }
+    fn push_compound(&mut self, compound: Compound) -> fmt::Result {
+        self.line_buffer.push_group(compound);
+        Ok(())
     }
-}
 
-#[cfg(feature = "alloc")]
-impl<W: Write> SerializerImpl for PrettyImpl<W> {}
-
-macro_rules! push_concr_number_pretty {
-    ($method:ident, $ty:ty) => {
-        fn $method(&mut self, n: $ty) -> fmt::Result {
-            todo!()
-        }
-    };
-}
-
-#[cfg(feature = "alloc")]
-impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
-    /*
-    #[doc(hidden)]
-    fn push(&mut self, token: Token) -> fmt::Result {
-        let dst = &mut self.dst;
-        let cfg = &self.cfg;
-        let direct_write_indent =
-            |dst: &mut W, depth: usize| -> fmt::Result { (0..depth).try_for_each(|_| cfg.indentor.write_to(dst)) };
-
-        let direct_write_indicator =
-            |dst: &mut W, depth: usize, new_line_child: bool, kind: &CompoundKind| -> fmt::Result {
-                match new_line_child {
-                    true => direct_write_indent(dst, depth)?,
-                    false => dst.write_str(" ")?,
-                }
-                kind.write_indicator_to(dst)?;
-                match kind.is_collection() {
-                    true => dst.write_str("\n"),
-                    false => Ok(()),
-                }
-            };
-
-        let direct_write_entry = |dst: &mut W, depth: usize, kind: &mut CompoundKind, entry: &str| -> fmt::Result {
-            match kind.new_line_child() {
-                true => direct_write_indent(dst, depth)?,
-                false => dst.write_str(" ")?,
-            }
-            dst.write_str(entry)?;
-            match kind {
-                CompoundKind::MapLikeLhs(head @ None) => {
-                    *kind = CompoundKind::MapLikeRhs(head.take());
-                    dst.write_str(" =>")
-                }
-                CompoundKind::MapLikeLhs(head @ Some(_)) => {
-                    *kind = CompoundKind::MapLikeRhs(head.take());
-                    dst.write_str(":")
-                }
-                CompoundKind::MapLikeRhs(head) => {
-                    *kind = CompoundKind::MapLikeLhs(head.take());
-                    dst.write_str(",\n")
-                }
-                kind => match kind.is_collection() {
-                    true => dst.write_str(",\n"),
-                    false => Ok(()),
-                },
-            }
-        };
-
-        let break_and_flush =
-            |dst: &mut W, compounds_stack: &mut Vec<Compound>, inline_entries: &mut VecDeque<String>| -> fmt::Result {
-                /* The force-compact check is performed externally; if it is true, this closure is not called. */
-                let compounds_count = compounds_stack.len();
-                let mut new_line_child;
-                for i in 0..compounds_count {
-                    if let Compound::Expanded { .. } = compounds_stack[i] {
-                        continue;
-                    }
-
-                    new_line_child = i
-                        .checked_sub(1)
-                        .map(|i| compounds_stack[i].kind().new_line_child())
-                        .unwrap_or(true);
-
-                    let range_end = match compounds_stack.get(i + 1) {
-                        Some(Compound::Compact {
-                            inline_entries_index, ..
-                        }) => *inline_entries_index,
-                        _ => compounds_count,
-                    };
-                    let Compound::Compact {
-                        ref mut kind,
-                        inline_entries_index: range_start,
-                        ..
-                    } = compounds_stack[i]
-                    else {
-                        unreachable!()
-                    };
-
-                    direct_write_indicator(dst, i, new_line_child, kind)?;
-                    inline_entries
-                        .drain(..range_end - range_start)
-                        .try_for_each(|entry| direct_write_entry(dst, i + 1, kind, &entry))?;
-
-                    compounds_stack[i] = Compound::Expanded { kind: kind.take() };
-                }
-                Ok(())
-            };
-
-        let literal_to_string = |literal: Literal<'_>| -> Result<String, fmt::Error> {
-            let mut stringified = String::with_capacity(256);
-            write_literal(&mut stringified, literal, cfg.numeric_suffix)?;
-            Ok(stringified)
-        };
-
-        let nominal_path_to_string = |kind: NominalKind, path: NominalPathRef| -> Result<String, fmt::Error> {
-            let mut stringified = String::with_capacity(64);
-            write_nominal_path(&mut stringified, kind, path, cfg.nominal_path_style)?;
-            Ok(stringified)
-        };
-
-        match token {
-            Token::Stringified(_) | Token::Literal(_) | Token::Ident(_) | Token::Unit | Token::UnitStruct { .. } => {
-                let entry = match token {
-                    Token::Stringified(entry) => entry,
-                    Token::Literal(literal) => literal_to_string(literal)?,
-                    Token::Ident(ident) => ident.to_string(),
-                    Token::Unit => "()".to_string(),
-                    Token::UnitStruct { kind, path } => nominal_path_to_string(kind, path)?,
-                    _ => unreachable!(),
-                };
-                match self.compounds_stack.last() {
-                    Some(comp) => match comp {
-                        Compound::Compact {
-                            kind,
-                            force_compact,
-                            inline_entries_index,
-                        } => {
-                            self.inline_entries.push_back(entry);
-                            if !*force_compact
-                                && if kind.is_map_like() {
-                                    /* conditionally expand `{}` */
-                                    self.inline_entries.len() - *inline_entries_index
-                                        > self.cfg.map_like_inline_entries as usize
-                                } else {
-                                    /* unconditionally compact `?`, `[]` and `()` while pushing stringified */
-                                    false
+    fn pop_compound(&mut self) -> fmt::Result {
+        let (compd, maybe_frags) = self.line_buffer.pop_group().expect("compound");
+        if maybe_frags.is_some() {
+            let mut frags = maybe_frags.unwrap().peekable();
+            let stringified = writing_string(move |dst| {
+                match compd {
+                    Compound::MapWritingValue => panic!(),
+                    Compound::MapWritingKey => {
+                        if frags.peek().is_none() {
+                            dst.write_str("{}")?;
+                        } else {
+                            dst.write_str("{ ")?;
+                            while let Some(key) = frags.next() {
+                                let value = frags.next().expect("key value");
+                                dst.write_str(&key)?;
+                                dst.write_str(" => ")?;
+                                dst.write_str(&value)?;
+                                if frags.peek().is_some() {
+                                    dst.write_str(", ")?;
                                 }
-                            {
-                                break_and_flush(dst, &mut self.compounds_stack, &mut self.inline_entries)?;
+                            }
+                            dst.write_str(" }")?;
+                        }
+                    }
+                    Compound::StructWritingValue(_) => panic!(),
+                    Compound::StructWritingKey(header) => {
+                        dst.write_str(&header)?;
+                        dst.write_str(" ")?;
+                        if frags.peek().is_none() {
+                            dst.write_str("{}")?;
+                        } else {
+                            dst.write_str("{ ")?;
+                            while let Some(key) = frags.next() {
+                                let value = frags.next().expect("key value");
+                                dst.write_str(&key)?;
+                                dst.write_str(": ")?;
+                                dst.write_str(&value)?;
+                                if frags.peek().is_some() {
+                                    dst.write_str(", ")?;
+                                }
+                            }
+                            dst.write_str(" }")?;
+                        }
+                    }
+                    Compound::Tuple | Compound::NominalTuple(_) => {
+                        if let Compound::NominalTuple(header) = compd {
+                            dst.write_str(&header)?;
+                        }
+                        dst.write_str("(")?;
+                        while let Some(value) = frags.next() {
+                            dst.write_str(&value)?;
+                            if frags.peek().is_some() {
+                                dst.write_str(", ")?;
                             }
                         }
-                        Compound::Expanded { .. } => {
-                            let depth = self.compounds_stack.len();
-                            let Compound::Expanded { ref mut kind } = self.compounds_stack.last_mut().unwrap() else {
-                                unreachable!()
-                            };
-                            direct_write_entry(dst, depth, kind, &entry)?;
+                        dst.write_str(")")?;
+                    }
+                    Compound::Array => {
+                        dst.write_str("[")?;
+                        while let Some(value) = frags.next() {
+                            dst.write_str(&value)?;
+                            if frags.peek().is_some() {
+                                dst.write_str(", ")?;
+                            }
                         }
-                    },
-                    None => {
-                        dst.write_str(&entry)?;
-                        dst.write_str(";\n")?;
+                        dst.write_str("]")?;
+                    }
+                    Compound::Maybe => {
+                        if let Some(frag) = frags.next() {
+                            dst.write_str("? ")?;
+                            dst.write_str(&frag)?;
+                        } else {
+                            dst.write_str("?")?
+                        }
+                        debug_assert!(frags.next().is_none());
+                    }
+                    Compound::Newtype(header) => {
+                        dst.write_str(&header)?; // space included
+                        dst.write_str(&frags.next().expect("newtype body"))?;
+                        debug_assert!(frags.next().is_none());
                     }
                 }
+                Ok(())
+            })?;
+            self.push_stringified(stringified)?;
+        } else {
+            drop(maybe_frags);
+            'write_term: {
+                let term = match compd {
+                    Compound::Array => "]",
+                    Compound::MapWritingKey | Compound::StructWritingKey(_) => "}",
+                    Compound::MapWritingValue | Compound::StructWritingValue(_) => panic!(),
+                    Compound::Tuple | Compound::NominalTuple(_) => ")",
+                    Compound::Maybe | Compound::Newtype(_) => break 'write_term,
+                };
+                write_indent(&mut self.dst, self.line_buffer.groups_count(), self.flags.hard_tab())?;
+                self.dst.write_str(term)?;
             }
+        }
 
-            Token::MaybeEnd | Token::ArrayEnd | Token::TupleEnd | Token::MapLikeEnd => {
-                let debug_assert_matches = |token: &Token<'_>, kind: &CompoundKind| match kind {
-                    CompoundKind::Maybe => debug_assert!(matches!(token, Token::MaybeEnd)),
-                    CompoundKind::Array => debug_assert!(matches!(token, Token::ArrayEnd)),
-                    CompoundKind::TupleLike(_) => debug_assert!(matches!(token, Token::TupleEnd)),
-                    CompoundKind::MapLikeLhs(_) | CompoundKind::MapLikeRhs(_) => {
-                        debug_assert!(matches!(token, Token::MapLikeEnd))
-                    }
-                };
-                match self.compounds_stack.pop().unwrap() {
-                    Compound::Compact {
-                        kind,
-                        inline_entries_index,
-                        ..
-                    } => {
-                        debug_assert_matches(&token, &kind);
-
-                        let entries_count = self.inline_entries.len() - inline_entries_index;
-                        let mut entries = self.inline_entries.drain(inline_entries_index..);
-                        let mut stringified = String::with_capacity(256);
-
-                        kind.write_indicator_to(&mut stringified)?;
-                        if (kind.is_map_like() || !kind.is_collection()) && entries_count > 0 {
-                            dst.write_str(" ")?;
-                        }
-                        for _ in 0..entries_count.saturating_sub(1) {
-                            dst.write_str(&entries.next().unwrap())?;
-                            dst.write_str(", ")?;
-                        }
-                        if let Some(entry) = entries.next() {
-                            dst.write_str(&entry)?;
-                        }
-                        if kind.is_map_like() && entries_count > 0 {
-                            dst.write_str(" ")?;
-                        }
-                        kind.write_terminator_to(&mut stringified)?;
-                        drop(entries);
-
-                        self.push(Token::Stringified(stringified))?;
-                    }
-                    Compound::Expanded { kind } => {
-                        debug_assert_matches(&token, &kind);
-
-                        direct_write_indent(dst, self.compounds_stack.len())?;
-
-                        kind.write_terminator_to(dst)?;
-
-                        match self.compounds_stack.last() {
-                            Some(comp) => match comp.kind().is_collection() {
-                                true => dst.write_str(",\n")?,
-                                false => (),
-                            },
-                            None => dst.write_str(";\n")?,
-                        }
-                    }
-                }
-            }
-
-            Token::FatArrow | Token::Colon | Token::Comma => (),
-
-            token => {
-                let kind = match token {
-                    Token::Maybe => CompoundKind::Maybe,
-                    Token::Array => CompoundKind::Array,
-                    Token::Tuple => CompoundKind::TupleLike(None),
-                    Token::TupleStruct { kind, path } => {
-                        CompoundKind::TupleLike(Some(nominal_path_to_string(kind, path)?))
-                    }
-                    Token::Map => CompoundKind::MapLikeLhs(None),
-                    Token::MapStruct { kind, path } => {
-                        CompoundKind::MapLikeLhs(Some(nominal_path_to_string(kind, path)?))
-                    }
-                    _ => unreachable!(),
-                };
-                let force_compact = match self.compounds_stack.last() {
-                    Some(comp) => match comp {
-                        Compound::Compact { force_compact, .. } => *force_compact,
-                        /* unconditionally compact `=>` left-hand side */
-                        Compound::Expanded { kind } => kind.is_map_like_lhs(),
-                    },
-                    None => false,
-                };
-                if !force_compact {
-                    /* conditionally expand parent while pushing compound */
-                    break_and_flush(dst, &mut self.compounds_stack, &mut self.inline_entries)?;
-                }
-                self.compounds_stack.push(Compound::Compact {
-                    kind,
-                    force_compact,
-                    inline_entries_index: self.inline_entries.len(),
-                });
+        if let Some(compd) = self.line_buffer.last_group() {
+            if matches!(
+                compd,
+                Compound::Array
+                    | Compound::Tuple
+                    | Compound::NominalTuple(_)
+                    | Compound::MapWritingValue
+                    | Compound::StructWritingValue(_)
+            ) {
+                self.toggle_next_writing_key_or_value();
+                self.dst.write_str(",\n")?;
+            } else if matches!(compd, Compound::MapWritingKey) {
+                self.toggle_next_writing_key_or_value();
+                self.dst.write_str(" => ")?;
+            } else if matches!(compd, Compound::StructWritingKey(_)) {
+                self.toggle_next_writing_key_or_value();
+                self.dst.write_str(": ")?;
             }
         }
 
         Ok(())
     }
-    */
 
-    fn push_stringified(&mut self, stringified: String) -> fmt::Result {
-        todo!()
+    fn toggle_next_writing_key_or_value(&mut self) {
+        let compd = self.line_buffer.last_group_mut().expect("compound");
+        match compd {
+            Compound::MapWritingKey => *compd = Compound::MapWritingValue,
+            Compound::MapWritingValue => *compd = Compound::MapWritingKey,
+            Compound::StructWritingKey(header) => *compd = Compound::StructWritingValue(core::mem::take(header)),
+            Compound::StructWritingValue(header) => *compd = Compound::StructWritingKey(core::mem::take(header)),
+            _ => (),
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn writing_string<F>(f: F) -> Result<EcoString, fmt::Error>
+where
+    F: FnOnce(&mut EcoString) -> fmt::Result,
+{
+    let mut stringified = EcoString::new();
+    f(&mut stringified)?;
+    Ok(stringified)
+}
+
+#[cfg(feature = "alloc")]
+macro_rules! push_concr_number_pretty {
+    ($method:ident, $ty:ty, $suff:ident, $write_fn:ident) => {
+        fn $method(&mut self, n: $ty) -> fmt::Result {
+            self.intercept_range_bound(n, |dst, n, flags| {
+                $write_fn(dst, n.into())?;
+                write_number_suffix(dst, NumberSuffix::$suff, flags)
+            })
+        }
+    };
+}
+
+#[cfg(feature = "alloc")]
+impl<W: Write> SerializerImpl for PrettyImpl<W> {}
+
+#[cfg(feature = "alloc")]
+impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
+    fn push_stringified(&mut self, stringified: EcoString) -> fmt::Result {
+        let dst = &mut self.dst;
+        let depth = self.line_buffer.groups_count();
+        let hard_tab = self.flags.hard_tab();
+        let next_to_key_value_separator = matches!(
+            self.line_buffer.last_group(),
+            Some(Compound::MapWritingValue | Compound::StructWritingValue(_))
+        );
+        let committed = if let Some(committed) = self.line_buffer.push(stringified) {
+            committed
+        } else {
+            let expand_bcuz_depth = self.line_buffer.groups_count() <= self.flags.expand_depth();
+            let expand_bcuz_line_width = self.line_buffer.accumulated_width > self.flags.max_width();
+            let not_expand_bcuz_compact_map_key = self.flags.compactized_map_key() && self.inside_map_key > 0;
+            let not_expand_bcuz_unnecessary = matches!(
+                self.line_buffer.last_group(),
+                Some(Compound::Maybe | Compound::Newtype(_))
+            );
+            // Pushing into an expanded group shall return Some(_) and not reach this branch.
+            if (expand_bcuz_depth || expand_bcuz_line_width)
+                && !not_expand_bcuz_compact_map_key
+                && !not_expand_bcuz_unnecessary
+            {
+                let (compd, mut frags) = self.line_buffer.expand_group().unwrap();
+                if !next_to_key_value_separator {
+                    write_indent(dst, depth - 1, hard_tab)?;
+                }
+                match compd {
+                    Compound::MapWritingKey | Compound::MapWritingValue => {
+                        dst.write_str("{\n")?;
+                        while let Some(key) = frags.next() {
+                            write_indent(dst, depth, hard_tab)?;
+                            dst.write_str(&key)?;
+                            dst.write_str(" => ")?;
+                            if let Some(value) = frags.next() {
+                                dst.write_str(&value)?;
+                                dst.write_str(",\n")?;
+                            }
+                        }
+                        drop(frags);
+                        self.toggle_next_writing_key_or_value();
+                    }
+                    Compound::StructWritingKey(header) | Compound::StructWritingValue(header) => {
+                        dst.write_str(&header)?;
+                        dst.write_str(" {\n")?;
+                        while let Some(key) = frags.next() {
+                            write_indent(dst, depth, hard_tab)?;
+                            dst.write_str(&key)?;
+                            dst.write_str(": ")?;
+                            if let Some(value) = frags.next() {
+                                dst.write_str(&value)?;
+                                dst.write_str(",\n")?;
+                            }
+                        }
+                        drop(frags);
+                        self.toggle_next_writing_key_or_value();
+                    }
+                    Compound::Tuple | Compound::NominalTuple(_) => {
+                        if let Compound::NominalTuple(header) = compd {
+                            dst.write_str(&header)?;
+                        }
+                        dst.write_str("(\n")?;
+                        for value in frags {
+                            write_indent(dst, depth, hard_tab)?;
+                            dst.write_str(&value)?;
+                            dst.write_str(",\n")?;
+                        }
+                    }
+                    Compound::Array => {
+                        dst.write_str("[\n")?;
+                        for value in frags {
+                            write_indent(dst, depth, hard_tab)?;
+                            dst.write_str(&value)?;
+                            dst.write_str(",\n")?;
+                        }
+                    }
+                    Compound::Maybe | Compound::Newtype(_) => unreachable!(),
+                }
+            }
+            return Ok(());
+        };
+
+        if !next_to_key_value_separator {
+            write_indent(dst, depth, hard_tab)?;
+        }
+        dst.write_str(&committed)?;
+
+        if let Some(compd) = self.line_buffer.last_group() {
+            if matches!(
+                compd,
+                Compound::Array
+                    | Compound::Tuple
+                    | Compound::NominalTuple(_)
+                    | Compound::MapWritingValue
+                    | Compound::StructWritingValue(_)
+            ) {
+                self.toggle_next_writing_key_or_value();
+                self.dst.write_str(",\n")?;
+            } else if matches!(compd, Compound::MapWritingKey) {
+                self.toggle_next_writing_key_or_value();
+                self.dst.write_str(" => ")?;
+            } else if matches!(compd, Compound::StructWritingKey(_)) {
+                self.toggle_next_writing_key_or_value();
+                self.dst.write_str(": ")?;
+            }
+        }
+
+        Ok(())
     }
 
     fn push_bool(&mut self, b: bool) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, _flags| write_bool(dst, b))
     }
     fn push_char(&mut self, ch: char) -> fmt::Result {
-        todo!()
+        self.intercept_range_bound(ch, |dst, ch, _flags| write_quoted_char(dst, ch))
     }
     fn push_number(&mut self, num: &Number2) -> fmt::Result {
-        todo!()
+        self.intercept_range_bound(num, |dst, num, flags| write_number(dst, num, flags))
     }
     fn push_str(&mut self, s: &str) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, _flags| write_quoted_string(dst, s))
     }
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, _flags| write_quoted_byte_string(dst, bytes))
     }
 
-    push_concr_number_pretty!(push_i8, i8);
-    push_concr_number_pretty!(push_i16, i16);
-    push_concr_number_pretty!(push_i32, i32);
-    push_concr_number_pretty!(push_i64, i64);
-    push_concr_number_pretty!(push_i128, i128);
-    push_concr_number_pretty!(push_u8, u8);
-    push_concr_number_pretty!(push_u16, u16);
-    push_concr_number_pretty!(push_u32, u32);
-    push_concr_number_pretty!(push_u64, u64);
-    push_concr_number_pretty!(push_u128, u128);
-    push_concr_number_pretty!(push_f32, f32);
-    push_concr_number_pretty!(push_f64, f64);
+    push_concr_number_pretty!(push_i8, i8, Int8, write_i64);
+    push_concr_number_pretty!(push_i16, i16, Int16, write_i64);
+    push_concr_number_pretty!(push_i32, i32, Int32, write_i64);
+    push_concr_number_pretty!(push_i64, i64, Int64, write_i64);
+    push_concr_number_pretty!(push_i128, i128, Int128, write_i128);
+    push_concr_number_pretty!(push_u8, u8, UInt8, write_u64);
+    push_concr_number_pretty!(push_u16, u16, UInt16, write_u64);
+    push_concr_number_pretty!(push_u32, u32, UInt32, write_u64);
+    push_concr_number_pretty!(push_u64, u64, UInt64, write_u64);
+    push_concr_number_pretty!(push_u128, u128, UInt128, write_u128);
+    push_concr_number_pretty!(push_f32, f32, Float32, write_f32);
+    push_concr_number_pretty!(push_f64, f64, Float64, write_f64);
 
     fn push_range_full(&mut self) -> fmt::Result {
-        let stringified = String::from("..");
-        self.push_stringified(stringified)
+        self.clear_range_intercept()?;
+        self.push_stringified(EcoString::from(".."))
     }
     fn push_range_to(&mut self, end: &Scalar) -> fmt::Result {
-        let mut stringified = String::from("..");
-        write_scalar(&mut stringified, end, self.flags)?;
-        self.push_stringified(stringified)
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, flags| {
+            dst.write_str("..")?;
+            write_scalar(dst, end, flags)
+        })
     }
     fn push_range_to_inclusive(&mut self, end: &Scalar) -> fmt::Result {
-        let mut stringified = String::from("..=");
-        write_scalar(&mut stringified, end, self.flags)?;
-        self.push_stringified(stringified)
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, flags| {
+            dst.write_str("..=")?;
+            write_scalar(dst, end, flags)
+        })
     }
     fn push_range_from(&mut self, start: &Scalar) -> fmt::Result {
-        let mut stringified = String::new();
-        write_scalar(&mut stringified, start, self.flags)?;
-        stringified.push_str("..");
-        self.push_stringified(stringified)
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, flags| {
+            write_scalar(dst, start, flags)?;
+            dst.write_str("..")
+        })
     }
     fn push_range(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
-        let mut stringified = String::new();
-        write_scalar(&mut stringified, start, self.flags)?;
-        stringified.push_str("..");
-        write_scalar(&mut stringified, end, self.flags)?;
-        self.push_stringified(stringified)
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, flags| {
+            write_scalar(dst, start, flags)?;
+            dst.write_str("..")?;
+            write_scalar(dst, end, flags)
+        })
     }
     fn push_range_inclusive(&mut self, start: &Scalar, end: &Scalar) -> fmt::Result {
-        let mut stringified = String::new();
-        write_scalar(&mut stringified, start, self.flags)?;
-        stringified.push_str("..=");
-        write_scalar(&mut stringified, end, self.flags)?;
-        self.push_stringified(stringified)
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, flags| {
+            write_scalar(dst, start, flags)?;
+            dst.write_str("..=")?;
+            write_scalar(dst, end, flags)
+        })
     }
 
     fn push_maybe_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::Maybe)
     }
-
     fn push_maybe_end(&mut self) -> fmt::Result {
-        todo!()
+        debug_assert!(!self.interceptor.is_active());
+        debug_assert!(matches!(self.line_buffer.last_group(), Some(Compound::Maybe)));
+        self.pop_compound()
     }
 
     fn push_array_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::Array)
     }
-
     fn push_array_end(&mut self) -> fmt::Result {
-        todo!()
+        debug_assert!(!self.interceptor.is_active());
+        debug_assert!(matches!(self.line_buffer.last_group(), Some(Compound::Array)));
+        self.pop_compound()
     }
 
     fn push_unit(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_stringified(EcoString::from("()"))
     }
     fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        if let Some("RangeFull") = name.map(Ident::as_str) {
+            self.push_stringified(EcoString::from(".."))
+        } else {
+            self.push_stringifying(|dst, flags| write_struct_name(dst, name, flags))
+        }
     }
     fn push_unit_variant(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, flags| write_variant_name(dst, name, variant, flags))
     }
 
     fn push_tuple_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::Tuple)
     }
-
     fn push_tuple_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::NominalTuple(writing_string(|dst| {
+            write_struct_name(dst, name, self.flags)
+        })?))
     }
-
     fn push_tuple_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::NominalTuple(writing_string(|dst| {
+            write_variant_name(dst, name, variant, self.flags)
+        })?))
     }
-
     fn push_tuple_like_end(&mut self) -> fmt::Result {
-        todo!()
+        debug_assert!(!self.interceptor.is_active());
+        debug_assert!(matches!(
+            self.line_buffer.last_group(),
+            Some(Compound::Tuple | Compound::NominalTuple(_))
+        ));
+        self.pop_compound()
     }
 
     fn push_map_begin(&mut self) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::MapWritingKey)
     }
-
-    fn push_map_struct_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
+    fn push_map_struct_begin(&mut self, name: Option<&Ident>, intercept_range: bool) -> fmt::Result {
+        self.clear_range_intercept()?;
+        if self.interceptor.begin(name, intercept_range) {
+            return Ok(());
+        }
+        self.push_compound(Compound::StructWritingKey(writing_string(|dst| {
+            write_struct_name(dst, name, self.flags)
+        })?))
     }
-
     fn push_map_variant_begin(&mut self, name: Option<&Ident>, variant: &Ident) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::StructWritingKey(writing_string(|dst| {
+            write_variant_name(dst, name, variant, self.flags)
+        })?))
     }
-
     fn push_map_like_end(&mut self) -> fmt::Result {
-        todo!()
+        if core::mem::take(&mut self.interceptor).finish(self)? {
+            return Ok(());
+        }
+        debug_assert!(matches!(
+            self.line_buffer.last_group(),
+            Some(Compound::MapWritingKey | Compound::StructWritingKey(_))
+        ));
+        self.pop_compound()
     }
 
     fn push_newtype_begin(&mut self, name: Option<&Ident>) -> fmt::Result {
-        todo!()
+        self.clear_range_intercept()?;
+        self.push_compound(Compound::Newtype(writing_string(|dst| {
+            write_newtype_name(dst, name, self.flags)
+        })?))
     }
-
     fn push_newtype_end(&mut self) -> fmt::Result {
-        todo!()
+        debug_assert!(!self.interceptor.is_active());
+        debug_assert!(matches!(self.line_buffer.last_group(), Some(Compound::Newtype(_))));
+        self.pop_compound()
     }
 
     fn push_identifier(&mut self, field: &Ident) -> fmt::Result {
-        todo!()
+        match self.interceptor.push_field(field) {
+            RangeInterceptorStatus::Inactive => (),
+            RangeInterceptorStatus::Accepted => return Ok(()),
+            RangeInterceptorStatus::Rejected => self.clear_range_intercept_cold()?,
+        }
+        self.push_stringified(EcoString::from(field.as_str()))
     }
 
+    #[inline(always)]
+    fn hint_map_key(&mut self) {
+        self.inside_map_key += 1;
+    }
+    #[inline(always)]
     fn push_fat_arrow(&mut self) -> fmt::Result {
-        todo!()
+        self.inside_map_key -= 1;
+        Ok(())
     }
-
+    #[inline(always)]
     fn push_colon(&mut self) -> fmt::Result {
-        todo!()
+        Ok(())
     }
-
+    #[inline(always)]
     fn push_comma(&mut self) -> fmt::Result {
-        todo!()
+        Ok(())
     }
 
     fn semicolon(&mut self) -> fmt::Result {
-        todo!()
+        self.dst.write_str(";\n")
     }
 }
 
 //==================================================================================================
+
+#[derive(Default)]
+struct RangeInterceptor {
+    range_type: Option<RangeType>,
+    next_field: NextField,
+    field_start: Option<Option<Scalar>>,
+    field_end: Option<Option<Scalar>>,
+}
+
+#[derive(Default)]
+enum NextField {
+    #[default]
+    Unknown,
+    Start,
+    End,
+}
+
+enum RangeType {
+    RangeTo,
+    RangeToInclusive,
+    RangeFrom,
+    Range,
+    RangeInclusive,
+}
+
+enum RangeInterceptorStatus {
+    Inactive,
+    Accepted,
+    Rejected, // must clear
+}
+
+impl RangeInterceptor {
+    fn is_active(&self) -> bool {
+        self.range_type.is_some()
+    }
+
+    fn push_value(&mut self, scalar: impl Into<Scalar>) {
+        match self.next_field {
+            NextField::Unknown => panic!(),
+            NextField::Start => self.field_start = Some(Some(scalar.into())),
+            NextField::End => self.field_end = Some(Some(scalar.into())),
+        }
+    }
+
+    fn push_field(&mut self, field: &Ident) -> RangeInterceptorStatus {
+        let Some(ref typ) = self.range_type else {
+            return RangeInterceptorStatus::Inactive;
+        };
+
+        if field.as_str() == "start"
+            && matches!(typ, RangeType::Range | RangeType::RangeInclusive | RangeType::RangeFrom)
+        {
+            self.next_field = NextField::Start;
+            self.field_start = Some(None);
+        } else if field.as_str() == "end"
+            && matches!(
+                typ,
+                RangeType::Range | RangeType::RangeInclusive | RangeType::RangeTo | RangeType::RangeToInclusive
+            )
+        {
+            self.next_field = NextField::End;
+            self.field_end = Some(None);
+        } else {
+            self.next_field = NextField::Unknown;
+            return RangeInterceptorStatus::Rejected;
+        }
+
+        return RangeInterceptorStatus::Accepted;
+    }
+
+    fn begin(&mut self, name: Option<&Ident>, intercept_range: bool) -> bool {
+        if name.is_none() || !intercept_range {
+            return false;
+        }
+        let typ = match name.unwrap().as_str() {
+            "RangeTo" => RangeType::RangeTo,
+            "RangeToInclusive" => RangeType::RangeToInclusive,
+            "RangeFrom" => RangeType::RangeFrom,
+            "Range" => RangeType::Range,
+            "RangeInclusive" => RangeType::RangeInclusive,
+            _ => return false,
+        };
+        self.range_type = Some(typ);
+
+        return true;
+    }
+
+    fn finish(self, ser: &mut impl SerializerImpl) -> Result<bool, fmt::Error> {
+        if let Some(ref typ) = self.range_type {
+            'range_type: {
+                match typ {
+                    RangeType::RangeTo => {
+                        if let (None, Some(Some(end))) = (self.field_start, self.field_end) {
+                            ser.push_range_to(&end)?;
+                        } else {
+                            break 'range_type;
+                        }
+                    }
+                    RangeType::RangeToInclusive => {
+                        if let (None, Some(Some(end))) = (self.field_start, self.field_end) {
+                            ser.push_range_to_inclusive(&end)?;
+                        } else {
+                            break 'range_type;
+                        }
+                    }
+                    RangeType::RangeFrom => {
+                        if let (Some(Some(start)), None) = (self.field_start, self.field_end) {
+                            ser.push_range_from(&start)?;
+                        } else {
+                            break 'range_type;
+                        }
+                    }
+                    RangeType::Range => {
+                        if let (Some(Some(start)), Some(Some(end))) = (self.field_start, self.field_end) {
+                            ser.push_range(&start, &end)?;
+                        } else {
+                            break 'range_type;
+                        }
+                    }
+                    RangeType::RangeInclusive => {
+                        if let (Some(Some(start)), Some(Some(end))) = (self.field_start, self.field_end) {
+                            ser.push_range_inclusive(&start, &end)?;
+                        } else {
+                            break 'range_type;
+                        }
+                    }
+                }
+                return Ok(true);
+            }
+            self.clear(ser)?;
+        }
+        return Ok(false);
+    }
+
+    fn clear(self, ser: &mut impl SerializerImpl) -> fmt::Result {
+        let Some(typ) = self.range_type else {
+            return Ok(());
+        };
+        let name = match typ {
+            RangeType::RangeTo => "RangeTo",
+            RangeType::RangeToInclusive => "RangeToInclusive",
+            RangeType::RangeFrom => "RangeFrom",
+            RangeType::Range => "Range",
+            RangeType::RangeInclusive => "RangeInclusive",
+        };
+        ser.push_map_struct_begin(Some(Ident::new_unchecked(name)), false)?;
+
+        let (mut fst, mut snd) = (("start", self.field_start), ("end", self.field_end));
+        let mut op = |(field, maybe_field_maybe_value)| {
+            if let Some(maybe_scalar) = maybe_field_maybe_value {
+                ser.push_identifier(Ident::new_unchecked(field))?;
+                if let Some(scalar) = maybe_scalar {
+                    ser.push_colon()?;
+                    ser.push_scalar(&scalar)?;
+                    ser.push_comma()?;
+                }
+            }
+            Ok(())
+        };
+        if let NextField::Start = self.next_field {
+            core::mem::swap(&mut fst, &mut snd);
+        }
+        op(fst)?;
+        op(snd)?;
+        Ok(())
+    }
+}
+
+//------------------------------------------------------------------------------
+
+#[cfg(feature = "alloc")]
+struct LineBuffer<Group> {
+    groups: Vec<(usize, Group)>,
+    fragments: VecDeque<EcoString>,
+    next_need_expand: usize,
+    accumulated_width: usize,
+}
+
+#[cfg(feature = "alloc")]
+impl<Group> LineBuffer<Group> {
+    fn new() -> Self {
+        Self {
+            groups: Vec::new(),
+            fragments: VecDeque::new(),
+            next_need_expand: 0,
+            accumulated_width: 0,
+        }
+    }
+
+    fn groups_count(&self) -> usize {
+        self.groups.len()
+    }
+    fn last_group(&self) -> Option<&Group> {
+        Some(&self.groups.last()?.1)
+    }
+    fn last_group_mut(&mut self) -> Option<&mut Group> {
+        Some(&mut self.groups.last_mut()?.1)
+    }
+    fn push_group(&mut self, group: Group) {
+        self.groups.push((self.fragments.len(), group));
+    }
+    fn pop_group(&mut self) -> Option<(Group, Option<impl Iterator<Item = EcoString> + '_>)> {
+        if self.next_need_expand < self.groups.len() {
+            let (index, group) = self.groups.pop()?;
+            Some((
+                group,
+                Some(
+                    self.fragments
+                        .drain(index..)
+                        .inspect(|frag| self.accumulated_width -= frag.len()),
+                ),
+            ))
+        } else {
+            let (index, group) = self.groups.pop()?;
+            self.next_need_expand = self.groups.len();
+            debug_assert!(index == self.fragments.len());
+            Some((group, None))
+        }
+    }
+    fn expand_group(&mut self) -> Option<(&mut Group, impl Iterator<Item = EcoString> + '_)> {
+        let (need_expand, compacts) = self.groups.get_mut(self.next_need_expand..)?.split_first_mut()?;
+        self.next_need_expand += 1;
+        let count = need_expand.0;
+        let group = &mut need_expand.1;
+
+        need_expand.0 -= count;
+        for still_compact in compacts {
+            still_compact.0 -= count;
+        }
+
+        Some((
+            group,
+            self.fragments
+                .drain(..count)
+                .inspect(|frag| self.accumulated_width -= frag.len()),
+        ))
+    }
+
+    fn push(&mut self, frag: EcoString) -> Option<EcoString> {
+        if self.next_need_expand < self.groups.len() {
+            self.accumulated_width += frag.len();
+            self.fragments.push_back(frag);
+            None
+        } else {
+            Some(frag)
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<Group> Drop for LineBuffer<Group> {
+    fn drop(&mut self) {
+        debug_assert!(self.groups.is_empty());
+        debug_assert!(self.fragments.is_empty());
+    }
+}
+
+//==================================================================================================
+
+fn write_indent(dst: &mut impl Write, depth: usize, hard_tab: bool) -> fmt::Result {
+    let indentor = if hard_tab { "\t" } else { "\x20\x20\x20\x20" };
+    (0..depth).try_for_each(|_| dst.write_str(indentor))
+}
 
 fn write_bool(dst: &mut impl Write, b: bool) -> fmt::Result {
     match b {

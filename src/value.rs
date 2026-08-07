@@ -1,105 +1,16 @@
-use alloc::collections::BTreeMap;
+#[cfg(feature = "alloc")]
+use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeMap, vec::Vec};
 use core::{
-    borrow::Borrow,
     cmp::Ordering,
     fmt,
     hash::{Hash, Hasher},
-    mem,
     ops::Deref,
 };
 
+#[cfg(feature = "alloc")]
 pub mod concr_to_value;
+#[cfg(feature = "alloc")]
 pub mod value_to_concr;
-
-pub type Str = Box<str>;
-pub type ByteBuf = Vec<u8>;
-pub type Values = Vec<Value>;
-pub type ValueMap = BTreeMap<Value, Value>;
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
-pub struct Float32(pub f32);
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
-pub struct Float64(pub f64);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Number {
-    Int8(i8),
-    Int16(i16),
-    Int32(i32),
-    Int64(i64),
-    Int128(Box<i128>),
-    UInt8(u8),
-    UInt16(u16),
-    UInt32(u32),
-    UInt64(u64),
-    UInt128(Box<u128>),
-    Float32(Float32),
-    Float64(Float64),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NumberNoSuffix {
-    Int(i64),
-    UInt(u64),
-    Float(Float64),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Value {
-    /// Literal Boolean value.
-    Bool(bool),
-
-    /// Literal Unicode character.
-    Char(char),
-
-    /// Literal number.
-    Number(Number),
-
-    /// Literal number with no suffix.
-    NumberNoSuffix(NumberNoSuffix),
-
-    /// Literal string.
-    String(Box<String>),
-
-    /// Literal byte string.
-    ByteBuf(Box<ByteBuf>),
-
-    /// Structural maybe, either `Some(Value)` or `None`.
-    ///
-    /// This is non-nominal due to [serde]'s design.
-    Maybe(Option<Box<Value>>),
-
-    /// Structural tuple, also used to represent 'unit'.
-    ///
-    /// Guaranteed that the [`Values`] inside is non-empty, if it's (de)serialized by KEON.
-    Tuple(Option<Box<Values>>),
-
-    /// Structural seq.
-    Seq(Box<Values>),
-
-    /// Structural map.
-    Map(Box<ValueMap>),
-
-    /// Nominal value.
-    Nominal(Box<Nominal>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Nominal {
-    Unnamed { stru: NominalValue },
-    StemOnly { stru: NominalValue, name: Str },
-    FullNamed { stru: NominalValue, name: Str, parent: Str },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NominalValue {
-    Unit,
-    Tuple(Values),
-    Struct(BTreeMap<Str, Value>),
-}
 
 //------------------------------------------------------------------------------
 
@@ -114,45 +25,6 @@ macro_rules! impl_into {
         }
     };
 }
-
-impl_into!(v: bool    => Value::Bool(v));
-impl_into!(v: char    => Value::Char(v));
-impl_into!(v: f32     => Value::Number(v.into()));
-impl_into!(v: f64     => Value::Number(v.into()));
-impl_into!(v: i8      => Value::Number(v.into()));
-impl_into!(v: i16     => Value::Number(v.into()));
-impl_into!(v: i32     => Value::Number(v.into()));
-impl_into!(v: i64     => Value::Number(v.into()));
-impl_into!(v: i128    => Value::Number(v.into()));
-impl_into!(v: u8      => Value::Number(v.into()));
-impl_into!(v: u16     => Value::Number(v.into()));
-impl_into!(v: u32     => Value::Number(v.into()));
-impl_into!(v: u64     => Value::Number(v.into()));
-impl_into!(v: u128    => Value::Number(v.into()));
-impl_into!(v: String  => Value::String(Box::new(v)));
-impl_into!(v: &str    => Value::String(Box::new(v.into())));
-impl_into!(v: ByteBuf => Value::ByteBuf(Box::new(v)));
-impl_into!(v: &[u8]   => Value::ByteBuf(Box::new(v.into())));
-impl_into!(v: ()      => Value::Tuple(None));
-
-impl_into!(v: f32  => Number::Float32(v.into()));
-impl_into!(v: f64  => Number::Float64(v.into()));
-impl_into!(v: i8   => Number::Int8(v));
-impl_into!(v: i16  => Number::Int16(v));
-impl_into!(v: i32  => Number::Int32(v));
-impl_into!(v: i64  => Number::Int64(v));
-impl_into!(v: i128 => Number::Int128(Box::new(v)));
-impl_into!(v: u8   => Number::UInt8(v));
-impl_into!(v: u16  => Number::UInt16(v));
-impl_into!(v: u32  => Number::UInt32(v));
-impl_into!(v: u64  => Number::UInt64(v));
-impl_into!(v: u128 => Number::UInt128(Box::new(v)));
-
-impl_into!(v: i64  => NumberNoSuffix::Int(v));
-impl_into!(v: u64  => NumberNoSuffix::UInt(v));
-impl_into!(v: f64  => NumberNoSuffix::Float(v.into()));
-
-//------------------------------------------------------------------------------
 
 impl_into!(v: char    => Scalar::Char(v));
 impl_into!(v: Number2 => Scalar::Number(v));
@@ -344,6 +216,7 @@ impl fmt::Display for Ident {
     }
 }
 
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value2 {
     /// Literal Boolean value.
@@ -402,12 +275,14 @@ pub enum Value2 {
     Newtype(Box<Struct<Value2>>),
 }
 
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Struct<T> {
     pub name: Option<IdentBuf>,
     pub body: T,
 }
 
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variant<T = ()> {
     pub name: Option<IdentBuf>,
@@ -415,51 +290,15 @@ pub struct Variant<T = ()> {
     pub body: T,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NominalPath2 {
-    Underscore,
-    Single { name: IdentBuf },
-    Dual { name: IdentBuf, parent: IdentBuf },
-}
-
-impl NominalPath2 {
-    // TODO: convenient methods
-}
-
-pub(crate) enum NominalPathRef<'a> {
-    Underscore,
-    Single { name: &'a Ident },
-    Dual { name: &'a Ident, parent: &'a Ident },
-}
-
-impl From<NominalPathRef<'_>> for NominalPath2 {
-    fn from(value: NominalPathRef<'_>) -> Self {
-        match value {
-            NominalPathRef::Underscore => NominalPath2::Underscore,
-            NominalPathRef::Single { name } => NominalPath2::Single { name: name.to_owned() },
-            NominalPathRef::Dual { name, parent } => NominalPath2::Dual {
-                name: name.to_owned(),
-                parent: parent.to_owned(),
-            },
-        }
-    }
-}
-
-impl<'a> From<&'a NominalPath2> for NominalPathRef<'a> {
-    #[inline(always)]
-    fn from(value: &'a NominalPath2) -> Self {
-        match value {
-            NominalPath2::Underscore => NominalPathRef::Underscore,
-            NominalPath2::Single { name } => NominalPathRef::Single { name: name.borrow() },
-            NominalPath2::Dual { name, parent } => NominalPathRef::Dual {
-                name: name.borrow(),
-                parent: parent.borrow(),
-            },
-        }
-    }
-}
-
 //------------------------------------------------------------------------------
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct Float32(pub f32);
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct Float64(pub f64);
 
 impl Eq for Float32 {}
 
@@ -521,23 +360,4 @@ impl Hash for Float64 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.0.to_bits());
     }
-}
-
-//------------------------------------------------------------------------------
-
-impl Nominal {
-    #[inline]
-    pub fn set_struct(&mut self, stru: NominalValue) -> NominalValue {
-        match self {
-            Nominal::Unnamed { stru: stru_ }
-            | Nominal::StemOnly { stru: stru_, .. }
-            | Nominal::FullNamed { stru: stru_, .. } => mem::replace(stru_, stru),
-        }
-    }
-}
-
-#[test]
-fn foo() {
-    let _a = 1_1.;
-    let _num = "1_1.".parse::<f64>().unwrap();
 }

@@ -1,18 +1,22 @@
-pub mod de;
+#![no_std]
+
+#[cfg(feature = "std")]
+extern crate std;
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
 #[cfg(feature = "alloc")]
 pub mod de4;
 pub mod ser4;
 pub mod value;
 
-extern crate alloc;
+pub use crate::ser4::Serializer;
 
+#[cfg(feature = "alloc")]
 pub use crate::{
-    de::{
-        error::{Error, ErrorKind},
-        parse, parse_limited, parse_many, parse_many_limited,
-    },
-    ser4::{stringify, stringify_pretty, Serializer},
-    value::Value,
+    ser4::{stringify, stringify_pretty},
+    value::Value2,
 };
 
 struct PrivateMethod;
@@ -55,16 +59,6 @@ mod format {
 
     pub(crate) const PARSE_FLOAT_OPTS: ParseFloatOptions = ParseFloatOptionsBuilder::new()
         .lossy(false)
-        .exponent(b'e')
-        .decimal_point(b'.')
-        .nan_string(Some(b"NaN"))
-        .inf_string(None)
-        .infinity_string(Some(b"inf"))
-        .build_strict();
-
-    pub(crate) const WRITE_INTEGER_OPTS: WriteIntegerOptions = write_integer_options::STANDARD;
-
-    pub(crate) const WRITE_FLOAT_OPTS: WriteFloatOptions = WriteFloatOptionsBuilder::new()
         .exponent(b'e')
         .decimal_point(b'.')
         .nan_string(Some(b"NaN"))
