@@ -24,7 +24,7 @@ pub(super) enum Initiator {
     /** `?` */ Maybe,
     /** `[` */ Array,
     /** `(` */ Tuple,
-    /** `{` */ MapLike,
+    /** `{` */ Map,
     /**`..` */ DotDot,
     /**`..=`*/ DotDotEq,
 }
@@ -131,7 +131,11 @@ pub(super) trait ParseHelper<'de> {
 
     /// Skips WS and consumes the specified delimiter. Returns `Err` if not found.
     fn delim_expected(&mut self, delim: Delimiter, reason: ErrorKind) -> ResultKind {
-        self.delim(delim)?.is_none().then_some(()).ok_or(reason)
+        self.delim(delim)?
+            .is_none()
+            .then_some(())
+            .ok_or(reason)
+            .map_err(ErrorImpl::from)
     }
 
     /// Skips WS and checks the presence of a subsequent delimiter.
@@ -139,7 +143,10 @@ pub(super) trait ParseHelper<'de> {
 
     /// Skips WS and checks the presence of a subsequent delimiter. Returns `Err(reason)` if not found.
     fn adjacent_to_delim_expected(&mut self, reason: ErrorKind) -> ResultKind {
-        self.adjacent_to_delim()?.then_some(()).ok_or(reason)
+        self.adjacent_to_delim()?
+            .then_some(())
+            .ok_or(reason)
+            .map_err(ErrorImpl::from)
     }
 
     /// Skips WS and checks whether the subsequent content appears to be a scalar.
@@ -150,6 +157,7 @@ pub(super) trait ParseHelper<'de> {
         self.adjacent_to_scalar()?
             .then_some(())
             .ok_or(ErrorKind::ExpectedScalar)
+            .map_err(ErrorImpl::from)
     }
 }
 
@@ -169,9 +177,9 @@ pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn end_array(&mut self) -> ResultKind {
         if let Some(delim) = self.delim(Delimiter::Array)? {
             if let Delimiter::Comma = delim {
-                Err(ErrorKind::DuplicatedComma)
+                raise(ErrorKind::DuplicatedComma)
             } else {
-                Err(ErrorKind::ExpectedArrayEnd)
+                raise(ErrorKind::ExpectedArrayEnd)
             }
         } else {
             Ok(())
@@ -182,9 +190,9 @@ pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn end_tuple(&mut self) -> ResultKind {
         if let Some(delim) = self.delim(Delimiter::Tuple)? {
             if let Delimiter::Comma = delim {
-                Err(ErrorKind::DuplicatedComma)
+                raise(ErrorKind::DuplicatedComma)
             } else {
-                Err(ErrorKind::ExpectedTupleEnd)
+                raise(ErrorKind::ExpectedTupleEnd)
             }
         } else {
             Ok(())
@@ -195,9 +203,9 @@ pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
     fn end_map_like(&mut self) -> ResultKind {
         if let Some(delim) = self.delim(Delimiter::MapLike)? {
             if let Delimiter::Comma = delim {
-                Err(ErrorKind::DuplicatedComma)
+                raise(ErrorKind::DuplicatedComma)
             } else {
-                Err(ErrorKind::ExpectedMapLikeEnd)
+                raise(ErrorKind::ExpectedMapLikeEnd)
             }
         } else {
             Ok(())
@@ -284,14 +292,15 @@ macro_rules! fn_parse_integer {
                 Radix::Hex => parse::<$ty, NUMBER_FORMAT_HEX>(self.rest(), &PARSE_INTEGER_OPTS),
                 Radix::Oct => parse::<$ty, NUMBER_FORMAT_OCT>(self.rest(), &PARSE_INTEGER_OPTS),
                 Radix::Bin => parse::<$ty, NUMBER_FORMAT_BIN>(self.rest(), &PARSE_INTEGER_OPTS),
-            }?;
+            }
+            .map_err(ErrorImpl::from)?;
             self.bump(len);
 
             match self.peek_number_suffix() {
                 None => self.adjacent_to_delim_expected(ErrorKind::InvalidNumberSuffix)?,
                 Some(suffix) => {
                     if !matches!(suffix, $number_suffix) {
-                        return Err($error_kind);
+                        return raise($error_kind);
                     }
                 }
             }
@@ -306,14 +315,15 @@ macro_rules! fn_parse_float {
     ($ty:ty, $name:ident, $number_suffix:path, $error_kind:path) => {
         fn $name(&mut self) -> ResultKind<$ty> {
             let (f, len) =
-                lexical_core::parse_partial_with_options::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_FLOAT_OPTS)?;
+                lexical_core::parse_partial_with_options::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_FLOAT_OPTS)
+                    .map_err(ErrorImpl::from)?;
             self.bump(len);
 
             match self.peek_number_suffix() {
                 None => self.adjacent_to_delim_expected(ErrorKind::InvalidNumberSuffix)?,
                 Some(suffix) => {
                     if !matches!(suffix, $number_suffix) {
-                        return Err($error_kind);
+                        return raise($error_kind);
                     }
                 }
             }
@@ -338,12 +348,12 @@ impl<'de> SliceSource<'de> {
     fn raise<T>(&mut self, offset: usize, reason: ErrorKind) -> ResultKind<T> {
         self.bump(offset);
         self.set_position();
-        Err(reason)
+        raise(reason)
     }
 
     fn raise_unexpected_eof<T>(&mut self) -> ResultKind<T> {
         self.bump_to_end();
-        Err(ErrorKind::UnexpectedEof)
+        raise(ErrorKind::UnexpectedEof)
     }
 
     fn bump(&mut self, len: usize) {
@@ -420,7 +430,10 @@ impl<'de> SliceSource<'de> {
     }
 
     fn consume_expected(&mut self, needle: &[u8], reason: ErrorKind) -> ResultKind {
-        self.consume(needle).then_some(()).ok_or(reason)
+        self.consume(needle)
+            .then_some(())
+            .ok_or(reason)
+            .map_err(ErrorImpl::from)
     }
 
     fn consume_ticks_peek_initiator(&mut self) -> (usize, Option<u8>) {
@@ -484,9 +497,9 @@ impl<'de> SliceSource<'de> {
 
                     return Ok((byte, 1 + 2));
                 }
-                return Err(ErrorKind::InvalidByteEscape);
+                return raise(ErrorKind::InvalidByteEscape);
             }
-            _ => return Err(ErrorKind::InvalidByteEscape),
+            _ => return raise(ErrorKind::InvalidByteEscape),
         };
         Ok((byte, 1))
     }
@@ -507,7 +520,7 @@ impl<'de> SliceSource<'de> {
                         return Ok((byte as char, 1 + 2));
                     }
                 }
-                return Err(ErrorKind::InvalidAsciiEscape);
+                return raise(ErrorKind::InvalidAsciiEscape);
             }
             [b'u', rest @ ..] => {
                 'unicode: {
@@ -528,9 +541,9 @@ impl<'de> SliceSource<'de> {
                     };
                     return Ok((ch, 1 + 1 + len + 1));
                 }
-                return Err(ErrorKind::InvalidUnicodeEscape);
+                return raise(ErrorKind::InvalidUnicodeEscape);
             }
-            _ => return Err(ErrorKind::InvalidAsciiEscape),
+            _ => return raise(ErrorKind::InvalidAsciiEscape),
         };
         Ok((ch, 1))
     }
@@ -592,22 +605,25 @@ impl<'de> SliceSource<'de> {
             }
         }
 
-        Err(ErrorKind::InvalidUtf8Sequence)
+        raise(ErrorKind::InvalidUtf8Sequence)
     }
 
     fn decode_expected(&self) -> ResultKind<(char, usize)> {
-        self.decode_from(0)?.ok_or(ErrorKind::UnexpectedEof)
+        self.decode_from(0)?
+            .ok_or(ErrorKind::UnexpectedEof)
+            .map_err(ErrorImpl::from)
     }
 
     fn parse_identifier(&mut self) -> ResultKind<&'de Ident> {
         self.parse_identifier_or_underscore()?
             .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
+            .map_err(ErrorImpl::from)
     }
 
     fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<&'de Ident>> {
         if let Some((raw_mode, ident)) = self.parse_identifier_or_underscore_raw()? {
             if !raw_mode && matches!(ident.as_ref(), "true" | "false" | "inf" | "NaN") {
-                Err(ErrorKind::UnexpectedKeywordAsIdentifier)
+                raise(ErrorKind::UnexpectedKeywordAsIdentifier)
             } else {
                 self.bump(ident.len());
                 Ok(Some(ident))
@@ -635,12 +651,12 @@ impl<'de> SliceSource<'de> {
                     continue;
                 }
                 if offset == 0 {
-                    return Err(ErrorKind::ExpectedIdentifier);
+                    return raise(ErrorKind::ExpectedIdentifier);
                 }
                 break;
             }
             if offset == 0 {
-                return Err(ErrorKind::UnexpectedEof);
+                return raise(ErrorKind::UnexpectedEof);
             }
             break;
         }
@@ -648,7 +664,7 @@ impl<'de> SliceSource<'de> {
         let ident = unsafe { core::str::from_utf8_unchecked(&self.rest()[..offset]) };
         if matches!(ident, "_") {
             if raw_mode {
-                Err(ErrorKind::UnexpectedUnderscoreIdentifier)
+                raise(ErrorKind::UnexpectedUnderscoreIdentifier)
             } else {
                 Ok(None)
             }
@@ -693,7 +709,7 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
                                 lv -= 1;
                             }
                             [_, ..] => (),
-                            [] => return Err(ErrorKind::UnclosedBlockComment),
+                            [] => return raise(ErrorKind::UnclosedBlockComment),
                         }
                     }
                 }
@@ -715,7 +731,7 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
                     Ok(Some(found))
                 }
             }
-            None => Err(ErrorKind::ExpectedDelimiter),
+            None => raise(ErrorKind::ExpectedDelimiter),
         }
     }
 
@@ -755,7 +771,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             (0, Some(b'"')) => StringKind::Normal,
             (ticks @ 1.., Some(b'"')) => StringKind::Raw { ticks },
             (ticks @ 1.., Some(b'|')) => StringKind::Paragraph { ticks },
-            _ => return Err(ErrorKind::ExpectedString),
+            _ => return raise(ErrorKind::ExpectedString),
         };
         self.bump(1);
         Ok(kind)
@@ -764,7 +780,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
     fn begin_bytes(&mut self) -> ResultKind<BytesKind> {
         self.eat_ws()?;
         if !self.consume(b"b") {
-            return Err(ErrorKind::ExpectedByteString);
+            return raise(ErrorKind::ExpectedByteString);
         }
         let kind = if let (ticks, Some(b'"')) = self.consume_ticks_peek_initiator() {
             self.bump(1);
@@ -780,7 +796,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         } else if self.consume(b"16\"") {
             BytesKind::Base16
         } else {
-            return Err(ErrorKind::ExpectedByteString);
+            return raise(ErrorKind::ExpectedByteString);
         };
         Ok(kind)
     }
@@ -810,12 +826,12 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         if self.consume(b"..=") {
             match inclusive {
                 true => Ok(true),
-                false => Err(ErrorKind::ExpectedRangeDotDot),
+                false => raise(ErrorKind::ExpectedRangeDotDot),
             }
         } else if self.consume(b"..") {
             match !inclusive {
                 true => Ok(true),
-                false => Err(ErrorKind::ExpectedRangeDotDotEq),
+                false => raise(ErrorKind::ExpectedRangeDotDotEq),
             }
         } else {
             Ok(false)
@@ -841,7 +857,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         } else if self.consume(b"false") {
             Ok(false)
         } else {
-            Err(ErrorKind::ExpectedBoolean)
+            raise(ErrorKind::ExpectedBoolean)
         }
     }
 
@@ -864,10 +880,10 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         } else {
             let (ch, len) = self.decode_expected()?;
             if matches!(ch, '\n' | '\t' | '\r') {
-                return Err(ErrorKind::UnexpectedControlCharacter);
+                return raise(ErrorKind::UnexpectedControlCharacter);
             }
             if !ch.is_ascii() {
-                return Err(ErrorKind::UnexpectedNonAsciiCharacter);
+                return raise(ErrorKind::UnexpectedNonAsciiCharacter);
             }
             (ch as u8, len)
         };
@@ -883,7 +899,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         } else {
             let (ch, len) = self.decode_expected()?;
             if matches!(ch, '\n' | '\t' | '\r') {
-                return Err(ErrorKind::UnexpectedControlCharacter);
+                return raise(ErrorKind::UnexpectedControlCharacter);
             }
             (ch, len)
         };
@@ -1075,10 +1091,10 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                         break;
                     }
                     let (r_ticks, Some(init @ (b'|' | b'<' | b'>'))) = self.consume_ticks_peek_initiator() else {
-                        return Err(ErrorKind::InvalidParagraphLineInitiator);
+                        return raise(ErrorKind::InvalidParagraphLineInitiator);
                     };
                     if ticks != r_ticks {
-                        return Err(ErrorKind::UnbalancedRawTicks);
+                        return raise(ErrorKind::UnbalancedRawTicks);
                     }
                     self.bump(1);
                     line_type = init;
@@ -1305,7 +1321,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
         } else if self.consume(b"[") {
             Indicator::Initiator(Initiator::Array)
         } else if self.consume(b"{") {
-            Indicator::Initiator(Initiator::MapLike)
+            Indicator::Initiator(Initiator::Map)
         } else if self.consume(b"..=") {
             Indicator::Initiator(Initiator::DotDotEq)
         } else if self.consume(b"..") {
@@ -1337,7 +1353,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                         self.bump(1);
                         Indicator::String(StringKind::Paragraph { ticks })
                     } else {
-                        return Err(ErrorKind::ExpectedQuote);
+                        return raise(ErrorKind::ExpectedQuote);
                     }
                 }
 
@@ -1352,7 +1368,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                             _ => Indicator::Bytes(BytesKind::Raw { ticks }),
                         }
                     } else {
-                        return Err(ErrorKind::ExpectedQuote);
+                        return raise(ErrorKind::ExpectedQuote);
                     }
                 }
                 [b'b', b'6', b'4', b'"', ..] => {
@@ -1470,7 +1486,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                         _ => {
                             if let Some((ch, _)) = self.decode_from(len)? {
                                 if unicode_ident::is_xid_continue(ch) {
-                                    return Err(ErrorKind::InvalidNumberSuffix);
+                                    return raise(ErrorKind::InvalidNumberSuffix);
                                 }
                             }
                             if memchr3(b'.', b'e', b'E', payload).is_some() {
@@ -1486,7 +1502,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                 };
                 if let Some((ch, _)) = self.decode_from(4)? {
                     if unicode_ident::is_xid_continue(ch) {
-                        return Err(ErrorKind::InvalidNumberSpecial);
+                        return raise(ErrorKind::InvalidNumberSpecial);
                     }
                 }
                 Number2::FloatNoSuffix(special.into())

@@ -1,5 +1,6 @@
-use super::{error::*, source::*, PrivateMethod};
-use alloc::string::ToString;
+use super::{error::*, raise, source::*, PrivateMethod};
+use crate::value::Scalar;
+use alloc::{borrow::ToOwned, string::ToString};
 use core::ops::{Deref, DerefMut};
 use either::Either;
 use serde::{
@@ -70,15 +71,113 @@ impl<R> DerefMut for DeserializerWrapper<'_, R> {
 }
 
 impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
 
-    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
-        let _ = visitor;
-        Err(ErrorKind::WontImplement)
+    fn deserialize_any<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
+        let range_component = 'non_range: {
+            let res = match self.0.src.begin(&mut self.0.buf)? {
+                Indicator::Unit => visitor.visit_unit(),
+                Indicator::Bool(b) => visitor.visit_bool(b),
+                Indicator::Char(ch) => break 'non_range Either::Left(Scalar::Char(ch)),
+                Indicator::Byte(byte) => break 'non_range Either::Left(Scalar::Number(byte.into())),
+                Indicator::Number(kind) => break 'non_range Either::Left(Scalar::Number(self.parse_number(kind)?)),
+                Indicator::String(kind) => match self.0.src.parse_string(kind, &mut self.0.buf)? {
+                    Either::Left(ref_de) => visitor.visit_borrowed_str(ref_de),
+                    Either::Right(ref_tmp) => visitor.visit_str(ref_tmp),
+                },
+                Indicator::Bytes(kind) => match self.0.src.parse_bytes(kind, &mut self.0.buf)? {
+                    Either::Left(ref_de) => visitor.visit_borrowed_bytes(ref_de),
+                    Either::Right(ref_tmp) => visitor.visit_bytes(ref_tmp),
+                },
+                Indicator::Initiator(init) => match init {
+                    Initiator::Maybe => {
+                        if !self.adjacent_to_delim()? {
+                            recursion_guard!(self, visitor.visit_some(self.reborrow()))
+                        } else {
+                            visitor.visit_none()
+                        }
+                    }
+                    Initiator::Array => recursion_guard!(self, {
+                        let val = visitor.visit_seq(self.reborrow())?;
+                        self.end_array()?;
+                        Ok(val)
+                    }),
+                    Initiator::Tuple => recursion_guard!(self, {
+                        let val = visitor.visit_seq(self.reborrow())?;
+                        self.end_tuple()?;
+                        Ok(val)
+                    }),
+                    Initiator::Map => recursion_guard!(self, {
+                        let val = visitor.visit_map(MapLikeAccessor::<R, false> { der: self.reborrow() })?;
+                        self.end_map_like()?;
+                        Ok(val)
+                    }),
+                    Initiator::DotDot => {
+                        break 'non_range Either::Right(RangeSeparator::DotDot);
+                    }
+                    Initiator::DotDotEq => {
+                        break 'non_range Either::Right(RangeSeparator::DotDotEq);
+                    }
+                },
+                Indicator::Identifier(_name) => match self.nominal_body_initiator()? {
+                    Some(init) => match init {
+                        NominalBodyInitiator::Tuple => recursion_guard!(self, {
+                            let val = visitor.visit_seq(self.reborrow())?;
+                            self.end_tuple()?;
+                            Ok(val)
+                        }),
+                        NominalBodyInitiator::Struct => recursion_guard!(self, {
+                            let val = visitor.visit_map(MapLikeAccessor::<R, true> { der: self.reborrow() })?;
+                            self.end_map_like()?;
+                            Ok(val)
+                        }),
+                    },
+                    None => {
+                        self.adjacent_to_delim_expected(ErrorKind::InvalidNominalBody)?;
+                        visitor.visit_unit()
+                    }
+                },
+                Indicator::ExplicitNewtype(_name) => {
+                    recursion_guard!(self, visitor.visit_newtype_struct(self.reborrow()))
+                }
+                Indicator::ExplicitVariant(_name, variant) => visitor.visit_enum(AnyEnumAccessor {
+                    variant: &variant.to_owned(),
+                    der: self,
+                }),
+            };
+            return res;
+        };
+
+        let mut start = None;
+        let mut end = None;
+        match range_component {
+            Either::Left(scalar) => {
+                if let Some(sep) = self.range_separator()? {
+                    if self.adjacent_to_scalar()? {
+                        start = Some(scalar);
+                        end = Some(self.deserialize_scalar()?);
+                    } else if let RangeSeparator::DotDot = sep {
+                        start = Some(scalar);
+                    } else {
+                        return raise(ErrorKind::UnexpectedRangeDotDotEq);
+                    }
+                }
+            }
+            Either::Right(sep) => {
+                if self.adjacent_to_scalar()? {
+                    end = Some(self.deserialize_scalar()?);
+                } else if let RangeSeparator::DotDot = sep {
+                    return visitor.visit_unit(); // RangeFull
+                } else {
+                    return raise(ErrorKind::UnexpectedRangeDotDotEq);
+                }
+            }
+        }
+
+        visitor.visit_map(AnyRangeAccessor { start, end })
     }
     fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
-        let _ = visitor;
-        Err(ErrorKind::WontImplement)
+        self.deserialize_any(visitor)
     }
 
     //------------------------------------------------------------------------------
@@ -175,8 +274,8 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         } else {
             self.eat_ws()?;
             self.deserialize_struct_name(name)?;
-            self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
         }
+        self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
         visitor.visit_unit()
     }
     fn deserialize_newtype_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
@@ -254,7 +353,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     fn deserialize_newtype_name(&mut self, name: &'static str) -> ResultKind {
         if let Some(name_parsed) = self.0.src.parse_newtype_name(&mut self.0.buf)? {
             if name_parsed.as_str() != name {
-                return Err(ErrorKind::ExpectedDifferentStructName {
+                return raise(ErrorKind::ExpectedDifferentStructName {
                     expected: name,
                     found: name_parsed.to_string(),
                 });
@@ -267,7 +366,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     fn deserialize_struct_name(&mut self, name: &'static str) -> ResultKind {
         if let Some(name_parsed) = self.0.src.parse_struct_name(&mut self.0.buf)? {
             if name_parsed.as_str() != name {
-                return Err(ErrorKind::ExpectedDifferentStructName {
+                return raise(ErrorKind::ExpectedDifferentStructName {
                     expected: name,
                     found: name_parsed.to_string(),
                 });
@@ -290,7 +389,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
 //==================================================================================================
 
 impl<'de, R: Source<'de>> SeqAccess<'de> for DeserializerWrapper<'_, R> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> ResultKind<Option<T::Value>> {
         if self.adjacent_to_delim()? {
@@ -307,7 +406,7 @@ struct MapLikeAccessor<'a, R, const STRUCT_MODE: bool> {
 }
 
 impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapLikeAccessor<'_, R, STRUCT_MODE> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         let MapLikeAccessor { der } = self;
@@ -338,12 +437,12 @@ struct RangeToAccessor<'a, R> {
 }
 
 impl<'de, R: Source<'de>> MapAccess<'de> for RangeToAccessor<'_, R> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if let Some(der) = self.der.as_mut() {
             der.adjacent_to_scalar_expected()?;
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("end"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("end"))?))
         } else {
             Ok(None)
         }
@@ -362,11 +461,11 @@ struct RangeFromAccessor<'a, R> {
 }
 
 impl<'de, R: Source<'de>> MapAccess<'de> for RangeFromAccessor<'_, R> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if self.der.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("start"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("start"))?))
         } else {
             Ok(None)
         }
@@ -397,19 +496,19 @@ impl<'a, R, const INCLUSIVE: bool> RangeAccessor<'a, R, INCLUSIVE> {
 }
 
 impl<'de, R: Source<'de>, const INCLUSIVE: bool> MapAccess<'de> for RangeAccessor<'_, R, INCLUSIVE> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if let Some(der) = self.der.as_mut() {
             if !self.end {
-                Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("start"))?))
+                Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("start"))?))
             } else {
                 der.range_to(INCLUSIVE)?.then_some(()).ok_or(match INCLUSIVE {
                     true => ErrorKind::ExpectedRangeDotDotEq,
                     false => ErrorKind::ExpectedRangeDotDot,
                 })?;
                 der.adjacent_to_scalar_expected()?;
-                Ok(Some(seed.deserialize(StrDeserializer::<ErrorKind>::new("end"))?))
+                Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("end"))?))
             }
         } else {
             Ok(None)
@@ -427,35 +526,64 @@ impl<'de, R: Source<'de>, const INCLUSIVE: bool> MapAccess<'de> for RangeAccesso
     }
 }
 
+struct AnyRangeAccessor {
+    start: Option<Scalar>,
+    end: Option<Scalar>,
+}
+
+impl<'de> MapAccess<'de> for AnyRangeAccessor {
+    type Error = ErrorImpl;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+        if self.start.is_some() {
+            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("start"))?))
+        } else if self.end.is_some() {
+            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("end"))?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+        if let Some(scalar) = self.start.take() {
+            seed.deserialize(scalar.deserializer())
+        } else if let Some(scalar) = self.end.take() {
+            seed.deserialize(scalar.deserializer())
+        } else {
+            panic!("contract violation")
+        }
+    }
+}
+
 //------------------------------------------------------------------------------
 
 struct EnumAccessor<'a, R> {
-    der: DeserializerWrapper<'a, R>,
     name: &'static str,
+    der: DeserializerWrapper<'a, R>,
 }
 
 impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'a, R> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
     type Variant = DeserializerWrapper<'a, R>;
 
     fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
-        let EnumAccessor { mut der, name } = self;
+        let EnumAccessor { name, mut der } = self;
         der.eat_ws()?;
         let (name_parsed, variant) = der.0.src.parse_variant_name(&mut der.0.buf)?;
         if let Some(name_parsed) = name_parsed {
             if name_parsed.as_str() != name {
-                return Err(ErrorKind::ExpectedDifferentEnumName {
+                return raise(ErrorKind::ExpectedDifferentEnumName {
                     expected: name,
                     found: name_parsed.to_string(),
                 });
             }
         }
-        Ok((seed.deserialize(StrDeserializer::<ErrorKind>::new(variant))?, der))
+        Ok((seed.deserialize(StrDeserializer::<ErrorImpl>::new(variant))?, der))
     }
 }
 
 impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
-    type Error = ErrorKind;
+    type Error = ErrorImpl;
 
     fn unit_variant(mut self) -> ResultKind<()> {
         self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
@@ -479,5 +607,20 @@ impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
     fn struct_variant<V: Visitor<'de>>(self, fields: &'static [&'static str], visitor: V) -> ResultKind<V::Value> {
         let _ = fields;
         self.deserialize_map_like::<V, true>(visitor)
+    }
+}
+
+struct AnyEnumAccessor<'t, 'a, R> {
+    variant: &'t str,
+    der: DeserializerWrapper<'a, R>,
+}
+
+impl<'t, 'a, 'de, R: Source<'de>> EnumAccess<'de> for AnyEnumAccessor<'t, 'a, R> {
+    type Error = ErrorImpl;
+    type Variant = DeserializerWrapper<'a, R>;
+
+    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
+        let AnyEnumAccessor { variant, der } = self;
+        Ok((seed.deserialize(StrDeserializer::<ErrorImpl>::new(variant))?, der))
     }
 }

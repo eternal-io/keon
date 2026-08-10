@@ -747,13 +747,13 @@ impl<W: Write> PrettyImpl<W> {
                     | Compound::MapWritingValue
                     | Compound::StructWritingValue(_)
             ) {
-                self.toggle_next_writing_key_or_value();
+                self.flip_next_writing_key_or_value();
                 self.dst.write_str(",\n")?;
             } else if matches!(compd, Compound::MapWritingKey) {
-                self.toggle_next_writing_key_or_value();
+                self.flip_next_writing_key_or_value();
                 self.dst.write_str(" => ")?;
             } else if matches!(compd, Compound::StructWritingKey(_)) {
-                self.toggle_next_writing_key_or_value();
+                self.flip_next_writing_key_or_value();
                 self.dst.write_str(": ")?;
             }
         }
@@ -761,7 +761,7 @@ impl<W: Write> PrettyImpl<W> {
         Ok(())
     }
 
-    fn toggle_next_writing_key_or_value(&mut self) {
+    fn flip_next_writing_key_or_value(&mut self) {
         let compd = self.line_buffer.last_group_mut().expect("compound");
         match compd {
             Compound::MapWritingKey => *compd = Compound::MapWritingValue,
@@ -840,7 +840,7 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
                             }
                         }
                         drop(frags);
-                        self.toggle_next_writing_key_or_value();
+                        self.flip_next_writing_key_or_value();
                     }
                     Compound::StructWritingKey(header) | Compound::StructWritingValue(header) => {
                         dst.write_str(&header)?;
@@ -855,7 +855,7 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
                             }
                         }
                         drop(frags);
-                        self.toggle_next_writing_key_or_value();
+                        self.flip_next_writing_key_or_value();
                     }
                     Compound::Tuple | Compound::NominalTuple(_) => {
                         if let Compound::NominalTuple(header) = compd {
@@ -896,13 +896,13 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
                     | Compound::MapWritingValue
                     | Compound::StructWritingValue(_)
             ) {
-                self.toggle_next_writing_key_or_value();
+                self.flip_next_writing_key_or_value();
                 self.dst.write_str(",\n")?;
             } else if matches!(compd, Compound::MapWritingKey) {
-                self.toggle_next_writing_key_or_value();
+                self.flip_next_writing_key_or_value();
                 self.dst.write_str(" => ")?;
             } else if matches!(compd, Compound::StructWritingKey(_)) {
-                self.toggle_next_writing_key_or_value();
+                self.flip_next_writing_key_or_value();
                 self.dst.write_str(": ")?;
             }
         }

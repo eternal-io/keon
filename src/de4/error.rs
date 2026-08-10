@@ -1,27 +1,40 @@
-use alloc::string::String;
+use alloc::{boxed::Box, string::String};
 use core::fmt;
 
-pub(crate) type Result<T = ()> = ::core::result::Result<T, Error>;
+pub type Result<T = ()> = core::result::Result<T, Error>;
 
-pub(crate) type ResultKind<T = ()> = ::core::result::Result<T, ErrorKind>;
+pub(crate) type ResultKind<T = ()> = core::result::Result<T, ErrorImpl>;
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
+#[derive(Debug)]
 pub struct Position {
     pub line: usize,
     pub col: usize,
 }
 
 #[derive(Debug)]
-pub struct Error {}
+pub struct Error {
+    pub kind: ErrorKind,
+    pub position: Position,
+}
 
-//==================================================================================================
+impl From<ErrorImpl> for Error {
+    fn from(kind: ErrorImpl) -> Self {
+        Self {
+            kind: *kind.0,
+            position: Position { line: 0, col: 0 },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ErrorImpl(pub(crate) Box<ErrorKind>);
 
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum ErrorKind {
     Corrupted,
-    WontImplement,
     ExceededRecursionLimit,
     UnexpectedEof,
     UnexpectedCarriageReturn,
@@ -88,33 +101,39 @@ pub enum ErrorKind {
     UnexpectedUnderscoreIdentifier,
 }
 
-impl serde::de::StdError for ErrorKind {}
+impl serde::de::StdError for ErrorImpl {}
 
-impl serde::de::Error for ErrorKind {
+impl serde::de::Error for ErrorImpl {
     fn custom<T: fmt::Display>(msg: T) -> Self {
         todo!()
     }
 }
 
-impl fmt::Display for ErrorKind {
+impl fmt::Display for ErrorImpl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         todo!()
     }
 }
 
-impl From<lexical_core::Error> for ErrorKind {
+impl From<ErrorKind> for ErrorImpl {
+    fn from(kind: ErrorKind) -> Self {
+        Self(Box::new(kind))
+    }
+}
+
+impl From<lexical_core::Error> for ErrorImpl {
     fn from(value: lexical_core::Error) -> Self {
         todo!()
     }
 }
 
-impl From<simdutf8::compat::Utf8Error> for ErrorKind {
+impl From<simdutf8::compat::Utf8Error> for ErrorImpl {
     fn from(value: simdutf8::compat::Utf8Error) -> Self {
         todo!()
     }
 }
 
-impl From<data_encoding::DecodeKind> for ErrorKind {
+impl From<data_encoding::DecodeKind> for ErrorImpl {
     fn from(value: data_encoding::DecodeKind) -> Self {
         todo!()
     }

@@ -9,6 +9,7 @@ use core::{
 
 #[cfg(feature = "alloc")]
 pub mod concr_to_value;
+pub mod scalar_to_concr;
 #[cfg(feature = "alloc")]
 pub mod value_to_concr;
 

@@ -1,6 +1,6 @@
 use self::{error::*, source::*};
 use crate::{format::*, value::*, PrivateMethod};
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::ops::{Deref, DerefMut};
 use either::Either;
 
@@ -9,8 +9,8 @@ mod de_to_value;
 pub mod error;
 pub mod source;
 
+#[expect(private_interfaces)]
 pub trait Deserialize<'de>: Sized {
-    #[expect(private_interfaces)]
     #[doc(hidden)]
     fn deserialize_with<R: Source<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self>;
 }
@@ -52,7 +52,7 @@ impl<R> Deserializer<R> {
             self.ttl -= 1;
             Ok(())
         } else {
-            Err(ErrorKind::ExceededRecursionLimit)
+            raise(ErrorKind::ExceededRecursionLimit)
         }
     }
 
@@ -79,4 +79,18 @@ impl<'de, R: Source<'de>> Deserializer<R> {
 
         todo!()
     }
+
+    fn deserialize_scalar(&mut self) -> ResultKind<Scalar> {
+        let scalar = match self.src.begin(&mut self.buf)? {
+            Indicator::Char(ch) => Scalar::Char(ch),
+            Indicator::Byte(byte) => Scalar::Number(byte.into()),
+            Indicator::Number(kind) => Scalar::Number(self.parse_number(kind)?),
+            _ => return raise(ErrorKind::ExpectedScalar),
+        };
+        Ok(scalar)
+    }
+}
+
+fn raise<T>(kind: ErrorKind) -> ResultKind<T> {
+    Err(ErrorImpl(Box::new(kind)))
 }

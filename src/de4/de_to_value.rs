@@ -1,4 +1,4 @@
-use super::{error::*, source::*, Deserialize, Deserializer, PrivateMethod};
+use super::{error::*, raise, source::*, Deserialize, Deserializer, PrivateMethod};
 use crate::value::*;
 use alloc::{borrow::ToOwned, boxed::Box};
 use either::Either;
@@ -31,7 +31,7 @@ impl<'de> Deserialize<'de> for Value2 {
                         der.end_tuple()?;
                         val
                     }
-                    Initiator::MapLike => {
+                    Initiator::Map => {
                         let val = Self::Map(Box::new(deserialize_values_map(der)?));
                         der.end_map_like()?;
                         val
@@ -105,11 +105,11 @@ impl<'de> Deserialize<'de> for Value2 {
                         (match sep {
                             RangeSeparator::DotDot => Self::Range,
                             RangeSeparator::DotDotEq => Self::RangeInclusive,
-                        })(Box::new((scalar, deserialize_scalar(der)?)))
+                        })(Box::new((scalar, der.deserialize_scalar()?)))
                     } else if let RangeSeparator::DotDot = sep {
                         Self::RangeFrom(Box::new(scalar))
                     } else {
-                        return Err(ErrorKind::UnexpectedRangeDotDotEq);
+                        return raise(ErrorKind::UnexpectedRangeDotDotEq);
                     }
                 } else {
                     scalar.into()
@@ -120,26 +120,16 @@ impl<'de> Deserialize<'de> for Value2 {
                     (match sep {
                         RangeSeparator::DotDot => Self::RangeTo,
                         RangeSeparator::DotDotEq => Self::RangeToInclusive,
-                    })(Box::new(deserialize_scalar(der)?))
+                    })(Box::new(der.deserialize_scalar()?))
                 } else if let RangeSeparator::DotDot = sep {
                     Self::RangeFull
                 } else {
-                    return Err(ErrorKind::UnexpectedRangeDotDotEq);
+                    return raise(ErrorKind::UnexpectedRangeDotDotEq);
                 }
             }
         };
         Ok(val)
     }
-}
-
-fn deserialize_scalar<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Scalar> {
-    let scalar = match der.src.begin(&mut der.buf)? {
-        Indicator::Char(ch) => Scalar::Char(ch),
-        Indicator::Byte(byte) => Scalar::Number(byte.into()),
-        Indicator::Number(kind) => Scalar::Number(der.parse_number(kind)?),
-        _ => return Err(ErrorKind::ExpectedScalar),
-    };
-    Ok(scalar)
 }
 
 fn deserialize_value<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Value2> {
