@@ -28,25 +28,20 @@ impl Value2 {
             Value2::Unit => Unexpected::Other("unit value"),
             Value2::UnitStruct(_) => Unexpected::Other("unit struct"),
             Value2::UnitVariant(_) => Unexpected::Other("unit variant"),
-
             Value2::RangeFull => Unexpected::Other("unit struct (RangeFull)"),
             Value2::RangeTo(_) => Unexpected::Other("struct (RangeTo)"),
             Value2::RangeToInclusive(_) => Unexpected::Other("struct (RangeToInclusive)"),
             Value2::RangeFrom(_) => Unexpected::Other("struct (RangeFrom)"),
             Value2::Range(_) => Unexpected::Other("struct (Range)"),
             Value2::RangeInclusive(_) => Unexpected::Other("struct (RangeInclusive)"),
-
             Value2::Maybe(_) => Unexpected::Option,
             Value2::Array(_) => Unexpected::Other("array"),
-
             Value2::Tuple(_) => Unexpected::Other("tuple"),
             Value2::TupleStruct(_) => Unexpected::Other("tuple struct"),
             Value2::TupleVariant(_) => Unexpected::Other("tuple variant"),
-
             Value2::Map(_) => Unexpected::Other("map"),
             Value2::MapStruct(_) => Unexpected::Other("map struct"),
             Value2::MapVariant(_) => Unexpected::Other("map variant"),
-
             Value2::Newtype(_) => Unexpected::NewtypeStruct,
         }
     }
@@ -67,7 +62,6 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
             Value2::Unit => visitor.visit_unit(),
             Value2::UnitStruct(_) => visitor.visit_unit(),
             Value2::UnitVariant(variant) => visitor.visit_enum(VariantAccessor(variant)),
-
             Value2::RangeFull => visitor.visit_unit(),
             Value2::RangeTo(end) => visitor.visit_map(RangeAccessor {
                 start: None,
@@ -89,21 +83,17 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
                 start: Some(bounds.0),
                 end: Some(bounds.1),
             }),
-
             Value2::Maybe(maybe) => match maybe {
                 Some(value) => visitor.visit_some(value.deserializer()),
                 None => visitor.visit_none(),
             },
             Value2::Array(values) => visitor.visit_seq(SeqAccessor(values.iter())),
-
             Value2::Tuple(values) => visitor.visit_seq(SeqAccessor(values.iter())),
             Value2::TupleStruct(r#struct) => visitor.visit_seq(SeqAccessor(r#struct.body.iter())),
             Value2::TupleVariant(variant) => visitor.visit_enum(VariantAccessor(variant)),
-
             Value2::Map(values_map) => visitor.visit_map(MapAccessor(values_map.iter(), None)),
             Value2::MapStruct(r#struct) => visitor.visit_map(StructAccessor(r#struct.body.iter(), None)),
             Value2::MapVariant(variant) => visitor.visit_enum(VariantAccessor(variant)),
-
             Value2::Newtype(r#struct) => visitor.visit_newtype_struct(r#struct.body.deserializer()),
         }
     }
@@ -300,7 +290,7 @@ impl VariantPayload for FieldsMap2 {
     }
 }
 
-impl<'a, 'de, T: VariantPayload> EnumAccess<'de> for VariantAccessor<'a, T> {
+impl<'de, T: VariantPayload> EnumAccess<'de> for VariantAccessor<'_, T> {
     type Error = ErrorImpl;
     type Variant = Self;
 
@@ -312,7 +302,7 @@ impl<'a, 'de, T: VariantPayload> EnumAccess<'de> for VariantAccessor<'a, T> {
     }
 }
 
-impl<'a, 'de, T: VariantPayload> VariantAccess<'de> for VariantAccessor<'a, T> {
+impl<'de, T: VariantPayload> VariantAccess<'de> for VariantAccessor<'_, T> {
     type Error = ErrorImpl;
 
     fn unit_variant(self) -> ResultKind<()> {
@@ -358,7 +348,7 @@ impl<'de> SeqAccess<'de> for SeqAccessor<'_> {
 
 struct MapAccessor<'a>(btree_map::Iter<'a, Value2, Value2>, Option<&'a Value2>);
 
-impl<'a, 'de> MapAccess<'de> for MapAccessor<'a> {
+impl<'de> MapAccess<'de> for MapAccessor<'_> {
     type Error = ErrorImpl;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
@@ -376,7 +366,7 @@ impl<'a, 'de> MapAccess<'de> for MapAccessor<'a> {
 
 struct StructAccessor<'a>(btree_map::Iter<'a, IdentBuf, Value2>, Option<&'a Value2>);
 
-impl<'a, 'de> MapAccess<'de> for StructAccessor<'a> {
+impl<'de> MapAccess<'de> for StructAccessor<'_> {
     type Error = ErrorImpl;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {

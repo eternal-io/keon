@@ -14,7 +14,7 @@ impl Number2 {
 
 pub(crate) struct NumberWrapper<'a>(&'a Number2);
 
-impl<'a, 'de> Deserializer<'de> for NumberWrapper<'a> {
+impl<'de> Deserializer<'de> for NumberWrapper<'_> {
     type Error = ErrorImpl;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
@@ -61,7 +61,7 @@ impl Scalar {
 
 pub(crate) struct ScalarWrapper<'a>(&'a Scalar);
 
-impl<'a, 'de> Deserializer<'de> for ScalarWrapper<'a> {
+impl<'de> Deserializer<'de> for ScalarWrapper<'_> {
     type Error = ErrorImpl;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
