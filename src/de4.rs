@@ -63,21 +63,35 @@ impl<R> Deserializer<R> {
 
 impl<'de, R: Source<'de>> Deserializer<R> {
     pub fn deserialize<T: Deserialize<'de>>(&mut self) -> Result<T> {
+        let val = self.deserialize_partial::<T>()?;
+        self.finish_all().map_err(self.fixing_err())?;
+        Ok(val)
+    }
+
+    pub fn deserialize_one<T: Deserialize<'de>>(&mut self) -> Result<T> {
+        let val = self.deserialize_partial::<T>()?;
+        self.finish_one().map_err(self.fixing_err())?;
+        Ok(val)
+    }
+
+    pub fn finish(&mut self) -> Result {
         if self.ttl == 0 {
-            return Err(todo!("corrupted"));
+            return Err(Error {
+                kind: ErrorKind::Corrupted,
+                position: self.position(),
+            });
         }
+        self.finish_all().map_err(self.fixing_err())
+    }
 
-        let res = T::deserialize_with(self, PrivateMethod);
-
-        // TODO: check no more contents?
-
-        if res.is_err() {
-            self.ttl = 0; // Mark the deserializer as corrupted.
-
-            // TODO: fix error location.
+    fn deserialize_partial<T: Deserialize<'de>>(&mut self) -> Result<T> {
+        if self.ttl == 0 {
+            return Err(Error {
+                kind: ErrorKind::Corrupted,
+                position: self.position(),
+            });
         }
-
-        todo!()
+        T::deserialize_with(self, PrivateMethod).map_err(self.fixing_err())
     }
 
     fn deserialize_scalar(&mut self) -> ResultKind<Scalar> {
@@ -88,6 +102,16 @@ impl<'de, R: Source<'de>> Deserializer<R> {
             _ => return raise(ErrorKind::ExpectedScalar),
         };
         Ok(scalar)
+    }
+
+    fn fixing_err(&mut self) -> impl FnOnce(ErrorImpl) -> Error + '_ {
+        |e| {
+            self.ttl = 0;
+            Error {
+                kind: *e.0,
+                position: self.position(),
+            }
+        }
     }
 }
 

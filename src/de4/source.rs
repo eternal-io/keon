@@ -5,7 +5,7 @@ use lexical_parse_float::FromLexicalWithOptions as _;
 use lexical_parse_integer::FromLexicalWithOptions as _;
 use lexical_util::NumberFormatBuilder;
 use memchr::{memchr, memchr2, memchr3};
-use simdutf8::compat::from_utf8 as decode_utf8;
+use simdutf8::{basic::from_utf8 as decode_utf8_fast, compat::from_utf8 as decode_utf8};
 
 const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
     .case_sensitive_base_prefix(true)
@@ -161,7 +161,7 @@ pub trait Source<'de>: ParseToConcr<'de> + ParseToValue<'de> {}
 pub(super) trait ParseHelper<'de> {
     fn position(&self) -> Position;
 
-    /// Consumes the subsequent whitespaces and comments.
+    /// Skips WS: Consumes the subsequent whitespaces and comments.
     fn eat_ws(&mut self) -> ResultKind;
 
     /// Skips WS and consumes the specified delimiter if possible:
@@ -200,6 +200,9 @@ pub(super) trait ParseHelper<'de> {
             .ok_or(ErrorKind::ExpectedScalar)
             .map_err(ErrorImpl::from)
     }
+
+    fn finish_one(&mut self) -> ResultKind;
+    fn finish_all(&mut self) -> ResultKind;
 }
 
 pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
@@ -342,22 +345,18 @@ macro_rules! fn_parse_integer_immediate {
         fn $name(bytes: &[u8], radix: Radix) -> ResultKind<$ty> {
             #[cold]
             fn power_of_two(bytes: &[u8], radix: Radix) -> ResultKind<$ty> {
-                if let Radix::Hex = radix {
-                    <$ty>::from_lexical_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS)
-                } else if let Radix::Oct = radix {
-                    <$ty>::from_lexical_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS)
-                } else if let Radix::Bin = radix {
-                    <$ty>::from_lexical_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS)
-                } else {
-                    unsafe { core::hint::unreachable_unchecked() }
+                match radix {
+                    Radix::Hex => <$ty>::from_lexical_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS),
+                    Radix::Oct => <$ty>::from_lexical_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS),
+                    Radix::Bin => <$ty>::from_lexical_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS),
+                    Radix::Dec => unsafe { core::hint::unreachable_unchecked() },
                 }
                 .map_err(ErrorImpl::from)
             }
-            if let Radix::Dec = radix {
-                <$ty>::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_INTEGER_OPTIONS)
-                    .map_err(ErrorImpl::from)
-            } else {
-                power_of_two(bytes, radix)
+            match radix {
+                Radix::Dec => <$ty>::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_INTEGER_OPTIONS)
+                    .map_err(ErrorImpl::from),
+                radix => power_of_two(bytes, radix),
             }
         }
     };
@@ -373,26 +372,23 @@ fn parse_f64(bytes: &[u8]) -> ResultKind<f64> {
 
 macro_rules! fn_parse_integer {
     ($method:ident, $ty:ty) => {
+        #[rustfmt::skip]
         fn $method(&mut self) -> ResultKind<$ty> {
             #[cold]
             fn power_of_two(bytes: &[u8], radix: Radix) -> ResultKind<($ty, usize)> {
-                if let Radix::Hex = radix {
-                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS)
-                } else if let Radix::Oct = radix {
-                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS)
-                } else if let Radix::Bin = radix {
-                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS)
-                } else {
-                    unsafe { core::hint::unreachable_unchecked() }
+                match radix {
+                    Radix::Hex => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS),
+                    Radix::Oct => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS),
+                    Radix::Bin => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS),
+                    Radix::Dec => unsafe { core::hint::unreachable_unchecked() },
                 }
                 .map_err(ErrorImpl::from)
             }
             let (n, len) = match self.peek_integer_radix() {
-                Radix::Dec => {
-                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTIONS)?
-                }
-                radix => power_of_two(self.rest(), radix)?,
-            };
+                Radix::Dec => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTIONS)
+                    .map_err(ErrorImpl::from),
+                radix => power_of_two(self.rest(), radix),
+            }?;
             self.bump(len);
 
             Ok(n)
@@ -442,6 +438,10 @@ impl<'de> SliceSource<'de> {
 
     fn bump(&mut self, len: usize) {
         debug_assert!(len <= self.rest().len());
+        debug_assert!(
+            decode_utf8_fast(&self.rest()[..len]).is_ok(),
+            "Uncaught invalid UTF-8 sequence!!"
+        );
         self.idx += len;
     }
 
@@ -483,8 +483,8 @@ impl<'de> SliceSource<'de> {
     /// Skips WS and peeks the subsequent delimiter.
     fn seek_delim(&mut self) -> ResultKind<Option<Delimiter>> {
         self.eat_ws()?;
-        'found: {
-            let found = match self.rest() {
+        'delim: {
+            Ok(Some(match self.rest() {
                 [b']', ..] => Delimiter::Array,
                 [b')', ..] => Delimiter::Tuple,
                 [b'}', ..] => Delimiter::MapLike,
@@ -493,15 +493,13 @@ impl<'de> SliceSource<'de> {
                 [b'=', b'>', ..] => Delimiter::FatArrow,
                 [b';', ..] => Delimiter::SemiColon,
                 [] => Delimiter::EOF,
-                _ => break 'found,
-            };
-            return Ok(Some(found));
+                _ => break 'delim Ok(None),
+            }))
         }
-        Ok(None)
     }
 
-    fn consume(&mut self, needle: &[u8]) -> bool {
-        if self.rest().starts_with(needle) {
+    fn consume(&mut self, needle: &str) -> bool {
+        if self.rest().starts_with(needle.as_bytes()) {
             self.bump(needle.len());
             true
         } else {
@@ -509,7 +507,7 @@ impl<'de> SliceSource<'de> {
         }
     }
 
-    fn consume_expected(&mut self, needle: &[u8], reason: ErrorKind) -> ResultKind {
+    fn consume_expected(&mut self, needle: &str, reason: ErrorKind) -> ResultKind {
         self.consume(needle)
             .then_some(())
             .ok_or(reason)
@@ -738,7 +736,7 @@ impl<'de> SliceSource<'de> {
 
     fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<&'de Ident>> {
         if let Some((raw_mode, ident)) = self.parse_identifier_or_underscore_raw()? {
-            if !raw_mode && matches!(ident.as_ref(), "true" | "false" | "inf" | "NaN") {
+            if !raw_mode && matches!(ident.as_str(), "true" | "false" | "inf" | "NaN") {
                 raise(ErrorKind::UnexpectedKeywordAsIdentifier)
             } else {
                 self.bump(ident.len());
@@ -751,7 +749,7 @@ impl<'de> SliceSource<'de> {
     }
 
     fn parse_identifier_or_underscore_raw(&mut self) -> ResultKind<Option<(bool, &'de Ident)>> {
-        let raw_mode = self.consume(b"`");
+        let raw_mode = self.consume("`");
         let mut contd = false;
         let mut offset = 0;
 
@@ -793,36 +791,54 @@ impl<'de> SliceSource<'de> {
 impl<'de> Source<'de> for SliceSource<'de> {}
 
 impl<'de> ParseHelper<'de> for SliceSource<'de> {
+    #[cold]
     fn position(&self) -> Position {
-        todo!()
+        // SAFETY: The consumed contents are guaranteed to be a valid UTF-8 sequence.
+        let consumed = unsafe { core::str::from_utf8_unchecked(&self.src[..self.idx]) };
+        let line_start = match memchr::memrchr(b'\n', consumed.as_bytes()) {
+            Some(off) => off + 1,
+            None => 0,
+        };
+
+        Position {
+            line: 1 + memchr::memchr_iter(b'\n', consumed.as_bytes()).count(),
+            column: 1 + consumed[line_start..].chars().count(),
+        }
     }
 
     fn eat_ws(&mut self) -> ResultKind {
         loop {
             self.eat_ws_pure();
             match self.rest() {
-                [b'/', b'/', rest @ ..] => {
-                    if let Some(off) = memchr(b'\n', rest) {
-                        self.bump(2 + off + 1);
+                [b'/', b'/', ..] => {
+                    self.bump(2);
+                    if let Some(off) = memchr(b'\n', self.rest()) {
+                        decode_utf8_fast(&self.rest()[..off])?;
+                        self.bump(off + 1);
                     } else {
+                        decode_utf8_fast(&self.rest())?;
                         self.bump_to_end();
                     }
                 }
-                [b'/', b'*', rest @ ..] => {
+                [b'/', b'*', ..] => {
                     self.bump(2);
-                    let mut lv = 1usize;
-                    while lv > 0 {
+                    let mut depth = 1usize;
+                    while depth > 0 {
                         if let Some(off) = memchr2(b'*', b'/', self.rest()) {
+                            decode_utf8_fast(&self.rest()[..off])?;
                             self.bump(off);
+                        } else {
+                            decode_utf8_fast(&self.rest())?;
+                            self.bump_to_end();
                         }
-                        match rest {
+                        match self.rest() {
                             [b'/', b'*', ..] => {
                                 self.bump(2);
-                                lv += 1;
+                                depth += 1;
                             }
                             [b'*', b'/', ..] => {
                                 self.bump(2);
-                                lv -= 1;
+                                depth -= 1;
                             }
                             [_, ..] => (),
                             [] => return raise(ErrorKind::UnclosedBlockComment),
@@ -868,16 +884,34 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
         };
         Ok(appear)
     }
+
+    fn finish_one(&mut self) -> ResultKind {
+        if let Some(delim @ (Delimiter::SemiColon | Delimiter::EOF)) = self.seek_delim()? {
+            self.bump(delim.len_utf8());
+            Ok(())
+        } else {
+            raise(ErrorKind::ExpectedSemicolonOrEndOfInput)
+        }
+    }
+
+    fn finish_all(&mut self) -> ResultKind {
+        if let Some(delim @ (Delimiter::SemiColon | Delimiter::EOF)) = self.seek_delim()? {
+            self.bump(delim.len_utf8());
+            self.delim_expected(Delimiter::EOF, ErrorKind::ExpectedEndOfInput)
+        } else {
+            raise(ErrorKind::ExpectedSemicolonOrEndOfInput)
+        }
+    }
 }
 
 impl<'de> ParseToConcr<'de> for SliceSource<'de> {
     fn try_byte(&mut self) -> ResultKind<bool> {
-        Ok(self.consume(b"b'"))
+        Ok(self.consume("b'"))
     }
 
     fn begin_char(&mut self) -> ResultKind {
         self.eat_ws()?;
-        self.consume_expected(b"'", ErrorKind::ExpectedCharacter)
+        self.consume_expected("'", ErrorKind::ExpectedCharacter)
     }
 
     fn begin_string(&mut self) -> ResultKind<StringKind> {
@@ -894,7 +928,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
 
     fn begin_bytes(&mut self) -> ResultKind<BytesKind> {
         self.eat_ws()?;
-        if !self.consume(b"b") {
+        if !self.consume("b") {
             return raise(ErrorKind::ExpectedByteString);
         }
         let kind = if let (ticks, Some(b'"')) = self.consume_ticks_peek_initiator() {
@@ -904,11 +938,11 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             } else {
                 BytesKind::Raw { ticks }
             }
-        } else if self.consume(b"64\"") {
+        } else if self.consume("64\"") {
             BytesKind::Base64
-        } else if self.consume(b"32\"") {
+        } else if self.consume("32\"") {
             BytesKind::Base32
-        } else if self.consume(b"16\"") {
+        } else if self.consume("16\"") {
             BytesKind::Base16
         } else {
             return raise(ErrorKind::ExpectedByteString);
@@ -918,32 +952,32 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
 
     fn begin_maybe(&mut self) -> ResultKind {
         self.eat_ws()?;
-        self.consume_expected(b"?", ErrorKind::ExpectedMaybe)
+        self.consume_expected("?", ErrorKind::ExpectedMaybe)
     }
 
     fn begin_array(&mut self) -> ResultKind {
         self.eat_ws()?;
-        self.consume_expected(b"[", ErrorKind::ExpectedArray)
+        self.consume_expected("[", ErrorKind::ExpectedArray)
     }
 
     fn begin_tuple(&mut self) -> ResultKind {
         self.eat_ws()?;
-        self.consume_expected(b"(", ErrorKind::ExpectedTuple)
+        self.consume_expected("(", ErrorKind::ExpectedTuple)
     }
 
     fn begin_map_like(&mut self) -> ResultKind {
         self.eat_ws()?;
-        self.consume_expected(b"{", ErrorKind::ExpectedMapLike)
+        self.consume_expected("{", ErrorKind::ExpectedMapLike)
     }
 
     fn range_to(&mut self, inclusive: bool) -> ResultKind<bool> {
         self.eat_ws()?;
-        if self.consume(b"..=") {
+        if self.consume("..=") {
             match inclusive {
                 true => Ok(true),
                 false => raise(ErrorKind::ExpectedRangeDotDot),
             }
-        } else if self.consume(b"..") {
+        } else if self.consume("..") {
             match !inclusive {
                 true => Ok(true),
                 false => raise(ErrorKind::ExpectedRangeDotDotEq),
@@ -955,21 +989,21 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
 
     fn end_range_from(&mut self) -> ResultKind {
         self.eat_ws()?;
-        self.consume_expected(b"..", ErrorKind::ExpectedRangeDotDot)
+        self.consume_expected("..", ErrorKind::ExpectedRangeDotDot)
     }
 
     // NOTE: The following methods would not `eat_ws()` at the leading.
 
     fn parse_unit(&mut self) -> ResultKind {
-        self.consume_expected(b"(", ErrorKind::ExpectedUnit)?;
+        self.consume_expected("(", ErrorKind::ExpectedUnit)?;
         self.eat_ws()?;
-        self.consume_expected(b")", ErrorKind::ExpectedUnitEnd)
+        self.consume_expected(")", ErrorKind::ExpectedUnitEnd)
     }
 
     fn parse_bool(&mut self) -> ResultKind<bool> {
-        if self.consume(b"true") {
+        if self.consume("true") {
             Ok(true)
-        } else if self.consume(b"false") {
+        } else if self.consume("false") {
             Ok(false)
         } else {
             raise(ErrorKind::ExpectedBoolean)
@@ -990,7 +1024,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
     fn_parse_float_case!(parse_f64, f64, Float64);
 
     fn parse_byte(&mut self) -> ResultKind<u8> {
-        let (byte, len) = if self.consume(b"\\") {
+        let (byte, len) = if self.consume("\\") {
             self.peek_escape_byte_from(0)?
         } else {
             let (ch, len) = self.decode_expected()?;
@@ -1004,12 +1038,12 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         };
 
         self.bump(len);
-        self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+        self.consume_expected("'", ErrorKind::ExpectedUnquote)?;
         Ok(byte)
     }
 
     fn parse_char(&mut self) -> ResultKind<char> {
-        let (ch, len) = if self.consume(b"\\") {
+        let (ch, len) = if self.consume("\\") {
             self.peek_escape_char_from(0)?
         } else {
             let (ch, len) = self.decode_expected()?;
@@ -1020,7 +1054,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         };
 
         self.bump(len);
-        self.consume_expected(b"'", ErrorKind::ExpectedUnquote)?;
+        self.consume_expected("'", ErrorKind::ExpectedUnquote)?;
         Ok(ch)
     }
 
@@ -1143,7 +1177,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                 let mut prev_line = None;
                 let mut par_break = false;
                 loop {
-                    self.consume(b" ");
+                    self.consume(" ");
                     let offset = memchr2(b'\r', b'\n', self.rest());
                     let line = Self::trim_end(match offset {
                         Some(off) => &self.rest()[..off],
@@ -1387,10 +1421,10 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         'de: 't,
     {
         let _ = scratch;
-        if self.consume(b"~") {
+        if self.consume("~") {
             self.parse_identifier().map(Some)
         } else {
-            self.consume(b"!");
+            self.consume("!");
             Ok(None)
         }
     }
@@ -1400,11 +1434,11 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         'de: 't,
     {
         let _ = scratch;
-        if self.consume(b".") {
+        if self.consume(".") {
             Ok((None, self.parse_identifier()?))
         } else {
             let name_or_variant = self.parse_identifier()?;
-            if self.consume(b"::") {
+            if self.consume("::") {
                 Ok((Some(name_or_variant), self.parse_identifier()?))
             } else {
                 Ok((None, name_or_variant))
@@ -1420,28 +1454,28 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
     {
         let _ = scratch;
         self.eat_ws()?;
-        let indicator = if self.consume(b"~") {
+        let indicator = if self.consume("~") {
             Indicator::ExplicitNewtype(Some(self.parse_identifier()?))
-        } else if self.consume(b"!") {
+        } else if self.consume("!") {
             Indicator::ExplicitNewtype(None)
-        } else if self.consume(b"?") {
+        } else if self.consume("?") {
             Indicator::Initiator(Initiator::Maybe)
-        } else if self.consume(b"(") {
+        } else if self.consume("(") {
             self.eat_ws()?;
-            if self.consume(b")") {
+            if self.consume(")") {
                 Indicator::Unit
             } else {
                 Indicator::Initiator(Initiator::Tuple)
             }
-        } else if self.consume(b"[") {
+        } else if self.consume("[") {
             Indicator::Initiator(Initiator::Array)
-        } else if self.consume(b"{") {
+        } else if self.consume("{") {
             Indicator::Initiator(Initiator::Map)
-        } else if self.consume(b"..=") {
+        } else if self.consume("..=") {
             Indicator::Initiator(Initiator::DotDotEq)
-        } else if self.consume(b"..") {
+        } else if self.consume("..") {
             Indicator::Initiator(Initiator::DotDot)
-        } else if self.consume(b".") {
+        } else if self.consume(".") {
             Indicator::ExplicitVariant(None, self.parse_identifier()?)
         } else {
             match self.rest() {
@@ -1503,7 +1537,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                     if let Some((raw_mode, name_or_variant)) = self.parse_identifier_or_underscore_raw()? {
                         self.bump(name_or_variant.len());
                         if !raw_mode {
-                            match name_or_variant.as_ref() {
+                            match name_or_variant.as_str() {
                                 "true" => break 'nominal Indicator::Bool(true),
                                 "false" => break 'nominal Indicator::Bool(false),
                                 "inf" => break 'nominal Indicator::Number(NumberKind::Infinity),
@@ -1511,7 +1545,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                                 _ => (),
                             }
                         }
-                        if self.consume(b"::") {
+                        if self.consume("::") {
                             Indicator::ExplicitVariant(Some(name_or_variant), self.parse_identifier()?)
                         } else {
                             Indicator::Identifier(Some(name_or_variant))
@@ -1616,9 +1650,9 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
     }
 
     fn range_separator(&mut self) -> ResultKind<Option<RangeSeparator>> {
-        if self.consume(b"..=") {
+        if self.consume("..=") {
             Ok(Some(RangeSeparator::DotDotEq))
-        } else if self.consume(b"..") {
+        } else if self.consume("..") {
             Ok(Some(RangeSeparator::DotDot))
         } else {
             Ok(None)
@@ -1626,9 +1660,9 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
     }
 
     fn nominal_body_initiator(&mut self) -> ResultKind<Option<NominalBodyInitiator>> {
-        if self.consume(b"(") {
+        if self.consume("(") {
             Ok(Some(NominalBodyInitiator::Tuple))
-        } else if self.consume(b"{") {
+        } else if self.consume("{") {
             Ok(Some(NominalBodyInitiator::Struct))
         } else {
             Ok(None)

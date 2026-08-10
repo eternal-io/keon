@@ -10,7 +10,7 @@ pub(crate) type ResultKind<T = ()> = core::result::Result<T, ErrorImpl>;
 #[derive(Debug)]
 pub struct Position {
     pub line: usize,
-    pub col: usize,
+    pub column: usize,
 }
 
 #[derive(Debug)]
@@ -23,7 +23,7 @@ impl From<ErrorImpl> for Error {
     fn from(kind: ErrorImpl) -> Self {
         Self {
             kind: *kind.0,
-            position: Position { line: 0, col: 0 },
+            position: Position { line: 0, column: 0 },
         }
     }
 }
@@ -40,7 +40,6 @@ pub enum ErrorKind {
     UnexpectedCarriageReturn,
     UnbalancedRawTicks,
 
-    ExpectedVariantName,
     ExpectedDifferentEnumName { expected: &'static str, found: String },
     ExpectedDifferentStructName { expected: &'static str, found: String },
 
@@ -102,6 +101,9 @@ pub enum ErrorKind {
     ExpectedIdentifier,
     UnexpectedKeywordAsIdentifier,
     UnexpectedUnderscoreIdentifier,
+
+    ExpectedEndOfInput,
+    ExpectedSemicolonOrEndOfInput,
 }
 
 impl serde::de::StdError for ErrorImpl {}
@@ -126,6 +128,12 @@ impl From<ErrorKind> for ErrorImpl {
 
 impl From<lexical_util::Error> for ErrorImpl {
     fn from(value: lexical_util::Error) -> Self {
+        todo!()
+    }
+}
+
+impl From<simdutf8::basic::Utf8Error> for ErrorImpl {
+    fn from(value: simdutf8::basic::Utf8Error) -> Self {
         todo!()
     }
 }

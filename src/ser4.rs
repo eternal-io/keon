@@ -1456,7 +1456,7 @@ fn write_u8_fmt_02_hex(dst: &mut impl Write, byte: u8) -> fmt::Result {
         &Options::new(),
     );
 
-    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(&buf) })
+    dst.write_str(unsafe { core::str::from_utf8_unchecked(&buf) })
 }
 
 //------------------------------------------------------------------------------
@@ -1465,28 +1465,28 @@ fn write_i64(dst: &mut impl Write, n: i64) -> fmt::Result {
     use lexical_write_integer::{FormattedSize, ToLexical};
     let mut buf = [0; i64::FORMATTED_SIZE_DECIMAL];
     let digits = n.to_lexical(&mut buf);
-    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
+    dst.write_str(unsafe { core::str::from_utf8_unchecked(digits) })
 }
 
 fn write_i128(dst: &mut impl Write, n: i128) -> fmt::Result {
     use lexical_write_integer::{FormattedSize, ToLexical};
     let mut buf = [0; i128::FORMATTED_SIZE_DECIMAL];
     let digits = n.to_lexical(&mut buf);
-    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
+    dst.write_str(unsafe { core::str::from_utf8_unchecked(digits) })
 }
 
 fn write_u64(dst: &mut impl Write, n: u64) -> fmt::Result {
     use lexical_write_integer::{FormattedSize, ToLexical};
     let mut buf = [0; i64::FORMATTED_SIZE_DECIMAL];
     let digits = n.to_lexical(&mut buf);
-    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
+    dst.write_str(unsafe { core::str::from_utf8_unchecked(digits) })
 }
 
 fn write_u128(dst: &mut impl Write, n: u128) -> fmt::Result {
     use lexical_write_integer::{FormattedSize, ToLexical};
     let mut buf = [0; i128::FORMATTED_SIZE_DECIMAL];
     let digits = n.to_lexical(&mut buf);
-    dst.write_str(unsafe { ::core::str::from_utf8_unchecked(digits) })
+    dst.write_str(unsafe { core::str::from_utf8_unchecked(digits) })
 }
 
 fn write_f32(dst: &mut impl Write, n: f32) -> fmt::Result {

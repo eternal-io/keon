@@ -106,7 +106,7 @@ impl Number2 {
     #[inline]
     pub(crate) fn suffix(&self) -> Option<NumberSuffix> {
         'suff: {
-            let suff = match self {
+            Some(match self {
                 Number2::Int8(_) => NumberSuffix::Int8,
                 Number2::Int16(_) => NumberSuffix::Int16,
                 Number2::Int32(_) => NumberSuffix::Int32,
@@ -119,11 +119,9 @@ impl Number2 {
                 Number2::UInt128 { .. } => NumberSuffix::UInt128,
                 Number2::Float32(_) => NumberSuffix::Float32,
                 Number2::Float64(_) => NumberSuffix::Float64,
-                _ => break 'suff,
-            };
-            return Some(suff);
+                _ => break 'suff None,
+            })
         }
-        None
     }
 }
 
