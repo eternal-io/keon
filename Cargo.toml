@@ -46,7 +46,7 @@ either = { version = "1.17.0", default-features = false }
 memchr = { version = "2.8.3", default-features = false }
 simdutf8 = { version = "0.1.5", default-features = false }
 data-encoding = { version = "2.11.0", default-features = false }
-lexical-core = { version = "1.0.6", features = ["format", "power-of-two"] }
+lexical-util = { version = "1.0.7", default-features = false }
 lexical-parse-float = { version = "1.0.6", default-features = false, features = ["format"] }
 lexical-parse-integer = { version = "1.0.6", default-features = false, features = ["format", "power-of-two"] }
 lexical-write-integer = { version = "1.0.6", default-features = false }

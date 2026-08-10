@@ -60,9 +60,12 @@ pub enum ErrorKind {
     ExpectedFloat32,
     ExpectedFloat64,
     ExpectedBoolean,
+    InvalidNumber(&'static str),
     InvalidNumberSuffix,
     InvalidNumberSpecial,
     InvalidParagraphLineInitiator,
+    IntegerOverflow,
+    IntegerUnderflow,
 
     ExpectedUnit,
     ExpectedUnitEnd,
@@ -121,8 +124,8 @@ impl From<ErrorKind> for ErrorImpl {
     }
 }
 
-impl From<lexical_core::Error> for ErrorImpl {
-    fn from(value: lexical_core::Error) -> Self {
+impl From<lexical_util::Error> for ErrorImpl {
+    fn from(value: lexical_util::Error) -> Self {
         todo!()
     }
 }

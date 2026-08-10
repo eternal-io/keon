@@ -1,8 +1,52 @@
 use super::*;
-use core::cmp::Ordering;
+use core::{cmp::Ordering, num::NonZeroU8};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
+use lexical_parse_float::FromLexicalWithOptions as _;
+use lexical_parse_integer::FromLexicalWithOptions as _;
+use lexical_util::NumberFormatBuilder;
 use memchr::{memchr, memchr2, memchr3};
 use simdutf8::compat::from_utf8 as decode_utf8;
+
+const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
+    .case_sensitive_base_prefix(true)
+    .case_sensitive_special(true)
+    .no_positive_mantissa_sign(true)
+    .required_integer_digits(true)
+    .internal_digit_separator(true)
+    .trailing_digit_separator(true)
+    .consecutive_digit_separator(true)
+    .digit_separator(NonZeroU8::new(b'_'))
+    .build_strict();
+
+const NUMBER_FORMAT_HEX_NO_PREFIX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+    .mantissa_radix(16)
+    .build_strict();
+
+const NUMBER_FORMAT_HEX: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+    .mantissa_radix(16)
+    .base_prefix(NonZeroU8::new(b'x'))
+    .build_strict();
+
+const NUMBER_FORMAT_OCT: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+    .mantissa_radix(8)
+    .base_prefix(NonZeroU8::new(b'o'))
+    .build_strict();
+
+const NUMBER_FORMAT_BIN: u128 = NumberFormatBuilder::rebuild(NUMBER_FORMAT)
+    .mantissa_radix(2)
+    .base_prefix(NonZeroU8::new(b'b'))
+    .build_strict();
+
+const PARSE_INTEGER_OPTIONS: lexical_parse_integer::Options = lexical_parse_integer::options::STANDARD;
+
+const PARSE_FLOAT_OPTIONS: lexical_parse_float::Options = lexical_parse_float::OptionsBuilder::new()
+    .lossy(false)
+    .exponent(b'e')
+    .decimal_point(b'.')
+    .nan_string(Some(b"NaN"))
+    .inf_string(None)
+    .infinity_string(Some(b"inf"))
+    .build_strict();
 
 pub(super) enum Indicator<'t> {
     Unit,
@@ -115,9 +159,6 @@ impl LenUtf8 for NumberSuffix {
 pub trait Source<'de>: ParseToConcr<'de> + ParseToValue<'de> {}
 
 pub(super) trait ParseHelper<'de> {
-    /// Position after the last call to `eat_ws()` or `raise()`.
-    ///
-    /// Note that many methods would call `eat_ws()` implicitly.
     fn position(&self) -> Position;
 
     /// Consumes the subsequent whitespaces and comments.
@@ -281,55 +322,100 @@ pub(super) trait ParseToValue<'de>: ParseToConcr<'de> {
 
 //==================================================================================================
 
-// TODO: Move parsing power-of-two to a cold path.
-macro_rules! fn_parse_integer {
-    ($ty:ty, $name:ident, $number_suffix:path, $error_kind:path) => {
-        fn $name(&mut self) -> ResultKind<$ty> {
-            use lexical_core::parse_partial_with_options as parse;
+macro_rules! try_downcast_integer {
+    ($expr:expr, $up_ty:ty, $ty:ty) => {{
+        let n: $up_ty = $expr;
 
-            let (n, len) = match self.peek_integer_radix() {
-                Radix::Dec => parse::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTS),
-                Radix::Hex => parse::<$ty, NUMBER_FORMAT_HEX>(self.rest(), &PARSE_INTEGER_OPTS),
-                Radix::Oct => parse::<$ty, NUMBER_FORMAT_OCT>(self.rest(), &PARSE_INTEGER_OPTS),
-                Radix::Bin => parse::<$ty, NUMBER_FORMAT_BIN>(self.rest(), &PARSE_INTEGER_OPTS),
-            }
-            .map_err(ErrorImpl::from)?;
-            self.bump(len);
+        if n < <$up_ty>::from(<$ty>::MIN) {
+            return raise(ErrorKind::IntegerUnderflow);
+        }
+        if n > <$up_ty>::from(<$ty>::MAX) {
+            return raise(ErrorKind::IntegerOverflow);
+        }
 
-            match self.peek_number_suffix() {
-                None => self.adjacent_to_delim_expected(ErrorKind::InvalidNumberSuffix)?,
-                Some(suffix) => {
-                    if !matches!(suffix, $number_suffix) {
-                        return raise($error_kind);
-                    }
+        n as $ty
+    }};
+}
+
+macro_rules! fn_parse_integer_immediate {
+    ($name:ident, $ty:ty) => {
+        fn $name(bytes: &[u8], radix: Radix) -> ResultKind<$ty> {
+            #[cold]
+            fn power_of_two(bytes: &[u8], radix: Radix) -> ResultKind<$ty> {
+                if let Radix::Hex = radix {
+                    <$ty>::from_lexical_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS)
+                } else if let Radix::Oct = radix {
+                    <$ty>::from_lexical_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS)
+                } else if let Radix::Bin = radix {
+                    <$ty>::from_lexical_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS)
+                } else {
+                    unsafe { core::hint::unreachable_unchecked() }
                 }
+                .map_err(ErrorImpl::from)
             }
-            self.bump($number_suffix.len_utf8());
+            if let Radix::Dec = radix {
+                <$ty>::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_INTEGER_OPTIONS)
+                    .map_err(ErrorImpl::from)
+            } else {
+                power_of_two(bytes, radix)
+            }
+        }
+    };
+}
+
+fn_parse_integer_immediate!(parse_i64, i64);
+fn_parse_integer_immediate!(parse_i128, i128);
+fn_parse_integer_immediate!(parse_u64, u64);
+fn_parse_integer_immediate!(parse_u128, u128);
+fn parse_f64(bytes: &[u8]) -> ResultKind<f64> {
+    f64::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_FLOAT_OPTIONS).map_err(ErrorImpl::from)
+}
+
+macro_rules! fn_parse_integer {
+    ($method:ident, $ty:ty) => {
+        fn $method(&mut self) -> ResultKind<$ty> {
+            #[cold]
+            fn power_of_two(bytes: &[u8], radix: Radix) -> ResultKind<($ty, usize)> {
+                if let Radix::Hex = radix {
+                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS)
+                } else if let Radix::Oct = radix {
+                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS)
+                } else if let Radix::Bin = radix {
+                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS)
+                } else {
+                    unsafe { core::hint::unreachable_unchecked() }
+                }
+                .map_err(ErrorImpl::from)
+            }
+            let (n, len) = match self.peek_integer_radix() {
+                Radix::Dec => {
+                    <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTIONS)?
+                }
+                radix => power_of_two(self.rest(), radix)?,
+            };
+            self.bump(len);
 
             Ok(n)
         }
     };
 }
 
-macro_rules! fn_parse_float {
-    ($ty:ty, $name:ident, $number_suffix:path, $error_kind:path) => {
-        fn $name(&mut self) -> ResultKind<$ty> {
-            let (f, len) =
-                lexical_core::parse_partial_with_options::<$ty, NUMBER_FORMAT>(self.rest(), &PARSE_FLOAT_OPTS)
-                    .map_err(ErrorImpl::from)?;
-            self.bump(len);
+macro_rules! fn_parse_integer_case {
+    ($method:ident, $ty:ty, $up_method:ident, $up_ty:ty, $suff:ident) => {
+        fn $method(&mut self) -> ResultKind<$ty> {
+            let n = try_downcast_integer!(self.$up_method()?, $up_ty, $ty);
+            self.number_suffix(NumberSuffix::$suff)?;
+            Ok(n)
+        }
+    };
+}
 
-            match self.peek_number_suffix() {
-                None => self.adjacent_to_delim_expected(ErrorKind::InvalidNumberSuffix)?,
-                Some(suffix) => {
-                    if !matches!(suffix, $number_suffix) {
-                        return raise($error_kind);
-                    }
-                }
-            }
-            self.bump($number_suffix.len_utf8());
-
-            Ok(f)
+macro_rules! fn_parse_float_case {
+    ($method:ident, $ty:ty, $suff:ident) => {
+        fn $method(&mut self) -> ResultKind<$ty> {
+            let f = self.parse_f64()?;
+            self.number_suffix(NumberSuffix::$suff)?;
+            Ok(f as $ty)
         }
     };
 }
@@ -337,7 +423,6 @@ macro_rules! fn_parse_float {
 pub struct SliceSource<'de> {
     src: &'de [u8],
     idx: usize,
-    report_idx: usize,
 }
 
 impl<'de> SliceSource<'de> {
@@ -347,7 +432,6 @@ impl<'de> SliceSource<'de> {
 
     fn raise<T>(&mut self, offset: usize, reason: ErrorKind) -> ResultKind<T> {
         self.bump(offset);
-        self.set_position();
         raise(reason)
     }
 
@@ -363,10 +447,6 @@ impl<'de> SliceSource<'de> {
 
     fn bump_to_end(&mut self) {
         self.idx = self.src.len();
-    }
-
-    fn set_position(&mut self) {
-        self.report_idx = self.idx;
     }
 
     /// Consumes the subsequent characters that have `Pattern_White_Space` Unicode property.
@@ -460,9 +540,9 @@ impl<'de> SliceSource<'de> {
         }
     }
 
-    fn peek_number_suffix(&self) -> Option<NumberSuffix> {
-        'found: {
-            let kind = match self.rest() {
+    fn number_suffix(&mut self, accepted: NumberSuffix) -> ResultKind {
+        let suff = 'suff: {
+            Some(match self.rest() {
                 [b'i', b'8', ..] => NumberSuffix::Int8,
                 [b'i', b'1', b'6', ..] => NumberSuffix::Int16,
                 [b'i', b'3', b'2', ..] => NumberSuffix::Int32,
@@ -475,11 +555,47 @@ impl<'de> SliceSource<'de> {
                 [b'u', b'1', b'2', b'8', ..] => NumberSuffix::UInt128,
                 [b'f', b'3', b'2', ..] => NumberSuffix::Float32,
                 [b'f', b'6', b'4', ..] => NumberSuffix::Float64,
-                _ => break 'found,
-            };
-            return Some(kind);
+                _ => break 'suff None,
+            })
+        };
+        if let Some((ch, _)) = self.decode_from(0)? {
+            if unicode_ident::is_xid_continue(ch) {
+                return raise(ErrorKind::InvalidNumberSuffix);
+            }
         }
-        None
+        let Some(suff) = suff else {
+            return Ok(());
+        };
+        if core::mem::discriminant(&suff) != core::mem::discriminant(&accepted) {
+            return raise(match accepted {
+                NumberSuffix::Int8 => ErrorKind::ExpectedInt8,
+                NumberSuffix::Int16 => ErrorKind::ExpectedInt16,
+                NumberSuffix::Int32 => ErrorKind::ExpectedInt32,
+                NumberSuffix::Int64 => ErrorKind::ExpectedInt64,
+                NumberSuffix::Int128 => ErrorKind::ExpectedInt128,
+                NumberSuffix::UInt8 => ErrorKind::ExpectedUInt8,
+                NumberSuffix::UInt16 => ErrorKind::ExpectedUInt16,
+                NumberSuffix::UInt32 => ErrorKind::ExpectedUInt32,
+                NumberSuffix::UInt64 => ErrorKind::ExpectedUInt64,
+                NumberSuffix::UInt128 => ErrorKind::ExpectedUInt128,
+                NumberSuffix::Float32 => ErrorKind::ExpectedFloat32,
+                NumberSuffix::Float64 => ErrorKind::ExpectedFloat64,
+            });
+        }
+        self.bump(suff.len_utf8());
+
+        Ok(())
+    }
+
+    fn_parse_integer!(parse_i64, i64);
+    fn_parse_integer!(parse_i128, i128);
+    fn_parse_integer!(parse_u64, u64);
+    fn_parse_integer!(parse_u128, u128);
+    fn parse_f64(&mut self) -> ResultKind<f64> {
+        let (f, len) = f64::from_lexical_partial_with_options::<NUMBER_FORMAT>(self.rest(), &PARSE_FLOAT_OPTIONS)?;
+        self.bump(len);
+
+        Ok(f)
     }
 
     fn peek_escape_byte_from(&self, offset: usize) -> ResultKind<(u8, usize)> {
@@ -530,9 +646,9 @@ impl<'de> SliceSource<'de> {
                     let Some(len) = rest[1..].iter().position(|&byte| byte == b'}') else {
                         break 'unicode;
                     };
-                    let Ok(codep) = lexical_core::parse_with_options::<u32, NUMBER_FORMAT_HEX_NO_PREFIX>(
+                    let Ok(codep) = u32::from_lexical_with_options::<NUMBER_FORMAT_HEX_NO_PREFIX>(
                         &rest[1..][..len],
-                        &PARSE_INTEGER_OPTS,
+                        &PARSE_INTEGER_OPTIONS,
                     ) else {
                         break 'unicode;
                     };
@@ -549,9 +665,9 @@ impl<'de> SliceSource<'de> {
     }
 
     fn parse_u8_fmt_02_hex(bytes: &[u8; 2]) -> ResultKind<u8> {
-        Ok(lexical_core::parse_with_options::<u8, NUMBER_FORMAT_HEX_NO_PREFIX>(
+        Ok(u8::from_lexical_with_options::<NUMBER_FORMAT_HEX_NO_PREFIX>(
             bytes,
-            &PARSE_INTEGER_OPTS,
+            &PARSE_INTEGER_OPTIONS,
         )?)
     }
 
@@ -716,7 +832,6 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
                 _ => break,
             }
         }
-        self.set_position();
         Ok(())
     }
 
@@ -861,18 +976,18 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
         }
     }
 
-    fn_parse_integer!(i8, parse_i8, NumberSuffix::Int8, ErrorKind::ExpectedInt8);
-    fn_parse_integer!(i16, parse_i16, NumberSuffix::Int16, ErrorKind::ExpectedInt16);
-    fn_parse_integer!(i32, parse_i32, NumberSuffix::Int32, ErrorKind::ExpectedInt32);
-    fn_parse_integer!(i64, parse_i64, NumberSuffix::Int64, ErrorKind::ExpectedInt64);
-    fn_parse_integer!(i128, parse_i128, NumberSuffix::Int128, ErrorKind::ExpectedInt128);
-    fn_parse_integer!(u8, parse_u8, NumberSuffix::UInt8, ErrorKind::ExpectedUInt8);
-    fn_parse_integer!(u16, parse_u16, NumberSuffix::UInt16, ErrorKind::ExpectedUInt16);
-    fn_parse_integer!(u32, parse_u32, NumberSuffix::UInt32, ErrorKind::ExpectedUInt32);
-    fn_parse_integer!(u64, parse_u64, NumberSuffix::UInt64, ErrorKind::ExpectedUInt64);
-    fn_parse_integer!(u128, parse_u128, NumberSuffix::UInt128, ErrorKind::ExpectedUInt128);
-    fn_parse_float!(f32, parse_f32, NumberSuffix::Float32, ErrorKind::ExpectedFloat32);
-    fn_parse_float!(f64, parse_f64, NumberSuffix::Float64, ErrorKind::ExpectedFloat64);
+    fn_parse_integer_case!(parse_i8, i8, parse_i64, i64, Int8);
+    fn_parse_integer_case!(parse_i16, i16, parse_i64, i64, Int16);
+    fn_parse_integer_case!(parse_i32, i32, parse_i64, i64, Int32);
+    fn_parse_integer_case!(parse_i64, i64, parse_i64, i64, Int64);
+    fn_parse_integer_case!(parse_i128, i128, parse_i128, i128, Int128);
+    fn_parse_integer_case!(parse_u8, u8, parse_u64, u64, UInt8);
+    fn_parse_integer_case!(parse_u16, u16, parse_u64, u64, UInt16);
+    fn_parse_integer_case!(parse_u32, u32, parse_u64, u64, UInt32);
+    fn_parse_integer_case!(parse_u64, u64, parse_u64, u64, UInt64);
+    fn_parse_integer_case!(parse_u128, u128, parse_u128, u128, UInt128);
+    fn_parse_float_case!(parse_f32, f32, Float32);
+    fn_parse_float_case!(parse_f64, f64, Float64);
 
     fn parse_byte(&mut self) -> ResultKind<u8> {
         let (byte, len) = if self.consume(b"\\") {
@@ -1418,41 +1533,6 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
         const DEC_FLOAT: fn(&&u8) -> bool =
             |byte| matches!(byte, b'0'..=b'9' | b'.' | b'E' | b'e' | b'+' | b'-' | b'_');
 
-        // TODO: Move parsing power-of-two to a cold path.
-        macro_rules! parse_integer_case {
-            ($radix:ident, $payload:ident, $ty:ty, $type:ident) => {{
-                use lexical_core::parse_with_options as parse;
-
-                let n = match $radix {
-                    Radix::Dec => parse::<$ty, NUMBER_FORMAT>($payload, &PARSE_INTEGER_OPTS),
-                    Radix::Hex => parse::<$ty, NUMBER_FORMAT_HEX>($payload, &PARSE_INTEGER_OPTS),
-                    Radix::Oct => parse::<$ty, NUMBER_FORMAT_OCT>($payload, &PARSE_INTEGER_OPTS),
-                    Radix::Bin => parse::<$ty, NUMBER_FORMAT_BIN>($payload, &PARSE_INTEGER_OPTS),
-                }?;
-                self.bump($payload.len() + NumberSuffix::$type.len_utf8());
-
-                Number2::from(n)
-            }};
-        }
-
-        macro_rules! parse_float_case {
-            ($payload:ident, $ty:ty, $type:ident) => {{
-                let f = lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>($payload, &PARSE_FLOAT_OPTS)?;
-                self.bump($payload.len() + NumberSuffix::$type.len_utf8());
-
-                Number2::from(f)
-            }};
-        }
-
-        macro_rules! parse_no_suffix_case {
-            ($payload:ident, $ty:ty, $type:ident, $options:ident) => {{
-                let x = lexical_core::parse_with_options::<$ty, NUMBER_FORMAT>($payload, &$options)?;
-                self.bump($payload.len());
-
-                Number2::$type(x.into())
-            }};
-        }
-
         let num = match kind {
             NumberKind::Common => {
                 let special = 'common: {
@@ -1470,34 +1550,54 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                     };
                     let len = off + self.rest()[off..].iter().take_while(pred).count();
                     let payload = &self.rest()[..len];
-                    let num = match &self.rest()[len..] {
-                        [b'i', b'8', ..] => parse_integer_case!(radix, payload, i8, Int8),
-                        [b'i', b'1', b'6', ..] => parse_integer_case!(radix, payload, i16, Int16),
-                        [b'i', b'3', b'2', ..] => parse_integer_case!(radix, payload, i32, Int32),
-                        [b'i', b'6', b'4', ..] => parse_integer_case!(radix, payload, i64, Int64),
-                        [b'i', b'1', b'2', b'8', ..] => parse_integer_case!(radix, payload, i128, Int128),
-                        [b'u', b'8', ..] => parse_integer_case!(radix, payload, u8, UInt8),
-                        [b'u', b'1', b'6', ..] => parse_integer_case!(radix, payload, u16, UInt16),
-                        [b'u', b'3', b'2', ..] => parse_integer_case!(radix, payload, u32, UInt32),
-                        [b'u', b'6', b'4', ..] => parse_integer_case!(radix, payload, u64, UInt64),
-                        [b'u', b'1', b'2', b'8', ..] => parse_integer_case!(radix, payload, u128, UInt128),
-                        [b'f', b'3', b'2', ..] => parse_float_case!(payload, f32, Float32),
-                        [b'f', b'6', b'4', ..] => parse_float_case!(payload, f64, Float64),
-                        _ => {
-                            if let Some((ch, _)) = self.decode_from(len)? {
-                                if unicode_ident::is_xid_continue(ch) {
-                                    return raise(ErrorKind::InvalidNumberSuffix);
-                                }
-                            }
-                            if memchr3(b'.', b'e', b'E', payload).is_some() {
-                                parse_no_suffix_case!(payload, f64, FloatNoSuffix, PARSE_FLOAT_OPTS)
-                            } else if off == 0 {
-                                parse_no_suffix_case!(payload, u64, UIntNoSuffix, PARSE_INTEGER_OPTS)
-                            } else {
-                                parse_no_suffix_case!(payload, i64, IntNoSuffix, PARSE_INTEGER_OPTS)
-                            }
+                    let suff = 'suff: {
+                        Some(match &self.rest()[len..] {
+                            [b'i', b'8', ..] => NumberSuffix::Int8,
+                            [b'i', b'1', b'6', ..] => NumberSuffix::Int16,
+                            [b'i', b'3', b'2', ..] => NumberSuffix::Int32,
+                            [b'i', b'6', b'4', ..] => NumberSuffix::Int64,
+                            [b'i', b'1', b'2', b'8', ..] => NumberSuffix::Int128,
+                            [b'u', b'8', ..] => NumberSuffix::UInt8,
+                            [b'u', b'1', b'6', ..] => NumberSuffix::UInt16,
+                            [b'u', b'3', b'2', ..] => NumberSuffix::UInt32,
+                            [b'u', b'6', b'4', ..] => NumberSuffix::UInt64,
+                            [b'u', b'1', b'2', b'8', ..] => NumberSuffix::UInt128,
+                            [b'f', b'3', b'2', ..] => NumberSuffix::Float32,
+                            [b'f', b'6', b'4', ..] => NumberSuffix::Float64,
+                            _ => break 'suff None,
+                        })
+                    };
+                    if let Some((ch, _)) = self.decode_from(len)? {
+                        if unicode_ident::is_xid_continue(ch) {
+                            return raise(ErrorKind::InvalidNumberSuffix);
+                        }
+                    }
+                    let num = if let Some(ref suff) = suff {
+                        match suff {
+                            NumberSuffix::Int8 => try_downcast_integer!(parse_i64(payload, radix)?, i64, i8).into(),
+                            NumberSuffix::Int16 => try_downcast_integer!(parse_i64(payload, radix)?, i64, i16).into(),
+                            NumberSuffix::Int32 => try_downcast_integer!(parse_i64(payload, radix)?, i64, i32).into(),
+                            NumberSuffix::Int64 => parse_i64(payload, radix)?.into(),
+                            NumberSuffix::Int128 => parse_i128(payload, radix)?.into(),
+                            NumberSuffix::UInt8 => try_downcast_integer!(parse_u64(payload, radix)?, u64, u8).into(),
+                            NumberSuffix::UInt16 => try_downcast_integer!(parse_u64(payload, radix)?, u64, u16).into(),
+                            NumberSuffix::UInt32 => try_downcast_integer!(parse_u64(payload, radix)?, u64, u32).into(),
+                            NumberSuffix::UInt64 => parse_u64(payload, radix)?.into(),
+                            NumberSuffix::UInt128 => parse_u128(payload, radix)?.into(),
+                            NumberSuffix::Float32 => (parse_f64(payload)? as f32).into(),
+                            NumberSuffix::Float64 => parse_f64(payload)?.into(),
+                        }
+                    } else {
+                        if memchr3(b'.', b'e', b'E', payload).is_some() {
+                            Number2::FloatNoSuffix(parse_f64(payload)?.into())
+                        } else if off == 0 {
+                            Number2::UIntNoSuffix(parse_u64(payload, radix)?)
+                        } else {
+                            Number2::IntNoSuffix(parse_i64(payload, radix)?)
                         }
                     };
+                    self.bump(len + suff.map(|s| s.len_utf8()).unwrap_or(0));
+
                     return Ok(num);
                 };
                 if let Some((ch, _)) = self.decode_from(4)? {
@@ -1505,6 +1605,8 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                         return raise(ErrorKind::InvalidNumberSpecial);
                     }
                 }
+                self.bump(4);
+
                 Number2::FloatNoSuffix(special.into())
             }
             NumberKind::Infinity => Number2::FloatNoSuffix(f64::INFINITY.into()),
