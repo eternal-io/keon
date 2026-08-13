@@ -6,7 +6,7 @@ use serde::ser::{
     SerializeTupleStruct, SerializeTupleVariant, Serializer, StdError,
 };
 
-impl<T: Serialize> From<T> for Value2 {
+impl<T: Serialize> From<T> for Value {
     fn from(value: T) -> Self {
         value.serialize(MakeValue).expect("never fails")
     }
@@ -43,7 +43,7 @@ impl Error for Never {
 struct MakeValue;
 
 impl Serializer for MakeValue {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     type SerializeSeq = MakeTuple;
     type SerializeTuple = MakeTuple;
@@ -53,56 +53,54 @@ impl Serializer for MakeValue {
     type SerializeStruct = MakeMapStruct;
     type SerializeStructVariant = MakeMapVariant;
 
-    #[rustfmt::skip]    fn serialize_bool  (self, v: bool ) -> Fine<Value2> { Ok(Value2::Bool(v))           }
-    #[rustfmt::skip]    fn serialize_char  (self, v: char ) -> Fine<Value2> { Ok(Value2::Char(v))           }
-    #[rustfmt::skip]    fn serialize_i8    (self, v: i8   ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_i16   (self, v: i16  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_i32   (self, v: i32  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_i64   (self, v: i64  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_i128  (self, v: i128 ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_u8    (self, v: u8   ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_u16   (self, v: u16  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_u32   (self, v: u32  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_u64   (self, v: u64  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_u128  (self, v: u128 ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_f32   (self, v: f32  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_f64   (self, v: f64  ) -> Fine<Value2> { Ok(Value2::Number(v.into()))  }
-    #[rustfmt::skip]    fn serialize_str   (self, v: &str ) -> Fine<Value2> { Ok(Value2::String(v.into()))  }
-    #[rustfmt::skip]    fn serialize_bytes (self, v: &[u8]) -> Fine<Value2> { Ok(Value2::ByteBuf(v.into())) }
+    #[rustfmt::skip]    fn serialize_bool  (self, v: bool ) -> Fine<Value> { Ok(Value::Bool(v))           }
+    #[rustfmt::skip]    fn serialize_char  (self, v: char ) -> Fine<Value> { Ok(Value::Char(v))           }
+    #[rustfmt::skip]    fn serialize_i8    (self, v: i8   ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_i16   (self, v: i16  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_i32   (self, v: i32  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_i64   (self, v: i64  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_i128  (self, v: i128 ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_u8    (self, v: u8   ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_u16   (self, v: u16  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_u32   (self, v: u32  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_u64   (self, v: u64  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_u128  (self, v: u128 ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_f32   (self, v: f32  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_f64   (self, v: f64  ) -> Fine<Value> { Ok(Value::Number(v.into()))  }
+    #[rustfmt::skip]    fn serialize_str   (self, v: &str ) -> Fine<Value> { Ok(Value::String(v.into()))  }
+    #[rustfmt::skip]    fn serialize_bytes (self, v: &[u8]) -> Fine<Value> { Ok(Value::ByteBuf(v.into())) }
 
-    fn serialize_unit(self) -> Fine<Value2> {
-        Ok(Value2::Unit)
+    fn serialize_unit(self) -> Fine<Value> {
+        Ok(Value::Unit)
     }
-    fn serialize_unit_struct(self, name: &'static str) -> Fine<Value2> {
+    fn serialize_unit_struct(self, name: &'static str) -> Fine<Value> {
         if name == "RangeFull" {
-            Ok(Value2::RangeFull)
+            Ok(Value::RangeFull)
         } else {
-            Ok(Value2::UnitStruct(Some(Box::new(
-                Ident::new_unchecked(name).to_owned(),
-            ))))
+            Ok(Value::UnitStruct(Some(Box::new(Ident::new_unchecked(name).to_owned()))))
         }
     }
-    fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> Fine<Value2> {
+    fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> Fine<Value> {
         let _ = variant_index;
-        Ok(Value2::UnitVariant(Box::new(Variant {
+        Ok(Value::UnitVariant(Box::new(Variant {
             name: Some(Ident::new_unchecked(name).to_owned()),
             variant: Ident::new_unchecked(variant).to_owned(),
             body: (),
         })))
     }
 
-    fn serialize_none(self) -> Fine<Value2> {
-        Ok(Value2::Maybe(None))
+    fn serialize_none(self) -> Fine<Value> {
+        Ok(Value::Maybe(None))
     }
-    fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Fine<Value2> {
-        Ok(Value2::Maybe(Some(Box::new(value.serialize(MakeValue)?))))
+    fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Fine<Value> {
+        Ok(Value::Maybe(Some(Box::new(value.serialize(MakeValue)?))))
     }
     fn serialize_seq(self, len: Option<usize>) -> Fine<Self::SerializeSeq> {
         Ok(MakeTuple::new(len.unwrap_or(8)))
     }
 
-    fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> Fine<Value2> {
-        Ok(Value2::Newtype(Box::new(Struct {
+    fn serialize_newtype_struct<T: ?Sized + Serialize>(self, name: &'static str, value: &T) -> Fine<Value> {
+        Ok(Value::Newtype(Box::new(Struct {
             name: Some(Ident::new_unchecked(name).to_owned()),
             body: value.serialize(MakeValue)?,
         })))
@@ -113,9 +111,9 @@ impl Serializer for MakeValue {
         variant_index: u32,
         variant: &'static str,
         value: &T,
-    ) -> Fine<Value2> {
+    ) -> Fine<Value> {
         let _ = variant_index;
-        Ok(Value2::TupleVariant(Box::new(Variant {
+        Ok(Value::TupleVariant(Box::new(Variant {
             name: Some(Ident::new_unchecked(name).to_owned()),
             variant: Ident::new_unchecked(variant).to_owned(),
             body: vec![value.serialize(MakeValue)?],
@@ -168,56 +166,56 @@ impl Serializer for MakeValue {
 }
 
 struct MakeTuple {
-    vals: Values2,
+    vals: Values,
 }
 impl MakeTuple {
     fn new(len: usize) -> Self {
         Self {
-            vals: Values2::with_capacity(len),
+            vals: Values::with_capacity(len),
         }
     }
 }
 impl SerializeSeq for MakeTuple {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
         Ok(self.vals.push(value.serialize(MakeValue)?))
     }
-    fn end(self) -> Fine<Value2> {
-        Ok(Value2::Array(Box::new(self.vals)))
+    fn end(self) -> Fine<Value> {
+        Ok(Value::Array(Box::new(self.vals)))
     }
 }
 impl SerializeTuple for MakeTuple {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
         Ok(self.vals.push(value.serialize(MakeValue)?))
     }
-    fn end(self) -> Fine<Value2> {
-        Ok(Value2::Tuple(Box::new(self.vals)))
+    fn end(self) -> Fine<Value> {
+        Ok(Value::Tuple(Box::new(self.vals)))
     }
 }
 
 struct MakeTupleStruct {
     name: IdentBuf,
-    vals: Values2,
+    vals: Values,
 }
 impl MakeTupleStruct {
     fn new(len: usize, name: IdentBuf) -> Self {
         Self {
             name,
-            vals: Values2::with_capacity(len),
+            vals: Values::with_capacity(len),
         }
     }
 }
 impl SerializeTupleStruct for MakeTupleStruct {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
         Ok(self.vals.push(value.serialize(MakeValue)?))
     }
-    fn end(self) -> Fine<Value2> {
-        Ok(Value2::TupleStruct(Box::new(Struct {
+    fn end(self) -> Fine<Value> {
+        Ok(Value::TupleStruct(Box::new(Struct {
             name: Some(self.name),
             body: self.vals,
         })))
@@ -227,25 +225,25 @@ impl SerializeTupleStruct for MakeTupleStruct {
 struct MakeTupleVariant {
     name: IdentBuf,
     variant: IdentBuf,
-    vals: Values2,
+    vals: Values,
 }
 impl MakeTupleVariant {
     fn new(len: usize, name: IdentBuf, variant: IdentBuf) -> Self {
         Self {
             name,
             variant,
-            vals: Values2::with_capacity(len),
+            vals: Values::with_capacity(len),
         }
     }
 }
 impl SerializeTupleVariant for MakeTupleVariant {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
         Ok(self.vals.push(value.serialize(MakeValue)?))
     }
-    fn end(self) -> Fine<Value2> {
-        Ok(Value2::TupleVariant(Box::new(Variant {
+    fn end(self) -> Fine<Value> {
+        Ok(Value::TupleVariant(Box::new(Variant {
             name: Some(self.name),
             variant: self.variant,
             body: self.vals,
@@ -254,19 +252,19 @@ impl SerializeTupleVariant for MakeTupleVariant {
 }
 
 struct MakeMap {
-    vals: ValuesMap2,
-    last_key: Option<Value2>,
+    vals: ValuesMap,
+    last_key: Option<Value>,
 }
 impl MakeMap {
     fn new() -> Self {
         Self {
-            vals: ValuesMap2::new(),
+            vals: ValuesMap::new(),
             last_key: None,
         }
     }
 }
 impl SerializeMap for MakeMap {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Fine {
         self.last_key = Some(key.serialize(MakeValue)?);
@@ -279,32 +277,32 @@ impl SerializeMap for MakeMap {
         );
         Ok(())
     }
-    fn end(self) -> Fine<Value2> {
-        Ok(Value2::Map(Box::new(self.vals)))
+    fn end(self) -> Fine<Value> {
+        Ok(Value::Map(Box::new(self.vals)))
     }
 }
 
 struct MakeMapStruct {
     name: IdentBuf,
-    vals: FieldsMap2,
+    vals: FieldsMap,
 }
 impl MakeMapStruct {
     fn new(name: IdentBuf) -> Self {
         Self {
             name,
-            vals: FieldsMap2::new(),
+            vals: FieldsMap::new(),
         }
     }
 }
 impl SerializeStruct for MakeMapStruct {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Fine {
         self.vals
             .insert(Ident::new_unchecked(key).to_owned(), value.serialize(MakeValue)?);
         Ok(())
     }
-    fn end(self) -> Fine<Value2> {
+    fn end(self) -> Fine<Value> {
         'range_type: {
             const KEY_START: &Ident = Ident::new_unchecked("start");
             const KEY_END: &Ident = Ident::new_unchecked("end");
@@ -320,7 +318,7 @@ impl SerializeStruct for MakeMapStruct {
             let name = self.name.as_str();
             if len == 1 && has_start {
                 let range_value = match name {
-                    "RangeFrom" => Value2::RangeFrom,
+                    "RangeFrom" => Value::RangeFrom,
                     _ => break 'range_type,
                 };
 
@@ -329,8 +327,8 @@ impl SerializeStruct for MakeMapStruct {
                 }
             } else if len == 1 && has_end {
                 let range_value = match name {
-                    "RangeTo" => Value2::RangeTo,
-                    "RangeToInclusive" => Value2::RangeToInclusive,
+                    "RangeTo" => Value::RangeTo,
+                    "RangeToInclusive" => Value::RangeToInclusive,
                     _ => break 'range_type,
                 };
 
@@ -339,8 +337,8 @@ impl SerializeStruct for MakeMapStruct {
                 }
             } else if len == 2 && has_start && has_end {
                 let range_value = match name {
-                    "Range" => Value2::Range,
-                    "RangeInclusive" => Value2::RangeInclusive,
+                    "Range" => Value::Range,
+                    "RangeInclusive" => Value::RangeInclusive,
                     _ => break 'range_type,
                 };
 
@@ -351,7 +349,7 @@ impl SerializeStruct for MakeMapStruct {
                 }
             }
         }
-        Ok(Value2::MapStruct(Box::new(Struct {
+        Ok(Value::MapStruct(Box::new(Struct {
             name: Some(self.name),
             body: self.vals,
         })))
@@ -361,27 +359,27 @@ impl SerializeStruct for MakeMapStruct {
 struct MakeMapVariant {
     name: IdentBuf,
     variant: IdentBuf,
-    vals: FieldsMap2,
+    vals: FieldsMap,
 }
 impl MakeMapVariant {
     fn new(name: IdentBuf, variant: IdentBuf) -> Self {
         Self {
             name,
             variant,
-            vals: FieldsMap2::new(),
+            vals: FieldsMap::new(),
         }
     }
 }
 impl SerializeStructVariant for MakeMapVariant {
-    type Ok = Value2;
+    type Ok = Value;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) -> Fine {
         self.vals
             .insert(Ident::new_unchecked(key).to_owned(), value.serialize(MakeValue)?);
         Ok(())
     }
-    fn end(self) -> Fine<Value2> {
-        Ok(Value2::MapVariant(Box::new(Variant {
+    fn end(self) -> Fine<Value> {
+        Ok(Value::MapVariant(Box::new(Variant {
             name: Some(self.name),
             variant: self.variant,
             body: self.vals,

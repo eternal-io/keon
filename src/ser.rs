@@ -2,7 +2,7 @@ use crate::{value::*, PrivateMethod};
 #[cfg(feature = "alloc")]
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::{
-    fmt::{self, Write},
+    fmt::{self, Display, Write},
     ops::{Deref, DerefMut},
 };
 
@@ -10,9 +10,9 @@ mod ser_concr;
 #[cfg(feature = "alloc")]
 mod ser_value;
 
-#[cfg(feature = "ecow")]
+#[cfg(all(feature = "alloc", feature = "ecow"))]
 type EcoString = ecow::EcoString;
-#[cfg(not(feature = "ecow"))]
+#[cfg(all(feature = "alloc", not(feature = "ecow")))]
 type EcoString = alloc::string::String;
 
 #[cfg(feature = "alloc")]
@@ -29,7 +29,7 @@ pub fn stringify_pretty<T: Serialize>(value: &T) -> Result<String, fmt::Error> {
     Ok(stringified)
 }
 
-//------------------------------------------------------------------------------
+//==================================================================================================
 
 #[expect(private_interfaces, reason = "Sealed")]
 pub trait Serialize {
@@ -46,8 +46,9 @@ trait SerializerImplDetail {
 
     fn push_bool(&mut self, b: bool) -> fmt::Result;
     fn push_char(&mut self, ch: char) -> fmt::Result;
-    fn push_number(&mut self, num: &Number2) -> fmt::Result;
+    fn push_number(&mut self, num: &Number) -> fmt::Result;
     fn push_str(&mut self, s: &str) -> fmt::Result;
+    fn push_display<T: ?Sized + Display>(&mut self, value: &T) -> fmt::Result;
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result;
     fn push_scalar(&mut self, scalar: &Scalar) -> fmt::Result {
         match scalar {
@@ -153,6 +154,7 @@ impl<W: Write> Serializer<FastImpl<W>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<W: Write> Serializer<PrettyImpl<W>> {
     pub fn new_pretty(dst: W) -> Self {
         Self::with_flags_pretty(dst, Flags::DEFAULT)
@@ -367,6 +369,7 @@ macro_rules! push_concr_number_fast {
 impl<W: Write> SerializerImpl for FastImpl<W> {}
 
 impl<W: Write> SerializerImplDetail for FastImpl<W> {
+    #[cfg(feature = "alloc")]
     fn push_stringified(&mut self, _stringified: EcoString) -> fmt::Result {
         panic!("FastImpl does not rely on alloc")
     }
@@ -378,12 +381,16 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
     fn push_char(&mut self, ch: char) -> fmt::Result {
         self.intercept_range_bound(ch, |ser, ch| write_quoted_char(&mut ser.dst, ch))
     }
-    fn push_number(&mut self, num: &Number2) -> fmt::Result {
+    fn push_number(&mut self, num: &Number) -> fmt::Result {
         self.intercept_range_bound(num, |ser, num| write_number(&mut ser.dst, num, ser.flags))
     }
     fn push_str(&mut self, s: &str) -> fmt::Result {
         self.clear_range_intercept()?;
         write_quoted_string(&mut self.dst, s)
+    }
+    fn push_display<T: ?Sized + Display>(&mut self, value: &T) -> fmt::Result {
+        self.clear_range_intercept()?;
+        write!(EscapedWriter(&mut self.dst), r#""{}""#, value)
     }
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
         self.clear_range_intercept()?;
@@ -462,7 +469,7 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
     fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
         self.clear_range_intercept()?;
         if let Some("RangeFull") = name.map(Ident::as_str) {
-            self.dst.write_str("..")
+            self.push_range_full()
         } else {
             write_struct_name(&mut self.dst, name, self.flags)
         }
@@ -917,12 +924,16 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
     fn push_char(&mut self, ch: char) -> fmt::Result {
         self.intercept_range_bound(ch, |dst, ch, _flags| write_quoted_char(dst, ch))
     }
-    fn push_number(&mut self, num: &Number2) -> fmt::Result {
+    fn push_number(&mut self, num: &Number) -> fmt::Result {
         self.intercept_range_bound(num, |dst, num, flags| write_number(dst, num, flags))
     }
     fn push_str(&mut self, s: &str) -> fmt::Result {
         self.clear_range_intercept()?;
         self.push_stringifying(|dst, _flags| write_quoted_string(dst, s))
+    }
+    fn push_display<T: ?Sized + Display>(&mut self, value: &T) -> fmt::Result {
+        self.clear_range_intercept()?;
+        self.push_stringifying(|dst, _flags| write!(EscapedWriter(dst), r#""{}""#, value))
     }
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
         self.clear_range_intercept()?;
@@ -1011,7 +1022,7 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
     fn push_unit_struct(&mut self, name: Option<&Ident>) -> fmt::Result {
         self.clear_range_intercept()?;
         if let Some("RangeFull") = name.map(Ident::as_str) {
-            self.push_stringified(EcoString::from(".."))
+            self.push_range_full()
         } else {
             self.push_stringifying(|dst, flags| write_struct_name(dst, name, flags))
         }
@@ -1380,6 +1391,7 @@ impl<Group> Drop for LineBuffer<Group> {
 
 //==================================================================================================
 
+#[cfg(feature = "alloc")]
 fn write_indent(dst: &mut impl Write, depth: usize, hard_tab: bool) -> fmt::Result {
     let indentor = if hard_tab { "\t" } else { "\x20\x20\x20\x20" };
     (0..depth).try_for_each(|_| dst.write_str(indentor))
@@ -1389,6 +1401,18 @@ fn write_bool(dst: &mut impl Write, b: bool) -> fmt::Result {
     match b {
         true => dst.write_str("true"),
         false => dst.write_str("false"),
+    }
+}
+
+struct EscapedWriter<W: Write>(W);
+
+impl<W: Write> Write for EscapedWriter<W> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        s.chars().try_for_each(|ch| self.write_char(ch))
+    }
+
+    fn write_char(&mut self, ch: char) -> fmt::Result {
+        write_escaped_char::<true>(&mut self.0, ch)
     }
 }
 
@@ -1524,26 +1548,26 @@ fn write_number_suffix(dst: &mut impl Write, suff: NumberSuffix, flags: Flags) -
     }
 }
 
-fn write_number(dst: &mut impl Write, num: &Number2, flags: Flags) -> fmt::Result {
+fn write_number(dst: &mut impl Write, num: &Number, flags: Flags) -> fmt::Result {
     match *num {
-        Number2::Int8(v) => write_i64(dst, v.into()),
-        Number2::Int16(v) => write_i64(dst, v.into()),
-        Number2::Int32(v) => write_i64(dst, v.into()),
-        Number2::Int64(v) => write_i64(dst, v),
-        Number2::IntNoSuffix(v) => write_i64(dst, v),
+        Number::Int8(v) => write_i64(dst, v.into()),
+        Number::Int16(v) => write_i64(dst, v.into()),
+        Number::Int32(v) => write_i64(dst, v.into()),
+        Number::Int64(v) => write_i64(dst, v),
+        Number::IntNoSuffix(v) => write_i64(dst, v),
 
-        Number2::UInt8(v) => write_u64(dst, v.into()),
-        Number2::UInt16(v) => write_u64(dst, v.into()),
-        Number2::UInt32(v) => write_u64(dst, v.into()),
-        Number2::UInt64(v) => write_u64(dst, v),
-        Number2::UIntNoSuffix(v) => write_u64(dst, v),
+        Number::UInt8(v) => write_u64(dst, v.into()),
+        Number::UInt16(v) => write_u64(dst, v.into()),
+        Number::UInt32(v) => write_u64(dst, v.into()),
+        Number::UInt64(v) => write_u64(dst, v),
+        Number::UIntNoSuffix(v) => write_u64(dst, v),
 
-        Number2::Float32(Float32(v)) => write_f32(dst, v),
-        Number2::Float64(Float64(v)) => write_f64(dst, v),
-        Number2::FloatNoSuffix(Float64(v)) => write_f64(dst, v),
+        Number::Float32(Float32(v)) => write_f32(dst, v),
+        Number::Float64(Float64(v)) => write_f64(dst, v),
+        Number::FloatNoSuffix(Float64(v)) => write_f64(dst, v),
 
-        Number2::Int128 { lo, hi } => write_i128(dst, (hi as i128) << 64 | lo as i128),
-        Number2::UInt128 { lo, hi } => write_u128(dst, (hi as u128) << 64 | lo as u128),
+        Number::Int128 { lo, hi } => write_i128(dst, (hi as i128) << 64 | lo as i128),
+        Number::UInt128 { lo, hi } => write_u128(dst, (hi as u128) << 64 | lo as u128),
     }?;
     if let Some(suff) = num.suffix() {
         write_number_suffix(dst, suff, flags)?;

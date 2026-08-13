@@ -3,9 +3,9 @@ use crate::value::*;
 use alloc::{borrow::ToOwned, boxed::Box};
 use either::Either;
 
-impl<'de> Deserialize<'de> for Value2 {
+impl<'de> Deserialize<'de> for Value {
     #[expect(private_interfaces)]
-    fn deserialize_with<R: Source<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self> {
+    fn deserialize_with<R: Read<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self> {
         let range_component = 'non_range: {
             let val = match der.src.begin(&mut der.buf)? {
                 Indicator::Unit => Self::Unit,
@@ -132,21 +132,21 @@ impl<'de> Deserialize<'de> for Value2 {
     }
 }
 
-fn deserialize_value<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Value2> {
+fn deserialize_value<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<Value> {
     der.enter_nesting()?;
-    let value = Value2::deserialize_with(der, PrivateMethod)?;
+    let value = Value::deserialize_with(der, PrivateMethod)?;
     der.exit_nesting();
     Ok(value)
 }
 
-fn deserialize_values<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<Values2> {
+fn deserialize_values<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<Values> {
     der.enter_nesting()?;
-    let mut values = Values2::new();
+    let mut values = Values::new();
     loop {
         if der.adjacent_to_delim()? {
             break;
         }
-        let value = Value2::deserialize_with(der, PrivateMethod)?;
+        let value = Value::deserialize_with(der, PrivateMethod)?;
         der.delim(Delimiter::Comma)?;
         values.push(value);
     }
@@ -154,16 +154,16 @@ fn deserialize_values<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultK
     Ok(values)
 }
 
-fn deserialize_values_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<ValuesMap2> {
+fn deserialize_values_map<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<ValuesMap> {
     der.enter_nesting()?;
-    let mut values_map = ValuesMap2::new();
+    let mut values_map = ValuesMap::new();
     loop {
         if der.adjacent_to_delim()? {
             break;
         }
-        let key = Value2::deserialize_with(der, PrivateMethod)?;
+        let key = Value::deserialize_with(der, PrivateMethod)?;
         der.delim_expected(Delimiter::Colon, ErrorKind::ExpectedColon)?;
-        let value = Value2::deserialize_with(der, PrivateMethod)?;
+        let value = Value::deserialize_with(der, PrivateMethod)?;
         der.delim(Delimiter::Comma)?;
         values_map.insert(key, value);
     }
@@ -171,16 +171,16 @@ fn deserialize_values_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> Res
     Ok(values_map)
 }
 
-fn deserialize_fields_map<'de, R: Source<'de>>(der: &mut Deserializer<R>) -> ResultKind<FieldsMap2> {
+fn deserialize_fields_map<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<FieldsMap> {
     der.enter_nesting()?;
-    let mut fields_map = FieldsMap2::new();
+    let mut fields_map = FieldsMap::new();
     loop {
         if der.adjacent_to_delim()? {
             break;
         }
         let field = Ident::new_unchecked(der.src.parse_identifier(&mut der.buf)?).to_owned();
         der.delim_expected(Delimiter::FatArrow, ErrorKind::ExpectedFatArrow)?;
-        let value = Value2::deserialize_with(der, PrivateMethod)?;
+        let value = Value::deserialize_with(der, PrivateMethod)?;
         der.delim(Delimiter::Comma)?;
         fields_map.insert(field, value);
     }

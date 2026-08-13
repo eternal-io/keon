@@ -17,7 +17,7 @@ use serde::{
 
 impl<'de, T: Deserialize<'de>> super::Deserialize<'de> for T {
     #[expect(private_interfaces)]
-    fn deserialize_with<R: Source<'de>>(der: &mut super::Deserializer<R>, _: PrivateMethod) -> ResultKind<Self> {
+    fn deserialize_with<R: Read<'de>>(der: &mut super::Deserializer<R>, _: PrivateMethod) -> ResultKind<Self> {
         T::deserialize(DeserializerWrapper(der))
     }
 }
@@ -77,7 +77,7 @@ impl<R> DerefMut for DeserializerWrapper<'_, R> {
     }
 }
 
-impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
+impl<'de, R: Read<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     type Error = BoxedKind;
 
     fn deserialize_any<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
@@ -367,7 +367,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     }
 }
 
-impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
+impl<'de, R: Read<'de>> DeserializerWrapper<'_, R> {
     #[inline]
     fn deserialize_newtype_name<V: Visitor<'de>>(&mut self, name: &'static str, visitor: &V) -> ResultKind {
         if let Some(name_parsed) = self.0.src.parse_newtype_name(&mut self.0.buf)? {
@@ -401,7 +401,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
 
 //==================================================================================================
 
-impl<'de, R: Source<'de>> SeqAccess<'de> for DeserializerWrapper<'_, R> {
+impl<'de, R: Read<'de>> SeqAccess<'de> for DeserializerWrapper<'_, R> {
     type Error = BoxedKind;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> ResultKind<Option<T::Value>> {
@@ -418,7 +418,7 @@ struct MapLikeAccessor<'a, R, const STRUCT_MODE: bool> {
     der: DeserializerWrapper<'a, R>,
 }
 
-impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapLikeAccessor<'_, R, STRUCT_MODE> {
+impl<'de, R: Read<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapLikeAccessor<'_, R, STRUCT_MODE> {
     type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
@@ -449,7 +449,7 @@ struct RangeToAccessor<'a, R> {
     der: Option<DeserializerWrapper<'a, R>>,
 }
 
-impl<'de, R: Source<'de>> MapAccess<'de> for RangeToAccessor<'_, R> {
+impl<'de, R: Read<'de>> MapAccess<'de> for RangeToAccessor<'_, R> {
     type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
@@ -473,7 +473,7 @@ struct RangeFromAccessor<'a, R> {
     der: Option<DeserializerWrapper<'a, R>>,
 }
 
-impl<'de, R: Source<'de>> MapAccess<'de> for RangeFromAccessor<'_, R> {
+impl<'de, R: Read<'de>> MapAccess<'de> for RangeFromAccessor<'_, R> {
     type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
@@ -508,7 +508,7 @@ impl<'a, R, const INCLUSIVE: bool> RangeAccessor<'a, R, INCLUSIVE> {
     }
 }
 
-impl<'de, R: Source<'de>, const INCLUSIVE: bool> MapAccess<'de> for RangeAccessor<'_, R, INCLUSIVE> {
+impl<'de, R: Read<'de>, const INCLUSIVE: bool> MapAccess<'de> for RangeAccessor<'_, R, INCLUSIVE> {
     type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
@@ -583,7 +583,7 @@ struct EnumAccessor<'variant, 'a, R> {
     der: DeserializerWrapper<'a, R>,
 }
 
-impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'_, 'a, R> {
+impl<'a, 'de, R: Read<'de>> EnumAccess<'de> for EnumAccessor<'_, 'a, R> {
     type Error = BoxedKind;
     type Variant = DeserializerWrapper<'a, R>;
 
@@ -593,7 +593,7 @@ impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'_, 'a, R> {
     }
 }
 
-impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
+impl<'de, R: Read<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
     type Error = BoxedKind;
 
     fn unit_variant(mut self) -> ResultKind<()> {

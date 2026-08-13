@@ -65,6 +65,10 @@ impl<Impl: SerializerImpl> Serializer for SerializerWrapper<'_, Impl> {
     #[rustfmt::skip]    fn serialize_str   (mut self, v: &str ) -> fmt::Result { self.push_str   (v) }
     #[rustfmt::skip]    fn serialize_bytes (mut self, v: &[u8]) -> fmt::Result { self.push_bytes (v) }
 
+    fn collect_str<T: ?Sized + fmt::Display>(mut self, value: &T) -> fmt::Result {
+        self.push_display(value)
+    }
+
     fn serialize_unit(mut self) -> fmt::Result {
         self.push_unit()
     }

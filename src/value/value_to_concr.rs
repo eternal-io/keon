@@ -9,7 +9,7 @@ use serde::{
     forward_to_deserialize_any, Deserialize, Deserializer,
 };
 
-impl Value2 {
+impl Value {
     pub fn deserialize_to<'de, T: Deserialize<'de>>(&self) -> Result<T> {
         Ok(T::deserialize(ValueWrapper(&self))?)
     }
@@ -20,81 +20,81 @@ impl Value2 {
 
     fn unexpected(&self) -> Unexpected<'static> {
         match self {
-            Value2::Bool(_) => Unexpected::Other("boolean"),
-            Value2::Char(_) => Unexpected::Other("character"),
-            Value2::Number(_) => Unexpected::Other("number"),
-            Value2::String(_) => Unexpected::Other("string"),
-            Value2::ByteBuf(_) => Unexpected::Other("byte string"),
-            Value2::Unit => Unexpected::Other("unit value"),
-            Value2::UnitStruct(_) => Unexpected::Other("unit struct"),
-            Value2::UnitVariant(_) => Unexpected::Other("unit variant"),
-            Value2::RangeFull => Unexpected::Other("unit struct (RangeFull)"),
-            Value2::RangeTo(_) => Unexpected::Other("struct (RangeTo)"),
-            Value2::RangeToInclusive(_) => Unexpected::Other("struct (RangeToInclusive)"),
-            Value2::RangeFrom(_) => Unexpected::Other("struct (RangeFrom)"),
-            Value2::Range(_) => Unexpected::Other("struct (Range)"),
-            Value2::RangeInclusive(_) => Unexpected::Other("struct (RangeInclusive)"),
-            Value2::Maybe(_) => Unexpected::Option,
-            Value2::Array(_) => Unexpected::Other("array"),
-            Value2::Tuple(_) => Unexpected::Other("tuple"),
-            Value2::TupleStruct(_) => Unexpected::Other("tuple struct"),
-            Value2::TupleVariant(_) => Unexpected::Other("tuple variant"),
-            Value2::Map(_) => Unexpected::Other("map"),
-            Value2::MapStruct(_) => Unexpected::Other("map struct"),
-            Value2::MapVariant(_) => Unexpected::Other("map variant"),
-            Value2::Newtype(_) => Unexpected::NewtypeStruct,
+            Value::Bool(_) => Unexpected::Other("boolean"),
+            Value::Char(_) => Unexpected::Other("character"),
+            Value::Number(_) => Unexpected::Other("number"),
+            Value::String(_) => Unexpected::Other("string"),
+            Value::ByteBuf(_) => Unexpected::Other("byte string"),
+            Value::Unit => Unexpected::Other("unit value"),
+            Value::UnitStruct(_) => Unexpected::Other("unit struct"),
+            Value::UnitVariant(_) => Unexpected::Other("unit variant"),
+            Value::RangeFull => Unexpected::Other("unit struct (RangeFull)"),
+            Value::RangeTo(_) => Unexpected::Other("struct (RangeTo)"),
+            Value::RangeToInclusive(_) => Unexpected::Other("struct (RangeToInclusive)"),
+            Value::RangeFrom(_) => Unexpected::Other("struct (RangeFrom)"),
+            Value::Range(_) => Unexpected::Other("struct (Range)"),
+            Value::RangeInclusive(_) => Unexpected::Other("struct (RangeInclusive)"),
+            Value::Maybe(_) => Unexpected::Option,
+            Value::Array(_) => Unexpected::Other("array"),
+            Value::Tuple(_) => Unexpected::Other("tuple"),
+            Value::TupleStruct(_) => Unexpected::Other("tuple struct"),
+            Value::TupleVariant(_) => Unexpected::Other("tuple variant"),
+            Value::Map(_) => Unexpected::Other("map"),
+            Value::MapStruct(_) => Unexpected::Other("map struct"),
+            Value::MapVariant(_) => Unexpected::Other("map variant"),
+            Value::Newtype(_) => Unexpected::NewtypeStruct,
         }
     }
 }
 
-struct ValueWrapper<'a>(&'a Value2);
+struct ValueWrapper<'a>(&'a Value);
 
 impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
     type Error = BoxedKind;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
         match self.0 {
-            Value2::Bool(b) => visitor.visit_bool(*b),
-            Value2::Char(ch) => visitor.visit_char(*ch),
-            Value2::Number(num) => num.deserializer().deserialize_any(visitor),
-            Value2::String(s) => visitor.visit_str(s),
-            Value2::ByteBuf(bytes) => visitor.visit_bytes(bytes),
-            Value2::Unit => visitor.visit_unit(),
-            Value2::UnitStruct(_) => visitor.visit_unit(),
-            Value2::UnitVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
-            Value2::RangeFull => visitor.visit_unit(),
-            Value2::RangeTo(end) => visitor.visit_map(RangeAccessor {
+            Value::Bool(b) => visitor.visit_bool(*b),
+            Value::Char(ch) => visitor.visit_char(*ch),
+            Value::Number(num) => num.deserializer().deserialize_any(visitor),
+            Value::String(s) => visitor.visit_str(s),
+            Value::ByteBuf(bytes) => visitor.visit_bytes(bytes),
+            Value::Unit => visitor.visit_unit(),
+            Value::UnitStruct(_) => visitor.visit_unit(),
+            Value::UnitVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
+            Value::RangeFull => visitor.visit_unit(),
+            Value::RangeTo(end) => visitor.visit_map(RangeAccessor {
                 start: None,
                 end: Some(**end),
             }),
-            Value2::RangeToInclusive(end) => visitor.visit_map(RangeAccessor {
+            Value::RangeToInclusive(end) => visitor.visit_map(RangeAccessor {
                 start: None,
                 end: Some(**end),
             }),
-            Value2::RangeFrom(start) => visitor.visit_map(RangeAccessor {
+            Value::RangeFrom(start) => visitor.visit_map(RangeAccessor {
                 start: Some(**start),
                 end: None,
             }),
-            Value2::Range(bounds) => visitor.visit_map(RangeAccessor {
+            Value::Range(bounds) => visitor.visit_map(RangeAccessor {
                 start: Some(bounds.0),
                 end: Some(bounds.1),
             }),
-            Value2::RangeInclusive(bounds) => visitor.visit_map(RangeAccessor {
+            Value::RangeInclusive(bounds) => visitor.visit_map(RangeAccessor {
                 start: Some(bounds.0),
                 end: Some(bounds.1),
             }),
-            Value2::Maybe(maybe) => match maybe {
+            Value::Maybe(maybe) => match maybe {
                 Some(value) => visitor.visit_some(value.deserializer()),
                 None => visitor.visit_none(),
             },
-            Value2::Array(values) => visitor.visit_seq(SeqAccessor(values.iter())),
-            Value2::Tuple(values) => visitor.visit_seq(SeqAccessor(values.iter())),
-            Value2::TupleStruct(r#struct) => visitor.visit_seq(SeqAccessor(r#struct.body.iter())),
-            Value2::TupleVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
-            Value2::Map(values_map) => visitor.visit_map(MapAccessor(values_map.iter(), None)),
-            Value2::MapStruct(r#struct) => visitor.visit_map(StructAccessor(r#struct.body.iter(), None)),
-            Value2::MapVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
-            Value2::Newtype(r#struct) => visitor.visit_newtype_struct(r#struct.body.deserializer()),
+            Value::Array(values) => visitor.visit_seq(SeqAccessor(values.iter())),
+            Value::Tuple(values) => visitor.visit_seq(SeqAccessor(values.iter())),
+            Value::TupleStruct(r#struct) => visitor.visit_seq(SeqAccessor(r#struct.body.iter())),
+            Value::TupleVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
+            Value::Map(values_map) => visitor.visit_map(MapAccessor(values_map.iter(), None)),
+            Value::MapStruct(r#struct) => visitor.visit_map(StructAccessor(r#struct.body.iter(), None)),
+            Value::MapVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
+            Value::Newtype(r#struct) => visitor.visit_newtype_struct(r#struct.body.deserializer()),
         }
     }
     fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
@@ -104,7 +104,7 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
 
     fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, visitor: V) -> ResultKind<V::Value> {
         match self.0 {
-            Value2::Array(values) | Value2::Tuple(values) => {
+            Value::Array(values) | Value::Tuple(values) => {
                 if values.len() == len {
                     visitor.visit_seq(SeqAccessor(values.iter()))
                 } else {
@@ -117,17 +117,17 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
         match self.0 {
-            Value2::Map(values_map) => visitor.visit_map(MapAccessor(values_map.iter(), None)),
-            Value2::MapStruct(r#struct) => visitor.visit_map(StructAccessor(r#struct.body.iter(), None)),
+            Value::Map(values_map) => visitor.visit_map(MapAccessor(values_map.iter(), None)),
+            Value::MapStruct(r#struct) => visitor.visit_map(StructAccessor(r#struct.body.iter(), None)),
             _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
 
     fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
         match self.0 {
-            Value2::Unit => visitor.visit_unit(),
-            Value2::RangeFull if name == "RangeFull" => visitor.visit_unit(),
-            Value2::UnitStruct(struct_name) => {
+            Value::Unit => visitor.visit_unit(),
+            Value::RangeFull if name == "RangeFull" => visitor.visit_unit(),
+            Value::UnitStruct(struct_name) => {
                 verify_name(struct_name.as_deref().map(AsRef::as_ref), name, &visitor)?;
                 visitor.visit_unit()
             }
@@ -136,11 +136,11 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
     }
     fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
         match self.0 {
-            Value2::Newtype(r#struct) => {
+            Value::Newtype(r#struct) => {
                 verify_name(r#struct.name.as_deref(), name, &visitor)?;
                 r#struct.body.deserializer().deserialize_any(visitor)
             }
-            Value2::TupleStruct(r#struct) => {
+            Value::TupleStruct(r#struct) => {
                 verify_name(r#struct.name.as_deref(), name, &visitor)?;
                 if r#struct.body.len() == 1 {
                     visitor.visit_seq(SeqAccessor(r#struct.body.iter()))
@@ -158,7 +158,7 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
         visitor: V,
     ) -> ResultKind<V::Value> {
         match self.0 {
-            Value2::TupleStruct(r#struct) => {
+            Value::TupleStruct(r#struct) => {
                 verify_name(r#struct.name.as_deref(), name, &visitor)?;
                 if r#struct.body.len() == len {
                     visitor.visit_seq(SeqAccessor(r#struct.body.iter()))
@@ -177,27 +177,27 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
     ) -> ResultKind<V::Value> {
         let _ = fields;
         match self.0 {
-            Value2::RangeTo(end) if name == "RangeTo" => visitor.visit_map(RangeAccessor {
+            Value::RangeTo(end) if name == "RangeTo" => visitor.visit_map(RangeAccessor {
                 start: None,
                 end: Some(**end),
             }),
-            Value2::RangeToInclusive(end) if name == "RangeToInclusive" => visitor.visit_map(RangeAccessor {
+            Value::RangeToInclusive(end) if name == "RangeToInclusive" => visitor.visit_map(RangeAccessor {
                 start: None,
                 end: Some(**end),
             }),
-            Value2::RangeFrom(start) if name == "RangeFrom" => visitor.visit_map(RangeAccessor {
+            Value::RangeFrom(start) if name == "RangeFrom" => visitor.visit_map(RangeAccessor {
                 start: Some(**start),
                 end: None,
             }),
-            Value2::Range(bounds) if name == "Range" => visitor.visit_map(RangeAccessor {
+            Value::Range(bounds) if name == "Range" => visitor.visit_map(RangeAccessor {
                 start: Some(bounds.0),
                 end: Some(bounds.1),
             }),
-            Value2::RangeInclusive(bounds) if name == "RangeInclusive" => visitor.visit_map(RangeAccessor {
+            Value::RangeInclusive(bounds) if name == "RangeInclusive" => visitor.visit_map(RangeAccessor {
                 start: Some(bounds.0),
                 end: Some(bounds.1),
             }),
-            Value2::MapStruct(r#struct) => {
+            Value::MapStruct(r#struct) => {
                 verify_name(r#struct.name.as_deref(), name, &visitor)?;
                 visitor.visit_map(StructAccessor(r#struct.body.iter(), None))
             }
@@ -213,15 +213,15 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
     ) -> ResultKind<V::Value> {
         let _ = variants;
         match self.0 {
-            Value2::UnitVariant(variant) => {
+            Value::UnitVariant(variant) => {
                 verify_name(variant.name.as_deref(), name, &visitor)?;
                 visitor.visit_enum(EnumAccessor(variant))
             }
-            Value2::TupleVariant(variant) => {
+            Value::TupleVariant(variant) => {
                 verify_name(variant.name.as_deref(), name, &visitor)?;
                 visitor.visit_enum(EnumAccessor(variant))
             }
-            Value2::MapVariant(variant) => {
+            Value::MapVariant(variant) => {
                 verify_name(variant.name.as_deref(), name, &visitor)?;
                 visitor.visit_enum(EnumAccessor(variant))
             }
@@ -250,42 +250,42 @@ struct EnumAccessor<'a, T>(&'a Variant<T>);
 
 trait VariantPayload {
     fn unit(&self) -> ResultKind;
-    fn tuple(&self) -> ResultKind<&Values2>;
-    fn map(&self) -> ResultKind<&FieldsMap2>;
+    fn tuple(&self) -> ResultKind<&Values>;
+    fn map(&self) -> ResultKind<&FieldsMap>;
 }
 
 impl VariantPayload for () {
     fn unit(&self) -> ResultKind {
         Ok(())
     }
-    fn tuple(&self) -> ResultKind<&Values2> {
+    fn tuple(&self) -> ResultKind<&Values> {
         Err(Error::custom("expected unit, found tuple"))
     }
-    fn map(&self) -> ResultKind<&FieldsMap2> {
+    fn map(&self) -> ResultKind<&FieldsMap> {
         Err(Error::custom("expected unit, found struct"))
     }
 }
 
-impl VariantPayload for Values2 {
+impl VariantPayload for Values {
     fn unit(&self) -> ResultKind {
         Err(Error::custom("expected tuple, found unit"))
     }
-    fn tuple(&self) -> ResultKind<&Values2> {
+    fn tuple(&self) -> ResultKind<&Values> {
         Ok(self)
     }
-    fn map(&self) -> ResultKind<&FieldsMap2> {
+    fn map(&self) -> ResultKind<&FieldsMap> {
         Err(Error::custom("expected tuple, found struct"))
     }
 }
 
-impl VariantPayload for FieldsMap2 {
+impl VariantPayload for FieldsMap {
     fn unit(&self) -> ResultKind {
         Err(Error::custom("expected struct, found unit"))
     }
-    fn tuple(&self) -> ResultKind<&Values2> {
+    fn tuple(&self) -> ResultKind<&Values> {
         Err(Error::custom("expected struct, found tuple"))
     }
-    fn map(&self) -> ResultKind<&FieldsMap2> {
+    fn map(&self) -> ResultKind<&FieldsMap> {
         Ok(self)
     }
 }
@@ -333,7 +333,7 @@ impl<'de, T: VariantPayload> VariantAccess<'de> for EnumAccessor<'_, T> {
     }
 }
 
-struct SeqAccessor<'a>(core::slice::Iter<'a, Value2>);
+struct SeqAccessor<'a>(core::slice::Iter<'a, Value>);
 
 impl<'de> SeqAccess<'de> for SeqAccessor<'_> {
     type Error = BoxedKind;
@@ -346,7 +346,7 @@ impl<'de> SeqAccess<'de> for SeqAccessor<'_> {
     }
 }
 
-struct MapAccessor<'a>(btree_map::Iter<'a, Value2, Value2>, Option<&'a Value2>);
+struct MapAccessor<'a>(btree_map::Iter<'a, Value, Value>, Option<&'a Value>);
 
 impl<'de> MapAccess<'de> for MapAccessor<'_> {
     type Error = BoxedKind;
@@ -364,7 +364,7 @@ impl<'de> MapAccess<'de> for MapAccessor<'_> {
     }
 }
 
-struct StructAccessor<'a>(btree_map::Iter<'a, IdentBuf, Value2>, Option<&'a Value2>);
+struct StructAccessor<'a>(btree_map::Iter<'a, IdentBuf, Value>, Option<&'a Value>);
 
 impl<'de> MapAccess<'de> for StructAccessor<'_> {
     type Error = BoxedKind;

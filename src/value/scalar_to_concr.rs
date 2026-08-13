@@ -2,7 +2,7 @@ use super::*;
 use crate::de::error::{BoxedKind, Result, ResultKind};
 use serde::{de::Visitor, forward_to_deserialize_any, Deserialize, Deserializer};
 
-impl Number2 {
+impl Number {
     pub fn deserialize_to<'de, T: Deserialize<'de>>(&self) -> Result<T> {
         Ok(T::deserialize(self.deserializer())?)
     }
@@ -12,28 +12,28 @@ impl Number2 {
     }
 }
 
-pub(crate) struct NumberWrapper<'a>(&'a Number2);
+pub(crate) struct NumberWrapper<'a>(&'a Number);
 
 impl<'de> Deserializer<'de> for NumberWrapper<'_> {
     type Error = BoxedKind;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
         match *self.0 {
-            Number2::Int8(v) => visitor.visit_i8(v),
-            Number2::Int16(v) => visitor.visit_i16(v),
-            Number2::Int32(v) => visitor.visit_i32(v),
-            Number2::Int64(v) => visitor.visit_i64(v),
-            Number2::Int128 { lo, hi } => visitor.visit_i128((hi as i128) << 64 | lo as i128),
-            Number2::UInt8(v) => visitor.visit_u8(v),
-            Number2::UInt16(v) => visitor.visit_u16(v),
-            Number2::UInt32(v) => visitor.visit_u32(v),
-            Number2::UInt64(v) => visitor.visit_u64(v),
-            Number2::UInt128 { lo, hi } => visitor.visit_u128((hi as u128) << 64 | lo as u128),
-            Number2::Float32(Float32(v)) => visitor.visit_f32(v),
-            Number2::Float64(Float64(v)) => visitor.visit_f64(v),
-            Number2::IntNoSuffix(v) => visitor.visit_i64(v),
-            Number2::UIntNoSuffix(v) => visitor.visit_u64(v),
-            Number2::FloatNoSuffix(Float64(v)) => visitor.visit_f64(v),
+            Number::Int8(v) => visitor.visit_i8(v),
+            Number::Int16(v) => visitor.visit_i16(v),
+            Number::Int32(v) => visitor.visit_i32(v),
+            Number::Int64(v) => visitor.visit_i64(v),
+            Number::Int128 { lo, hi } => visitor.visit_i128((hi as i128) << 64 | lo as i128),
+            Number::UInt8(v) => visitor.visit_u8(v),
+            Number::UInt16(v) => visitor.visit_u16(v),
+            Number::UInt32(v) => visitor.visit_u32(v),
+            Number::UInt64(v) => visitor.visit_u64(v),
+            Number::UInt128 { lo, hi } => visitor.visit_u128((hi as u128) << 64 | lo as u128),
+            Number::Float32(Float32(v)) => visitor.visit_f32(v),
+            Number::Float64(Float64(v)) => visitor.visit_f64(v),
+            Number::IntNoSuffix(v) => visitor.visit_i64(v),
+            Number::UIntNoSuffix(v) => visitor.visit_u64(v),
+            Number::FloatNoSuffix(Float64(v)) => visitor.visit_f64(v),
         }
     }
     fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {

@@ -156,7 +156,7 @@ impl LenUtf8 for NumberSuffix {
 }
 
 #[expect(private_bounds)]
-pub trait Source<'de>: ParseToConcr<'de> + ParseToValue<'de> {}
+pub trait Read<'de>: ParseToConcr<'de> + ParseToValue<'de> {}
 
 pub(super) trait ParseHelper<'de> {
     fn position(&self) -> Position;
@@ -314,7 +314,7 @@ pub(super) trait ParseToValue<'de>: ParseToConcr<'de> {
     where
         'de: 't;
 
-    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number2>;
+    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number>;
 
     /// Skips WS and consumes the subsequent range separator. Returns `None` if not found.
     fn range_separator(&mut self) -> ResultKind<Option<RangeSeparator>>;
@@ -416,12 +416,16 @@ macro_rules! fn_parse_float_case {
     };
 }
 
-pub struct SliceSource<'de> {
+pub struct SliceRead<'de> {
     src: &'de [u8],
     idx: usize,
 }
 
-impl<'de> SliceSource<'de> {
+impl<'de> SliceRead<'de> {
+    pub fn new(bytes: &'de [u8]) -> Self {
+        Self { src: bytes, idx: 0 }
+    }
+
     fn rest(&self) -> &'de [u8] {
         &self.src[self.idx..]
     }
@@ -786,9 +790,9 @@ impl<'de> SliceSource<'de> {
     }
 }
 
-impl<'de> Source<'de> for SliceSource<'de> {}
+impl<'de> Read<'de> for SliceRead<'de> {}
 
-impl<'de> ParseHelper<'de> for SliceSource<'de> {
+impl<'de> ParseHelper<'de> for SliceRead<'de> {
     #[cold]
     fn position(&self) -> Position {
         let consumed = &self.src[..self.idx];
@@ -901,7 +905,7 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
     }
 }
 
-impl<'de> ParseToConcr<'de> for SliceSource<'de> {
+impl<'de> ParseToConcr<'de> for SliceRead<'de> {
     fn try_byte(&mut self) -> ResultKind<bool> {
         Ok(self.consume("b'"))
     }
@@ -1426,7 +1430,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
     }
 }
 
-impl<'de> ParseToValue<'de> for SliceSource<'de> {
+impl<'de> ParseToValue<'de> for SliceRead<'de> {
     fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Indicator<'t>>
     where
         'de: 't,
@@ -1539,7 +1543,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
         Ok(indicator)
     }
 
-    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number2> {
+    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number> {
         const BIN_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'1' | b'_');
         const OCT_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'7' | b'_');
         const HEX_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f' | b'_');
@@ -1602,11 +1606,11 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                         }
                     } else {
                         if memchr3(b'.', b'e', b'E', payload).is_some() {
-                            Number2::FloatNoSuffix(parse_f64(payload)?.into())
+                            Number::FloatNoSuffix(parse_f64(payload)?.into())
                         } else if off == 0 {
-                            Number2::UIntNoSuffix(parse_u64(payload, radix)?)
+                            Number::UIntNoSuffix(parse_u64(payload, radix)?)
                         } else {
-                            Number2::IntNoSuffix(parse_i64(payload, radix)?)
+                            Number::IntNoSuffix(parse_i64(payload, radix)?)
                         }
                     };
                     self.bump(len + suff.map(|s| s.len_utf8()).unwrap_or(0));
@@ -1620,10 +1624,10 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                 }
                 self.bump(4);
 
-                Number2::FloatNoSuffix(special.into())
+                Number::FloatNoSuffix(special.into())
             }
-            NumberKind::Infinity => Number2::FloatNoSuffix(f64::INFINITY.into()),
-            NumberKind::NotANumber => Number2::FloatNoSuffix(f64::NAN.into()),
+            NumberKind::Infinity => Number::FloatNoSuffix(f64::INFINITY.into()),
+            NumberKind::NotANumber => Number::FloatNoSuffix(f64::NAN.into()),
         };
         Ok(num)
     }

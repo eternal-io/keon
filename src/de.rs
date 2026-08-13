@@ -9,10 +9,20 @@ mod de_to_value;
 pub mod error;
 pub mod source;
 
+pub fn parse_bytes<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T> {
+    Deserializer::new(SliceRead::new(bytes)).deserialize()
+}
+
+pub fn from_bytes(bytes: &[u8]) -> Result<Value> {
+    Deserializer::new(SliceRead::new(bytes)).deserialize()
+}
+
+//==================================================================================================
+
 #[expect(private_interfaces)]
 pub trait Deserialize<'de>: Sized {
     #[doc(hidden)]
-    fn deserialize_with<R: Source<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self>;
+    fn deserialize_with<R: Read<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self>;
 }
 
 pub struct Deserializer<R> {
@@ -61,7 +71,7 @@ impl<R> Deserializer<R> {
     }
 }
 
-impl<'de, R: Source<'de>> Deserializer<R> {
+impl<'de, R: Read<'de>> Deserializer<R> {
     pub fn deserialize<T: Deserialize<'de>>(&mut self) -> Result<T> {
         let val = self.deserialize_partial::<T>()?;
         self.finish_all().map_err(self.fixing_pos())?;
