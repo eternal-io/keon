@@ -5,7 +5,7 @@ use lexical_parse_float::FromLexicalWithOptions as _;
 use lexical_parse_integer::FromLexicalWithOptions as _;
 use lexical_util::NumberFormatBuilder;
 use memchr::{memchr, memchr2, memchr3};
-use simdutf8::{basic::from_utf8 as decode_utf8_fast, compat::from_utf8 as decode_utf8};
+use simdutf8::compat::from_utf8 as decode_utf8;
 
 const NUMBER_FORMAT: u128 = NumberFormatBuilder::new()
     .case_sensitive_base_prefix(true)
@@ -431,17 +431,15 @@ impl<'de> SliceSource<'de> {
         raise(reason)
     }
 
-    fn raise_unexpected_eof<T>(&mut self) -> ResultKind<T> {
-        self.bump_to_end();
-        raise(ErrorKind::UnexpectedEof)
+    fn fixing_valid_utf8_up_to(&mut self) -> impl FnOnce(simdutf8::compat::Utf8Error) -> ErrorImpl + '_ {
+        |e| {
+            self.idx += e.valid_up_to();
+            ErrorImpl(Box::new(ErrorKind::InvalidUtf8Sequence))
+        }
     }
 
     fn bump(&mut self, len: usize) {
         debug_assert!(len <= self.rest().len());
-        debug_assert!(
-            decode_utf8_fast(&self.rest()[..len]).is_ok(),
-            "Uncaught invalid UTF-8 sequence!!"
-        );
         self.idx += len;
     }
 
@@ -724,7 +722,7 @@ impl<'de> SliceSource<'de> {
 
     fn decode_expected(&self) -> ResultKind<(char, usize)> {
         self.decode_from(0)?
-            .ok_or(ErrorKind::UnexpectedEof)
+            .ok_or(ErrorKind::ExpectedContent)
             .map_err(ErrorImpl::from)
     }
 
@@ -770,7 +768,7 @@ impl<'de> SliceSource<'de> {
                 break;
             }
             if offset == 0 {
-                return raise(ErrorKind::UnexpectedEof);
+                return raise(ErrorKind::ExpectedContent);
             }
             break;
         }
@@ -793,16 +791,15 @@ impl<'de> Source<'de> for SliceSource<'de> {}
 impl<'de> ParseHelper<'de> for SliceSource<'de> {
     #[cold]
     fn position(&self) -> Position {
-        // SAFETY: The consumed contents are guaranteed to be a valid UTF-8 sequence.
-        let consumed = unsafe { core::str::from_utf8_unchecked(&self.src[..self.idx]) };
-        let line_start = match memchr::memrchr(b'\n', consumed.as_bytes()) {
+        let consumed = &self.src[..self.idx];
+        let line_start = match memchr::memrchr(b'\n', consumed) {
             Some(off) => off + 1,
             None => 0,
         };
 
         Position {
-            line: 1 + memchr::memchr_iter(b'\n', consumed.as_bytes()).count(),
-            column: 1 + consumed[line_start..].chars().count(),
+            line: 1 + memchr::memchr_iter(b'\n', consumed).count(),
+            column: 1 + consumed[line_start..].len(),
         }
     }
 
@@ -813,10 +810,10 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
                 [b'/', b'/', ..] => {
                     self.bump(2);
                     if let Some(off) = memchr(b'\n', self.rest()) {
-                        decode_utf8_fast(&self.rest()[..off])?;
+                        decode_utf8(&self.rest()[..off]).map_err(self.fixing_valid_utf8_up_to())?;
                         self.bump(off + 1);
                     } else {
-                        decode_utf8_fast(&self.rest())?;
+                        decode_utf8(self.rest()).map_err(self.fixing_valid_utf8_up_to())?;
                         self.bump_to_end();
                     }
                 }
@@ -825,10 +822,10 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
                     let mut depth = 1usize;
                     while depth > 0 {
                         if let Some(off) = memchr2(b'*', b'/', self.rest()) {
-                            decode_utf8_fast(&self.rest()[..off])?;
+                            decode_utf8(&self.rest()[..off]).map_err(self.fixing_valid_utf8_up_to())?;
                             self.bump(off);
                         } else {
-                            decode_utf8_fast(&self.rest())?;
+                            decode_utf8(self.rest()).map_err(self.fixing_valid_utf8_up_to())?;
                             self.bump_to_end();
                         }
                         match self.rest() {
@@ -890,16 +887,16 @@ impl<'de> ParseHelper<'de> for SliceSource<'de> {
             self.bump(delim.len_utf8());
             Ok(())
         } else {
-            raise(ErrorKind::ExpectedSemicolonOrEndOfInput)
+            raise(ErrorKind::ExpectedSemicolonOrEof)
         }
     }
 
     fn finish_all(&mut self) -> ResultKind {
         if let Some(delim @ (Delimiter::SemiColon | Delimiter::EOF)) = self.seek_delim()? {
             self.bump(delim.len_utf8());
-            self.delim_expected(Delimiter::EOF, ErrorKind::ExpectedEndOfInput)
+            self.delim_expected(Delimiter::EOF, ErrorKind::ExpectedEof)
         } else {
-            raise(ErrorKind::ExpectedSemicolonOrEndOfInput)
+            raise(ErrorKind::ExpectedSemicolonOrEof)
         }
     }
 }
@@ -1071,7 +1068,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             StringKind::Normal => {
                 loop {
                     let Some(off) = memchr3(b'\\', b'\r', b'\"', &self.rest()[offset..]) else {
-                        return self.raise_unexpected_eof();
+                        return raise(ErrorKind::ExpectedUnquote);
                     };
                     let frag = &self.rest()[offset..][..off];
                     offset += off;
@@ -1106,15 +1103,9 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                 }
 
                 let content = if !scratched {
-                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(|e| {
-                        self.bump(e.valid_up_to());
-                        ErrorKind::InvalidUtf8Sequence
-                    })?)
+                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(self.fixing_valid_utf8_up_to())?)
                 } else {
-                    Either::Right(decode_utf8(scratch).map_err(|e| {
-                        self.bump(e.valid_up_to());
-                        ErrorKind::InvalidUtf8Sequence
-                    })?)
+                    Either::Right(decode_utf8(scratch).map_err(self.fixing_valid_utf8_up_to())?)
                 };
 
                 self.bump(offset + 1);
@@ -1124,7 +1115,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
             StringKind::Raw { ticks } => {
                 loop {
                     let Some(off) = memchr2(b'\r', b'\"', &self.rest()[offset..]) else {
-                        return self.raise_unexpected_eof();
+                        return raise(ErrorKind::ExpectedUnquote);
                     };
                     let frag = &self.rest()[offset..][..off];
                     offset += off;
@@ -1157,15 +1148,9 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                 }
 
                 let content = if !scratched {
-                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(|e| {
-                        self.bump(e.valid_up_to());
-                        ErrorKind::InvalidUtf8Sequence
-                    })?)
+                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(self.fixing_valid_utf8_up_to())?)
                 } else {
-                    Either::Right(decode_utf8(scratch).map_err(|e| {
-                        self.bump(e.valid_up_to());
-                        ErrorKind::InvalidUtf8Sequence
-                    })?)
+                    Either::Right(decode_utf8(scratch).map_err(self.fixing_valid_utf8_up_to())?)
                 };
 
                 self.bump(offset + 1 + ticks);
@@ -1250,15 +1235,9 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                 }
 
                 let content = if !scratched {
-                    Either::Left(decode_utf8(prev_line.unwrap()).map_err(|e| {
-                        self.bump(e.valid_up_to());
-                        ErrorKind::InvalidUtf8Sequence
-                    })?)
+                    Either::Left(decode_utf8(prev_line.unwrap()).map_err(self.fixing_valid_utf8_up_to())?)
                 } else {
-                    Either::Right(decode_utf8(scratch).map_err(|e| {
-                        self.bump(e.valid_up_to());
-                        ErrorKind::InvalidUtf8Sequence
-                    })?)
+                    Either::Right(decode_utf8(scratch).map_err(self.fixing_valid_utf8_up_to())?)
                 };
 
                 Ok(content)
@@ -1278,7 +1257,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                 scratch.clear();
                 loop {
                     let Some(off) = memchr3(b'\\', b'\r', b'\"', &self.rest()[offset..]) else {
-                        return self.raise_unexpected_eof();
+                        return raise(ErrorKind::ExpectedUnquote);
                     };
                     let frag = &self.rest()[offset..][..off];
                     offset += off;
@@ -1326,7 +1305,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                 scratch.clear();
                 loop {
                     let Some(off) = memchr2(b'\r', b'\"', &self.rest()[offset..]) else {
-                        return self.raise_unexpected_eof();
+                        return raise(ErrorKind::ExpectedUnquote);
                     };
                     let frag = &self.rest()[offset..][..off];
                     offset += off;
@@ -1376,7 +1355,7 @@ impl<'de> ParseToConcr<'de> for SliceSource<'de> {
                     _ => unreachable!(),
                 };
                 let Some(offset) = memchr(b'"', self.rest()) else {
-                    return self.raise_unexpected_eof();
+                    return raise(ErrorKind::ExpectedUnquote);
                 };
                 let encoded = &self.rest()[..offset];
 
@@ -1636,7 +1615,7 @@ impl<'de> ParseToValue<'de> for SliceSource<'de> {
                 };
                 if let Some((ch, _)) = self.decode_from(4)? {
                     if unicode_ident::is_xid_continue(ch) {
-                        return raise(ErrorKind::InvalidNumberSpecial);
+                        return raise(ErrorKind::InvalidFloatSpecial);
                     }
                 }
                 self.bump(4);

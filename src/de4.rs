@@ -64,13 +64,13 @@ impl<R> Deserializer<R> {
 impl<'de, R: Source<'de>> Deserializer<R> {
     pub fn deserialize<T: Deserialize<'de>>(&mut self) -> Result<T> {
         let val = self.deserialize_partial::<T>()?;
-        self.finish_all().map_err(self.fixing_err())?;
+        self.finish_all().map_err(self.fixing_pos())?;
         Ok(val)
     }
 
     pub fn deserialize_one<T: Deserialize<'de>>(&mut self) -> Result<T> {
         let val = self.deserialize_partial::<T>()?;
-        self.finish_one().map_err(self.fixing_err())?;
+        self.finish_one().map_err(self.fixing_pos())?;
         Ok(val)
     }
 
@@ -81,7 +81,7 @@ impl<'de, R: Source<'de>> Deserializer<R> {
                 position: self.position(),
             });
         }
-        self.finish_all().map_err(self.fixing_err())
+        self.finish_all().map_err(self.fixing_pos())
     }
 
     fn deserialize_partial<T: Deserialize<'de>>(&mut self) -> Result<T> {
@@ -91,7 +91,7 @@ impl<'de, R: Source<'de>> Deserializer<R> {
                 position: self.position(),
             });
         }
-        T::deserialize_with(self, PrivateMethod).map_err(self.fixing_err())
+        T::deserialize_with(self, PrivateMethod).map_err(self.fixing_pos())
     }
 
     fn deserialize_scalar(&mut self) -> ResultKind<Scalar> {
@@ -104,7 +104,7 @@ impl<'de, R: Source<'de>> Deserializer<R> {
         Ok(scalar)
     }
 
-    fn fixing_err(&mut self) -> impl FnOnce(ErrorImpl) -> Error + '_ {
+    fn fixing_pos(&mut self) -> impl FnOnce(ErrorImpl) -> Error + '_ {
         |e| {
             self.ttl = 0;
             Error {

@@ -1,10 +1,17 @@
-use super::{error::*, raise, source::*, PrivateMethod};
+use super::{
+    error::{ErrorImpl, ErrorKind, ResultKind},
+    raise,
+    source::*,
+    PrivateMethod,
+};
 use crate::value::Scalar;
-use alloc::{borrow::ToOwned, string::ToString};
 use core::ops::{Deref, DerefMut};
 use either::Either;
 use serde::{
-    de::{value::StrDeserializer, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
+    de::{
+        value::StrDeserializer, DeserializeSeed, EnumAccess, Error, MapAccess, SeqAccess, Unexpected, VariantAccess,
+        Visitor,
+    },
     Deserialize, Deserializer,
 };
 
@@ -140,8 +147,9 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
                 Indicator::ExplicitNewtype(_name) => {
                     recursion_guard!(self, visitor.visit_newtype_struct(self.reborrow()))
                 }
-                Indicator::ExplicitVariant(_name, variant) => visitor.visit_enum(AnyEnumAccessor {
-                    variant: &variant.to_owned(),
+                Indicator::ExplicitVariant(_name, variant) => visitor.visit_enum(EnumAccessor {
+                    // SAFETY: Upheld by EnumAccessor's invariant.
+                    variant: unsafe { core::mem::transmute::<&str, &str>(variant.as_str()) },
                     der: self,
                 }),
             };
@@ -273,14 +281,14 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         if name == "RangeFull" && self.range_to(false)? {
         } else {
             self.eat_ws()?;
-            self.deserialize_struct_name(name)?;
+            self.deserialize_struct_name(name, &visitor)?;
         }
         self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;
         visitor.visit_unit()
     }
     fn deserialize_newtype_struct<V: Visitor<'de>>(mut self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
         self.eat_ws()?;
-        self.deserialize_newtype_name(name)?;
+        self.deserialize_newtype_name(name, &visitor)?;
         recursion_guard!(self, Ok(visitor.visit_newtype_struct(self.reborrow())?))
     }
     fn deserialize_tuple_struct<V: Visitor<'de>>(
@@ -290,7 +298,7 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
         visitor: V,
     ) -> ResultKind<V::Value> {
         self.eat_ws()?;
-        self.deserialize_struct_name(name)?;
+        self.deserialize_struct_name(name, &visitor)?;
         self.deserialize_tuple(len, visitor)
     }
     fn deserialize_struct<V: Visitor<'de>>(
@@ -327,18 +335,29 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
             }
             _ => self.eat_ws()?,
         }
-        self.deserialize_struct_name(name)?;
+        self.deserialize_struct_name(name, &visitor)?;
         self.deserialize_map_like::<V, true>(visitor)
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
-        self,
+        mut self,
         name: &'static str,
         variants: &'static [&'static str],
         visitor: V,
     ) -> ResultKind<V::Value> {
         let _ = variants;
-        visitor.visit_enum(EnumAccessor { name, der: self })
+        self.eat_ws()?;
+        let (name_parsed, variant) = self.0.src.parse_variant_name(&mut self.0.buf)?;
+        if let Some(name_parsed) = name_parsed {
+            if name_parsed.as_str() != name {
+                return Err(Error::invalid_type(Unexpected::Other(name_parsed), &visitor));
+            }
+        }
+        visitor.visit_enum(EnumAccessor {
+            // SAFETY: Upheld by EnumAccessor's invariant.
+            variant: unsafe { core::mem::transmute::<&str, &str>(variant.as_str()) },
+            der: self,
+        })
     }
 
     // NOTE: This method is called when deserialize struct field name.
@@ -350,26 +369,20 @@ impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
 
 impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
     #[inline]
-    fn deserialize_newtype_name(&mut self, name: &'static str) -> ResultKind {
+    fn deserialize_newtype_name<V: Visitor<'de>>(&mut self, name: &'static str, visitor: &V) -> ResultKind {
         if let Some(name_parsed) = self.0.src.parse_newtype_name(&mut self.0.buf)? {
             if name_parsed.as_str() != name {
-                return raise(ErrorKind::ExpectedDifferentStructName {
-                    expected: name,
-                    found: name_parsed.to_string(),
-                });
+                return Err(Error::invalid_type(Unexpected::Other(name_parsed), visitor));
             }
         }
         Ok(())
     }
 
     #[inline]
-    fn deserialize_struct_name(&mut self, name: &'static str) -> ResultKind {
+    fn deserialize_struct_name<V: Visitor<'de>>(&mut self, name: &'static str, visitor: &V) -> ResultKind {
         if let Some(name_parsed) = self.0.src.parse_struct_name(&mut self.0.buf)? {
             if name_parsed.as_str() != name {
-                return raise(ErrorKind::ExpectedDifferentStructName {
-                    expected: name,
-                    found: name_parsed.to_string(),
-                });
+                return Err(Error::invalid_type(Unexpected::Other(name_parsed), visitor));
             }
         }
         Ok(())
@@ -557,27 +570,25 @@ impl<'de> MapAccess<'de> for AnyRangeAccessor {
 
 //------------------------------------------------------------------------------
 
-struct EnumAccessor<'a, R> {
-    name: &'static str,
+/// # Safety invariants
+///
+/// `variant` must not be used after access through `der` begins. The variant
+/// reference may borrow from the deserializer's internal buffer, and mutable
+/// access through `der` must not overlap with that borrow.
+///
+/// Implementations of [`EnumAccess`] must consume `variant` before returning
+/// or exposing `der` for further use.
+struct EnumAccessor<'variant, 'a, R> {
+    variant: &'variant str,
     der: DeserializerWrapper<'a, R>,
 }
 
-impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'a, R> {
+impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'_, 'a, R> {
     type Error = ErrorImpl;
     type Variant = DeserializerWrapper<'a, R>;
 
     fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
-        let EnumAccessor { name, mut der } = self;
-        der.eat_ws()?;
-        let (name_parsed, variant) = der.0.src.parse_variant_name(&mut der.0.buf)?;
-        if let Some(name_parsed) = name_parsed {
-            if name_parsed.as_str() != name {
-                return raise(ErrorKind::ExpectedDifferentEnumName {
-                    expected: name,
-                    found: name_parsed.to_string(),
-                });
-            }
-        }
+        let EnumAccessor { variant, der } = self;
         Ok((seed.deserialize(StrDeserializer::<ErrorImpl>::new(variant))?, der))
     }
 }
@@ -607,20 +618,5 @@ impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
     fn struct_variant<V: Visitor<'de>>(self, fields: &'static [&'static str], visitor: V) -> ResultKind<V::Value> {
         let _ = fields;
         self.deserialize_map_like::<V, true>(visitor)
-    }
-}
-
-struct AnyEnumAccessor<'t, 'a, R> {
-    variant: &'t str,
-    der: DeserializerWrapper<'a, R>,
-}
-
-impl<'t, 'a, 'de, R: Source<'de>> EnumAccess<'de> for AnyEnumAccessor<'t, 'a, R> {
-    type Error = ErrorImpl;
-    type Variant = DeserializerWrapper<'a, R>;
-
-    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
-        let AnyEnumAccessor { variant, der } = self;
-        Ok((seed.deserialize(StrDeserializer::<ErrorImpl>::new(variant))?, der))
     }
 }

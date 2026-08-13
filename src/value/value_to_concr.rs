@@ -61,7 +61,7 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
             Value2::ByteBuf(bytes) => visitor.visit_bytes(bytes),
             Value2::Unit => visitor.visit_unit(),
             Value2::UnitStruct(_) => visitor.visit_unit(),
-            Value2::UnitVariant(variant) => visitor.visit_enum(VariantAccessor(variant)),
+            Value2::UnitVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
             Value2::RangeFull => visitor.visit_unit(),
             Value2::RangeTo(end) => visitor.visit_map(RangeAccessor {
                 start: None,
@@ -90,10 +90,10 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
             Value2::Array(values) => visitor.visit_seq(SeqAccessor(values.iter())),
             Value2::Tuple(values) => visitor.visit_seq(SeqAccessor(values.iter())),
             Value2::TupleStruct(r#struct) => visitor.visit_seq(SeqAccessor(r#struct.body.iter())),
-            Value2::TupleVariant(variant) => visitor.visit_enum(VariantAccessor(variant)),
+            Value2::TupleVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
             Value2::Map(values_map) => visitor.visit_map(MapAccessor(values_map.iter(), None)),
             Value2::MapStruct(r#struct) => visitor.visit_map(StructAccessor(r#struct.body.iter(), None)),
-            Value2::MapVariant(variant) => visitor.visit_enum(VariantAccessor(variant)),
+            Value2::MapVariant(variant) => visitor.visit_enum(EnumAccessor(variant)),
             Value2::Newtype(r#struct) => visitor.visit_newtype_struct(r#struct.body.deserializer()),
         }
     }
@@ -215,15 +215,15 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
         match self.0 {
             Value2::UnitVariant(variant) => {
                 verify_name(variant.name.as_deref(), name, &visitor)?;
-                visitor.visit_enum(VariantAccessor(variant))
+                visitor.visit_enum(EnumAccessor(variant))
             }
             Value2::TupleVariant(variant) => {
                 verify_name(variant.name.as_deref(), name, &visitor)?;
-                visitor.visit_enum(VariantAccessor(variant))
+                visitor.visit_enum(EnumAccessor(variant))
             }
             Value2::MapVariant(variant) => {
                 verify_name(variant.name.as_deref(), name, &visitor)?;
-                visitor.visit_enum(VariantAccessor(variant))
+                visitor.visit_enum(EnumAccessor(variant))
             }
             _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
         }
@@ -246,7 +246,7 @@ fn verify_name<'de, V: Visitor<'de>>(name_found: Option<&Ident>, name_expected: 
 
 //==================================================================================================
 
-struct VariantAccessor<'a, T>(&'a Variant<T>);
+struct EnumAccessor<'a, T>(&'a Variant<T>);
 
 trait VariantPayload {
     fn unit(&self) -> ResultKind;
@@ -290,7 +290,7 @@ impl VariantPayload for FieldsMap2 {
     }
 }
 
-impl<'de, T: VariantPayload> EnumAccess<'de> for VariantAccessor<'_, T> {
+impl<'de, T: VariantPayload> EnumAccess<'de> for EnumAccessor<'_, T> {
     type Error = ErrorImpl;
     type Variant = Self;
 
@@ -302,7 +302,7 @@ impl<'de, T: VariantPayload> EnumAccess<'de> for VariantAccessor<'_, T> {
     }
 }
 
-impl<'de, T: VariantPayload> VariantAccess<'de> for VariantAccessor<'_, T> {
+impl<'de, T: VariantPayload> VariantAccess<'de> for EnumAccessor<'_, T> {
     type Error = ErrorImpl;
 
     fn unit_variant(self) -> ResultKind<()> {
