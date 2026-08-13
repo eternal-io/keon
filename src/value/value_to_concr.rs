@@ -11,7 +11,7 @@ use serde::{
 
 impl Value {
     pub fn deserialize_to<'de, T: Deserialize<'de>>(&self) -> Result<T> {
-        Ok(T::deserialize(ValueWrapper(&self))?)
+        Ok(T::deserialize(ValueWrapper(self))?)
     }
 
     fn deserializer(&self) -> ValueWrapper<'_> {
@@ -360,7 +360,7 @@ impl<'de> MapAccess<'de> for MapAccessor<'_> {
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
-        Ok(seed.deserialize(self.1.take().expect("access value after access key").deserializer())?)
+        seed.deserialize(self.1.take().expect("access value after access key").deserializer())
     }
 }
 
@@ -378,7 +378,7 @@ impl<'de> MapAccess<'de> for StructAccessor<'_> {
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
-        Ok(seed.deserialize(self.1.take().expect("access value after access key").deserializer())?)
+        seed.deserialize(self.1.take().expect("access value after access key").deserializer())
     }
 }
 

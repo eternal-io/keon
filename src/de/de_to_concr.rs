@@ -363,7 +363,7 @@ impl<'de, R: Read<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
     // NOTE: This method is called when deserialize struct field name.
     fn deserialize_identifier<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
         self.eat_ws()?;
-        visitor.visit_str(&self.0.src.parse_identifier(&mut self.0.buf)?)
+        visitor.visit_str(self.0.src.parse_identifier(&mut self.0.buf)?)
     }
 }
 

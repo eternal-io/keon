@@ -1,3 +1,4 @@
+#![allow(clippy::unnecessary_unwrap)]
 use crate::{value::*, PrivateMethod};
 #[cfg(feature = "alloc")]
 use alloc::{collections::VecDeque, string::String, vec::Vec};
@@ -348,7 +349,8 @@ impl<W: Write> FastImpl<W> {
         F: FnOnce(&mut Self, T) -> fmt::Result,
     {
         if self.interceptor.is_active() {
-            Ok(self.interceptor.push_value(scalar))
+            self.interceptor.push_value(scalar);
+            Ok(())
         } else {
             or_else(self, scalar)
         }
@@ -627,7 +629,8 @@ impl<W: Write> PrettyImpl<W> {
         F: FnOnce(&mut EcoString, T, Flags) -> fmt::Result,
     {
         if self.interceptor.is_active() {
-            Ok(self.interceptor.push_value(scalar))
+            self.interceptor.push_value(scalar);
+            Ok(())
         } else {
             self.push_stringifying(|dst, flags| or_writing(dst, scalar, flags))
         }
@@ -850,7 +853,7 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
                         self.flip_next_writing_key_or_value();
                     }
                     Compound::StructWritingKey(header) | Compound::StructWritingValue(header) => {
-                        dst.write_str(&header)?;
+                        dst.write_str(header)?;
                         dst.write_str(" {\n")?;
                         while let Some(key) = frags.next() {
                             write_indent(dst, depth, hard_tab)?;
@@ -866,7 +869,7 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
                     }
                     Compound::Tuple | Compound::NominalTuple(_) => {
                         if let Compound::NominalTuple(header) = compd {
-                            dst.write_str(&header)?;
+                            dst.write_str(header)?;
                         }
                         dst.write_str("(\n")?;
                         for value in frags {
@@ -925,7 +928,7 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
         self.intercept_range_bound(ch, |dst, ch, _flags| write_quoted_char(dst, ch))
     }
     fn push_number(&mut self, num: &Number) -> fmt::Result {
-        self.intercept_range_bound(num, |dst, num, flags| write_number(dst, num, flags))
+        self.intercept_range_bound(num, write_number)
     }
     fn push_str(&mut self, s: &str) -> fmt::Result {
         self.clear_range_intercept()?;
@@ -1199,7 +1202,7 @@ impl RangeInterceptor {
             return RangeInterceptorStatus::Rejected;
         }
 
-        return RangeInterceptorStatus::Accepted;
+        RangeInterceptorStatus::Accepted
     }
 
     fn begin(&mut self, name: Option<&Ident>, intercept_range: bool) -> bool {
@@ -1216,7 +1219,7 @@ impl RangeInterceptor {
         };
         self.range_type = Some(typ);
 
-        return true;
+        true
     }
 
     fn finish(self, ser: &mut impl SerializerImpl) -> Result<bool, fmt::Error> {
@@ -1263,7 +1266,7 @@ impl RangeInterceptor {
             }
             self.clear(ser)?;
         }
-        return Ok(false);
+        Ok(false)
     }
 
     fn clear(self, ser: &mut impl SerializerImpl) -> fmt::Result {
@@ -1431,7 +1434,7 @@ fn write_quoted_string(dst: &mut impl Write, s: &str) -> fmt::Result {
 fn write_quoted_byte_string(dst: &mut impl Write, bytes: &[u8]) -> fmt::Result {
     dst.write_str(r#"b""#)?;
     bytes
-        .into_iter()
+        .iter()
         .try_for_each(|&byte| write_escaped_byte::<true>(dst, byte))?;
     dst.write_str(r#"""#)
 }

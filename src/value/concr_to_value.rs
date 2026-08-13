@@ -20,17 +20,13 @@ impl StdError for Never {}
 
 impl fmt::Debug for Never {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            _ => Ok(()),
-        }
+        match *self {}
     }
 }
 
 impl fmt::Display for Never {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            _ => Ok(()),
-        }
+        match *self {}
     }
 }
 
@@ -179,7 +175,8 @@ impl SerializeSeq for MakeTuple {
     type Ok = Value;
     type Error = Never;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
-        Ok(self.vals.push(value.serialize(MakeValue)?))
+        self.vals.push(value.serialize(MakeValue)?);
+        Ok(())
     }
     fn end(self) -> Fine<Value> {
         Ok(Value::Array(Box::new(self.vals)))
@@ -189,7 +186,8 @@ impl SerializeTuple for MakeTuple {
     type Ok = Value;
     type Error = Never;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
-        Ok(self.vals.push(value.serialize(MakeValue)?))
+        self.vals.push(value.serialize(MakeValue)?);
+        Ok(())
     }
     fn end(self) -> Fine<Value> {
         Ok(Value::Tuple(Box::new(self.vals)))
@@ -212,7 +210,8 @@ impl SerializeTupleStruct for MakeTupleStruct {
     type Ok = Value;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
-        Ok(self.vals.push(value.serialize(MakeValue)?))
+        self.vals.push(value.serialize(MakeValue)?);
+        Ok(())
     }
     fn end(self) -> Fine<Value> {
         Ok(Value::TupleStruct(Box::new(Struct {
@@ -240,7 +239,8 @@ impl SerializeTupleVariant for MakeTupleVariant {
     type Ok = Value;
     type Error = Never;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Fine {
-        Ok(self.vals.push(value.serialize(MakeValue)?))
+        self.vals.push(value.serialize(MakeValue)?);
+        Ok(())
     }
     fn end(self) -> Fine<Value> {
         Ok(Value::TupleVariant(Box::new(Variant {

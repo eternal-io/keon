@@ -97,6 +97,7 @@ pub(super) enum Delimiter {
     /** `:` */ Colon,
     /** `=>`*/ FatArrow,
     /** `;` */ SemiColon,
+    #[allow(clippy::upper_case_acronyms)]
                EOF,
 }
 
@@ -1196,6 +1197,7 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                             }
                         }
                         match line_type {
+                            #![expect(clippy::collapsible_if)]
                             b'|' => scratch.push(b'\n'),
                             b'<' => {
                                 if !scratch.is_empty() && !line.is_empty() {
@@ -1218,11 +1220,7 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                         scratch.extend_from_slice(line);
                     }
 
-                    if line.is_empty() {
-                        par_break = true;
-                    } else {
-                        par_break = false;
-                    }
+                    par_break = line.is_empty();
                     prev_line = Some(line);
 
                     if self.adjacent_to_delim()? {
