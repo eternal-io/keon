@@ -104,7 +104,7 @@ impl<'de, R: Source<'de>> Deserializer<R> {
         Ok(scalar)
     }
 
-    fn fixing_pos(&mut self) -> impl FnOnce(ErrorImpl) -> Error + '_ {
+    fn fixing_pos(&mut self) -> impl FnOnce(BoxedKind) -> Error + '_ {
         |e| {
             self.ttl = 0;
             Error {
@@ -116,5 +116,5 @@ impl<'de, R: Source<'de>> Deserializer<R> {
 }
 
 fn raise<T>(kind: ErrorKind) -> ResultKind<T> {
-    Err(ErrorImpl(Box::new(kind)))
+    Err(BoxedKind(Box::new(kind)))
 }

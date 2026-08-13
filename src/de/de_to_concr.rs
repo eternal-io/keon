@@ -1,5 +1,5 @@
 use super::{
-    error::{ErrorImpl, ErrorKind, ResultKind},
+    error::{BoxedKind, ErrorKind, ResultKind},
     raise,
     source::*,
     PrivateMethod,
@@ -78,7 +78,7 @@ impl<R> DerefMut for DeserializerWrapper<'_, R> {
 }
 
 impl<'de, R: Source<'de>> Deserializer<'de> for DeserializerWrapper<'_, R> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn deserialize_any<V: Visitor<'de>>(mut self, visitor: V) -> ResultKind<V::Value> {
         let range_component = 'non_range: {
@@ -402,7 +402,7 @@ impl<'de, R: Source<'de>> DeserializerWrapper<'_, R> {
 //==================================================================================================
 
 impl<'de, R: Source<'de>> SeqAccess<'de> for DeserializerWrapper<'_, R> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> ResultKind<Option<T::Value>> {
         if self.adjacent_to_delim()? {
@@ -419,7 +419,7 @@ struct MapLikeAccessor<'a, R, const STRUCT_MODE: bool> {
 }
 
 impl<'de, R: Source<'de>, const STRUCT_MODE: bool> MapAccess<'de> for MapLikeAccessor<'_, R, STRUCT_MODE> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         let MapLikeAccessor { der } = self;
@@ -450,12 +450,12 @@ struct RangeToAccessor<'a, R> {
 }
 
 impl<'de, R: Source<'de>> MapAccess<'de> for RangeToAccessor<'_, R> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if let Some(der) = self.der.as_mut() {
             der.adjacent_to_scalar_expected()?;
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("end"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("end"))?))
         } else {
             Ok(None)
         }
@@ -474,11 +474,11 @@ struct RangeFromAccessor<'a, R> {
 }
 
 impl<'de, R: Source<'de>> MapAccess<'de> for RangeFromAccessor<'_, R> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if self.der.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("start"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("start"))?))
         } else {
             Ok(None)
         }
@@ -509,19 +509,19 @@ impl<'a, R, const INCLUSIVE: bool> RangeAccessor<'a, R, INCLUSIVE> {
 }
 
 impl<'de, R: Source<'de>, const INCLUSIVE: bool> MapAccess<'de> for RangeAccessor<'_, R, INCLUSIVE> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if let Some(der) = self.der.as_mut() {
             if !self.end {
-                Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("start"))?))
+                Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("start"))?))
             } else {
                 der.range_to(INCLUSIVE)?.then_some(()).ok_or(match INCLUSIVE {
                     true => ErrorKind::ExpectedRangeDotDotEq,
                     false => ErrorKind::ExpectedRangeDotDot,
                 })?;
                 der.adjacent_to_scalar_expected()?;
-                Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("end"))?))
+                Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("end"))?))
             }
         } else {
             Ok(None)
@@ -545,13 +545,13 @@ struct AnyRangeAccessor {
 }
 
 impl<'de> MapAccess<'de> for AnyRangeAccessor {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if self.start.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("start"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("start"))?))
         } else if self.end.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("end"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("end"))?))
         } else {
             Ok(None)
         }
@@ -584,17 +584,17 @@ struct EnumAccessor<'variant, 'a, R> {
 }
 
 impl<'a, 'de, R: Source<'de>> EnumAccess<'de> for EnumAccessor<'_, 'a, R> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
     type Variant = DeserializerWrapper<'a, R>;
 
     fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
         let EnumAccessor { variant, der } = self;
-        Ok((seed.deserialize(StrDeserializer::<ErrorImpl>::new(variant))?, der))
+        Ok((seed.deserialize(StrDeserializer::<BoxedKind>::new(variant))?, der))
     }
 }
 
 impl<'de, R: Source<'de>> VariantAccess<'de> for DeserializerWrapper<'_, R> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn unit_variant(mut self) -> ResultKind<()> {
         self.adjacent_to_delim_expected(ErrorKind::UnexpectedUnitBody)?;

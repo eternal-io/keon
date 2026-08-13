@@ -3,7 +3,7 @@ use core::fmt;
 
 pub type Result<T = ()> = core::result::Result<T, Error>;
 
-pub(crate) type ResultKind<T = ()> = core::result::Result<T, ErrorImpl>;
+pub(crate) type ResultKind<T = ()> = core::result::Result<T, BoxedKind>;
 
 //==================================================================================================
 
@@ -19,8 +19,8 @@ pub struct Error {
     pub position: Position,
 }
 
-impl From<ErrorImpl> for Error {
-    fn from(kind: ErrorImpl) -> Self {
+impl From<BoxedKind> for Error {
+    fn from(kind: BoxedKind) -> Self {
         Self {
             kind: *kind.0,
             position: Position { line: 0, column: 0 },
@@ -29,7 +29,7 @@ impl From<ErrorImpl> for Error {
 }
 
 #[derive(Debug)]
-pub(crate) struct ErrorImpl(pub(crate) Box<ErrorKind>);
+pub(crate) struct BoxedKind(pub(crate) Box<ErrorKind>);
 
 #[non_exhaustive]
 #[derive(Debug)]
@@ -107,15 +107,15 @@ pub enum ErrorKind {
     InvalidDataEncodingPadding,
 }
 
-impl serde::de::StdError for ErrorImpl {}
+impl serde::de::StdError for BoxedKind {}
 
-impl serde::de::Error for ErrorImpl {
+impl serde::de::Error for BoxedKind {
     fn custom<T: fmt::Display>(msg: T) -> Self {
         Self(Box::new(ErrorKind::Message(msg.to_string().into_boxed_str())))
     }
 }
 
-impl fmt::Display for ErrorImpl {
+impl fmt::Display for BoxedKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match *self.0 {
             ErrorKind::Message(ref msg) => msg,
@@ -182,7 +182,7 @@ impl fmt::Display for ErrorImpl {
             ErrorKind::IntegerOverflow => "integer overflow",
             ErrorKind::IntegerUnderflow => "integer underflow",
             ErrorKind::InvalidFloatSpecial => "invalid float special",
-            ErrorKind::InvalidNumber(desc) => return write!("invalid number: {}", desc),
+            ErrorKind::InvalidNumber(desc) => return write!(f, "invalid number: {}", desc),
             ErrorKind::InvalidNumberSuffix => "invalid number suffix",
 
             ErrorKind::InvalidDataEncodingLength => "invalid data encoding length",
@@ -193,13 +193,13 @@ impl fmt::Display for ErrorImpl {
     }
 }
 
-impl From<ErrorKind> for ErrorImpl {
+impl From<ErrorKind> for BoxedKind {
     fn from(err: ErrorKind) -> Self {
         Self(Box::new(err))
     }
 }
 
-impl From<lexical_util::Error> for ErrorImpl {
+impl From<lexical_util::Error> for BoxedKind {
     fn from(err: lexical_util::Error) -> Self {
         Self(Box::new(match err {
             lexical_util::Error::Overflow(_) => ErrorKind::IntegerOverflow,
@@ -210,7 +210,7 @@ impl From<lexical_util::Error> for ErrorImpl {
     }
 }
 
-impl From<data_encoding::DecodeKind> for ErrorImpl {
+impl From<data_encoding::DecodeKind> for BoxedKind {
     fn from(err: data_encoding::DecodeKind) -> Self {
         Self(Box::new(match err {
             data_encoding::DecodeKind::Length => ErrorKind::InvalidDataEncodingLength,

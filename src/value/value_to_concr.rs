@@ -1,5 +1,5 @@
 use super::*;
-use crate::de4::error::{ErrorImpl, Result, ResultKind};
+use crate::de::error::{BoxedKind, Result, ResultKind};
 use alloc::collections::btree_map;
 use serde::{
     de::{
@@ -50,7 +50,7 @@ impl Value2 {
 struct ValueWrapper<'a>(&'a Value2);
 
 impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
         match self.0 {
@@ -291,19 +291,19 @@ impl VariantPayload for FieldsMap2 {
 }
 
 impl<'de, T: VariantPayload> EnumAccess<'de> for EnumAccessor<'_, T> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
     type Variant = Self;
 
     fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
         Ok((
-            seed.deserialize(StrDeserializer::<ErrorImpl>::new(&self.0.variant))?,
+            seed.deserialize(StrDeserializer::<BoxedKind>::new(&self.0.variant))?,
             self,
         ))
     }
 }
 
 impl<'de, T: VariantPayload> VariantAccess<'de> for EnumAccessor<'_, T> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn unit_variant(self) -> ResultKind<()> {
         self.0.body.unit()?;
@@ -336,7 +336,7 @@ impl<'de, T: VariantPayload> VariantAccess<'de> for EnumAccessor<'_, T> {
 struct SeqAccessor<'a>(core::slice::Iter<'a, Value2>);
 
 impl<'de> SeqAccess<'de> for SeqAccessor<'_> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> ResultKind<Option<T::Value>> {
         let Some(val) = self.0.next() else {
@@ -349,7 +349,7 @@ impl<'de> SeqAccess<'de> for SeqAccessor<'_> {
 struct MapAccessor<'a>(btree_map::Iter<'a, Value2, Value2>, Option<&'a Value2>);
 
 impl<'de> MapAccess<'de> for MapAccessor<'_> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         let Some((key, value)) = self.0.next() else {
@@ -367,14 +367,14 @@ impl<'de> MapAccess<'de> for MapAccessor<'_> {
 struct StructAccessor<'a>(btree_map::Iter<'a, IdentBuf, Value2>, Option<&'a Value2>);
 
 impl<'de> MapAccess<'de> for StructAccessor<'_> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         let Some((key, value)) = self.0.next() else {
             return Ok(None);
         };
         self.1 = Some(value);
-        Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new(key))?))
+        Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new(key))?))
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
@@ -388,13 +388,13 @@ struct RangeAccessor {
 }
 
 impl<'de> MapAccess<'de> for RangeAccessor {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
         if self.start.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("start"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("start"))?))
         } else if self.end.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<ErrorImpl>::new("end"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("end"))?))
         } else {
             Ok(None)
         }

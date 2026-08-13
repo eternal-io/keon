@@ -1,5 +1,5 @@
 use super::*;
-use crate::de4::error::{ErrorImpl, Result, ResultKind};
+use crate::de::error::{BoxedKind, Result, ResultKind};
 use serde::{de::Visitor, forward_to_deserialize_any, Deserialize, Deserializer};
 
 impl Number2 {
@@ -15,7 +15,7 @@ impl Number2 {
 pub(crate) struct NumberWrapper<'a>(&'a Number2);
 
 impl<'de> Deserializer<'de> for NumberWrapper<'_> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
         match *self.0 {
@@ -62,7 +62,7 @@ impl Scalar {
 pub(crate) struct ScalarWrapper<'a>(&'a Scalar);
 
 impl<'de> Deserializer<'de> for ScalarWrapper<'_> {
-    type Error = ErrorImpl;
+    type Error = BoxedKind;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
         match self.0 {

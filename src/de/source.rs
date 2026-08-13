@@ -176,7 +176,7 @@ pub(super) trait ParseHelper<'de> {
             .is_none()
             .then_some(())
             .ok_or(reason)
-            .map_err(ErrorImpl::from)
+            .map_err(BoxedKind::from)
     }
 
     /// Skips WS and checks the presence of a subsequent delimiter.
@@ -187,7 +187,7 @@ pub(super) trait ParseHelper<'de> {
         self.adjacent_to_delim()?
             .then_some(())
             .ok_or(reason)
-            .map_err(ErrorImpl::from)
+            .map_err(BoxedKind::from)
     }
 
     /// Skips WS and checks whether the subsequent content appears to be a scalar.
@@ -198,7 +198,7 @@ pub(super) trait ParseHelper<'de> {
         self.adjacent_to_scalar()?
             .then_some(())
             .ok_or(ErrorKind::ExpectedScalar)
-            .map_err(ErrorImpl::from)
+            .map_err(BoxedKind::from)
     }
 
     fn finish_one(&mut self) -> ResultKind;
@@ -351,11 +351,11 @@ macro_rules! fn_parse_integer_immediate {
                     Radix::Bin => <$ty>::from_lexical_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Dec => unsafe { core::hint::unreachable_unchecked() },
                 }
-                .map_err(ErrorImpl::from)
+                .map_err(BoxedKind::from)
             }
             match radix {
                 Radix::Dec => <$ty>::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_INTEGER_OPTIONS)
-                    .map_err(ErrorImpl::from),
+                    .map_err(BoxedKind::from),
                 radix => power_of_two(bytes, radix),
             }
         }
@@ -367,7 +367,7 @@ fn_parse_integer_immediate!(parse_i128, i128);
 fn_parse_integer_immediate!(parse_u64, u64);
 fn_parse_integer_immediate!(parse_u128, u128);
 fn parse_f64(bytes: &[u8]) -> ResultKind<f64> {
-    f64::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_FLOAT_OPTIONS).map_err(ErrorImpl::from)
+    f64::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_FLOAT_OPTIONS).map_err(BoxedKind::from)
 }
 
 macro_rules! fn_parse_integer {
@@ -382,11 +382,11 @@ macro_rules! fn_parse_integer {
                     Radix::Bin => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Dec => unsafe { core::hint::unreachable_unchecked() },
                 }
-                .map_err(ErrorImpl::from)
+                .map_err(BoxedKind::from)
             }
             let (n, len) = match self.peek_integer_radix() {
                 Radix::Dec => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTIONS)
-                    .map_err(ErrorImpl::from),
+                    .map_err(BoxedKind::from),
                 radix => power_of_two(self.rest(), radix),
             }?;
             self.bump(len);
@@ -431,10 +431,10 @@ impl<'de> SliceSource<'de> {
         raise(reason)
     }
 
-    fn fixing_valid_utf8_up_to(&mut self) -> impl FnOnce(simdutf8::compat::Utf8Error) -> ErrorImpl + '_ {
+    fn fixing_valid_utf8_up_to(&mut self) -> impl FnOnce(simdutf8::compat::Utf8Error) -> BoxedKind + '_ {
         |e| {
             self.idx += e.valid_up_to();
-            ErrorImpl(Box::new(ErrorKind::InvalidUtf8Sequence))
+            BoxedKind(Box::new(ErrorKind::InvalidUtf8Sequence))
         }
     }
 
@@ -509,7 +509,7 @@ impl<'de> SliceSource<'de> {
         self.consume(needle)
             .then_some(())
             .ok_or(reason)
-            .map_err(ErrorImpl::from)
+            .map_err(BoxedKind::from)
     }
 
     fn consume_ticks_peek_initiator(&mut self) -> (usize, Option<u8>) {
@@ -723,13 +723,13 @@ impl<'de> SliceSource<'de> {
     fn decode_expected(&self) -> ResultKind<(char, usize)> {
         self.decode_from(0)?
             .ok_or(ErrorKind::ExpectedContent)
-            .map_err(ErrorImpl::from)
+            .map_err(BoxedKind::from)
     }
 
     fn parse_identifier(&mut self) -> ResultKind<&'de Ident> {
         self.parse_identifier_or_underscore()?
             .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
-            .map_err(ErrorImpl::from)
+            .map_err(BoxedKind::from)
     }
 
     fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<&'de Ident>> {

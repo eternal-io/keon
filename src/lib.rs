@@ -7,15 +7,15 @@ extern crate std;
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
-pub mod de4;
-pub mod ser4;
+pub mod de;
+pub mod ser;
 pub mod value;
 
-pub use crate::ser4::Serializer;
+pub use crate::ser::Serializer;
 
 #[cfg(feature = "alloc")]
 pub use crate::{
-    ser4::{stringify, stringify_pretty},
+    ser::{stringify, stringify_pretty},
     value::Value2,
 };
 
