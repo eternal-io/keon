@@ -392,7 +392,7 @@ impl<W: Write> SerializerImplDetail for FastImpl<W> {
     }
     fn push_display<T: ?Sized + Display>(&mut self, value: &T) -> fmt::Result {
         self.clear_range_intercept()?;
-        write!(EscapedWriter(&mut self.dst), r#""{}""#, value)
+        write_quoted_display(&mut self.dst, value)
     }
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
         self.clear_range_intercept()?;
@@ -936,7 +936,7 @@ impl<W: Write> SerializerImplDetail for PrettyImpl<W> {
     }
     fn push_display<T: ?Sized + Display>(&mut self, value: &T) -> fmt::Result {
         self.clear_range_intercept()?;
-        self.push_stringifying(|dst, _flags| write!(EscapedWriter(dst), r#""{}""#, value))
+        self.push_stringifying(|dst, _flags| write_quoted_display(dst, value))
     }
     fn push_bytes(&mut self, bytes: &[u8]) -> fmt::Result {
         self.clear_range_intercept()?;
@@ -1428,6 +1428,12 @@ fn write_quoted_char(dst: &mut impl Write, ch: char) -> fmt::Result {
 fn write_quoted_string(dst: &mut impl Write, s: &str) -> fmt::Result {
     dst.write_str(r#"""#)?;
     s.chars().try_for_each(|ch| write_escaped_char::<true>(dst, ch))?;
+    dst.write_str(r#"""#)
+}
+
+fn write_quoted_display<T: ?Sized + Display>(mut dst: &mut impl Write, value: &T) -> fmt::Result {
+    dst.write_str(r#"""#)?;
+    write!(EscapedWriter(&mut dst), "{}", value)?;
     dst.write_str(r#"""#)
 }
 

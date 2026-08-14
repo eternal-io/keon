@@ -17,7 +17,7 @@ categories = ["encoding"]
 
 
 [features]
-default = ["std", "alloc", "dep:ecow"]
+default = ["std", "alloc", "ecow"]
 std = [
     "alloc",
     "serde/std",
@@ -34,7 +34,7 @@ alloc = [
     "memchr/alloc",
     "data-encoding/alloc",
 ]
-ecow = ["alloc"]
+ecow = ["alloc", "dep:ecow"]
 
 
 [dependencies]
@@ -50,7 +50,7 @@ lexical-util = { version = "1.0.7", default-features = false }
 lexical-parse-float = { version = "1.0.6", default-features = false, features = ["format"] }
 lexical-parse-integer = { version = "1.0.6", default-features = false, features = ["format", "power-of-two"] }
 lexical-write-integer = { version = "1.0.6", default-features = false }
-ecow = { version = "0.3.0", default-features = false, optional = true }
+ecow = { version = "0.2.6", default-features = false, optional = true }
 
 
 [dev-dependencies]

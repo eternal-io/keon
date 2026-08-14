@@ -1,5 +1,10 @@
 use super::*;
-use core::{cmp::Ordering, num::NonZeroU8};
+use core::{
+    cmp::Ordering,
+    num::NonZeroU8,
+    ops::{Range, RangeFrom, RangeFull, RangeTo},
+    slice::SliceIndex,
+};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE};
 use lexical_parse_float::FromLexicalWithOptions as _;
 use lexical_parse_integer::FromLexicalWithOptions as _;
@@ -107,13 +112,6 @@ pub(super) enum NumberKind {
     NotANumber,
 }
 
-pub(super) enum Radix {
-    Dec = 10,
-    Hex = 16,
-    Oct = 8,
-    Bin = 2,
-}
-
 pub(super) enum StringKind {
     Normal,
     Raw { ticks: usize },
@@ -126,6 +124,13 @@ pub(super) enum BytesKind {
     Base64,
     Base32,
     Base16,
+}
+
+enum Radix {
+    Dec = 10,
+    Hex = 16,
+    Oct = 8,
+    Bin = 2,
 }
 
 trait LenUtf8 {
@@ -417,18 +422,104 @@ macro_rules! fn_parse_float_case {
     };
 }
 
-pub struct SliceRead<'de> {
-    src: &'de [u8],
-    idx: usize,
+#[expect(private_bounds)]
+pub trait Slice: SliceDetail {}
+trait SliceDetail {
+    fn len(&self) -> usize;
+
+    fn index<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &Self;
+
+    fn index_raw<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &[u8];
+
+    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> ResultKind<&str>;
+
+    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> ResultKind<&'a str>;
 }
 
-impl<'de> SliceRead<'de> {
-    pub fn new(bytes: &'de [u8]) -> Self {
-        Self { src: bytes, idx: 0 }
+impl Slice for [u8] {}
+impl SliceDetail for [u8] {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn index<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &Self {
+        core::ops::Index::index(self, idx)
+    }
+    fn index_raw<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &[u8] {
+        core::ops::Index::index(self, idx)
+    }
+    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> ResultKind<&str> {
+        decode_utf8(core::ops::Index::index(self, idx)).map_err(|e| {
+            *delta_on_err += e.valid_up_to();
+            BoxedKind(Box::new(ErrorKind::InvalidUtf8Sequence))
+        })
+    }
+    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> ResultKind<&'a str> {
+        decode_utf8(content).map_err(|e| {
+            *delta_on_err += e.valid_up_to();
+            BoxedKind(Box::new(ErrorKind::InvalidUtf8Sequence))
+        })
+    }
+}
+
+impl Slice for str {}
+impl SliceDetail for str {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn index<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &Self {
+        core::ops::Index::index(self, idx)
+    }
+    fn index_raw<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &[u8] {
+        core::ops::Index::index(self, idx).as_bytes()
+    }
+    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> ResultKind<&str> {
+        let _ = delta_on_err;
+        Ok(core::ops::Index::index(self, idx))
+    }
+    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> ResultKind<&'a str> {
+        let _ = delta_on_err;
+        Ok(unsafe { core::str::from_utf8_unchecked(content) })
+    }
+}
+
+pub struct SliceRead<'de, S>
+where
+    S: ?Sized + Slice,
+{
+    src: &'de S,
+    offset: usize,
+}
+
+impl<'de> SliceRead<'de, str> {
+    pub fn from_str(s: &'de str) -> Self {
+        Self { src: s, offset: 0 }
+    }
+}
+
+impl<'de> SliceRead<'de, [u8]> {
+    pub fn from_bytes(bytes: &'de [u8]) -> Self {
+        Self { src: bytes, offset: 0 }
+    }
+}
+
+impl<'de, S> SliceRead<'de, S>
+where
+    S: ?Sized + Slice,
+    RangeFull: SliceIndex<S, Output = S>,
+    Range<usize>: SliceIndex<S, Output = S>,
+    RangeTo<usize>: SliceIndex<S, Output = S>,
+    RangeFrom<usize>: SliceIndex<S, Output = S>,
+{
+    fn rest(&self) -> &'de [u8] {
+        self.src.index(self.offset..).index_raw(..)
     }
 
-    fn rest(&self) -> &'de [u8] {
-        &self.src[self.idx..]
+    fn str_till(&mut self, offset: usize) -> ResultKind<&'de str> {
+        self.src.index(self.offset..).index_str(&mut self.offset, ..offset)
+    }
+
+    fn str_till_end(&mut self) -> ResultKind<&'de str> {
+        self.src.index(self.offset..).index_str(&mut self.offset, ..)
     }
 
     fn raise<T>(&mut self, offset: usize, reason: ErrorKind) -> ResultKind<T> {
@@ -436,28 +527,22 @@ impl<'de> SliceRead<'de> {
         raise(reason)
     }
 
-    fn fixing_valid_utf8_up_to(&mut self) -> impl FnOnce(simdutf8::compat::Utf8Error) -> BoxedKind + '_ {
-        |e| {
-            self.idx += e.valid_up_to();
-            BoxedKind(Box::new(ErrorKind::InvalidUtf8Sequence))
-        }
-    }
-
     fn bump(&mut self, len: usize) {
         debug_assert!(len <= self.rest().len());
-        self.idx += len;
+        self.offset += len;
     }
 
     fn bump_to_end(&mut self) {
-        self.idx = self.src.len();
+        self.offset = self.src.len();
     }
 
     /// Consumes the subsequent characters that have `Pattern_White_Space` Unicode property.
     fn eat_ws_pure(&mut self) {
-        self.bump(self.rest().len() - Self::trim_start(self.rest()).len());
+        self.bump(self.rest().len() - Self::trim_start_pattern(self.rest()).len());
     }
 
-    fn trim_start(mut bytes: &[u8]) -> &[u8] {
+    /// Trim leading `Pattern_White_Space`.
+    fn trim_start_pattern(mut bytes: &[u8]) -> &[u8] {
         while let
             | [b'\x09'..=b'\x0D', end @ ..]             // 0009..000D <control-0009>..<control-000D>
             | [b'\x20', end @ ..]                       // 0020       SPACE
@@ -470,15 +555,20 @@ impl<'de> SliceRead<'de> {
         bytes
     }
 
+    /// Trim trailing `White_Space`.
     fn trim_end(mut bytes: &[u8]) -> &[u8] {
         while let
-            | [start @ .., b'\x09'..=b'\x0D']           // 0009..000D <control-0009>..<control-000D>
-            | [start @ .., b'\x20']                     // 0020       SPACE
-            | [start @ .., b'\xC2', b'\x85']            // 0085       <control-0085>
-            | [start @ .., b'\xE2', b'\x80', b'\x8E']   // 200E       LEFT-TO-RIGHT MARK
-            | [start @ .., b'\xE2', b'\x80', b'\x8F']   // 200F       RIGHT-TO-LEFT MARK
-            | [start @ .., b'\xE2', b'\x80', b'\xA8']   // 2028       LINE SEPARATOR
-            | [start @ .., b'\xE2', b'\x80', b'\xA9']   // 2029       PARAGRAPH SEPARATOR
+            | [start @ .., b'\x09'..=b'\x0D']                   // 0009..000D <control-0009>..<control-000D>
+            | [start @ .., b'\x20']                             // 0020       SPACE
+            | [start @ .., b'\xC2', b'\x85']                    // 0085       <control-0085>
+            | [start @ .., b'\xC2', b'\xA0']                    // 00A0       NO-BREAK SPACE
+            | [start @ .., b'\xE1', b'\x9A', b'\x80']           // 1680       OGHAM SPACE MARK
+            | [start @ .., b'\xE2', b'\x80', b'\x80'..=b'\x8A'] // 2000..200A EN QUAD..HAIR SPACE
+            | [start @ .., b'\xE2', b'\x80', b'\xA8']           // 2028       LINE SEPARATOR
+            | [start @ .., b'\xE2', b'\x80', b'\xA9']           // 2029       PARAGRAPH SEPARATOR
+            | [start @ .., b'\xE2', b'\x80', b'\xAF']           // 202F       NARROW NO-BREAK SPACE
+            | [start @ .., b'\xE2', b'\x81', b'\x9F']           // 205F       MEDIUM MATHEMATICAL SPACE
+            | [start @ .., b'\xE3', b'\x80', b'\x80']           // 3000       IDEOGRAPHIC SPACE
             = bytes { bytes = start }
         bytes
     }
@@ -612,7 +702,7 @@ impl<'de> SliceRead<'de> {
                 if let Some((bytes, _)) = rest.split_first_chunk() {
                     let byte = Self::parse_u8_fmt_02_hex(bytes)?;
 
-                    return Ok((byte, 1 + 2));
+                    return Ok((byte, 1 + 2)); // x NN
                 }
                 return raise(ErrorKind::InvalidByteEscape);
             }
@@ -634,7 +724,7 @@ impl<'de> SliceRead<'de> {
                 if let Some((bytes, _)) = rest.split_first_chunk() {
                     let byte = Self::parse_u8_fmt_02_hex(bytes)?;
                     if byte < 0x80 {
-                        return Ok((byte as char, 1 + 2));
+                        return Ok((byte as char, 1 + 2)); // x NN
                     }
                 }
                 return raise(ErrorKind::InvalidAsciiEscape);
@@ -656,7 +746,7 @@ impl<'de> SliceRead<'de> {
                     let Some(ch) = char::from_u32(codep) else {
                         break 'unicode;
                     };
-                    return Ok((ch, 1 + 1 + len + 1));
+                    return Ok((ch, 1 + 1 + len + 1)); // u { XXXX }
                 }
                 return raise(ErrorKind::InvalidUnicodeEscape);
             }
@@ -791,12 +881,27 @@ impl<'de> SliceRead<'de> {
     }
 }
 
-impl<'de> Read<'de> for SliceRead<'de> {}
+impl<'de, S> Read<'de> for SliceRead<'de, S>
+where
+    S: ?Sized + Slice,
+    RangeFull: SliceIndex<S, Output = S>,
+    Range<usize>: SliceIndex<S, Output = S>,
+    RangeTo<usize>: SliceIndex<S, Output = S>,
+    RangeFrom<usize>: SliceIndex<S, Output = S>,
+{
+}
 
-impl<'de> ParseHelper<'de> for SliceRead<'de> {
+impl<'de, S> ParseHelper<'de> for SliceRead<'de, S>
+where
+    S: ?Sized + Slice,
+    RangeFull: SliceIndex<S, Output = S>,
+    Range<usize>: SliceIndex<S, Output = S>,
+    RangeTo<usize>: SliceIndex<S, Output = S>,
+    RangeFrom<usize>: SliceIndex<S, Output = S>,
+{
     #[cold]
     fn position(&self) -> Position {
-        let consumed = &self.src[..self.idx];
+        let consumed = self.src.index_raw(..self.offset);
         let line_start = match memchr::memrchr(b'\n', consumed) {
             Some(off) => off + 1,
             None => 0,
@@ -815,10 +920,10 @@ impl<'de> ParseHelper<'de> for SliceRead<'de> {
                 [b'/', b'/', ..] => {
                     self.bump(2);
                     if let Some(off) = memchr(b'\n', self.rest()) {
-                        decode_utf8(&self.rest()[..off]).map_err(self.fixing_valid_utf8_up_to())?;
+                        self.str_till(off)?;
                         self.bump(off + 1);
                     } else {
-                        decode_utf8(self.rest()).map_err(self.fixing_valid_utf8_up_to())?;
+                        self.str_till_end()?;
                         self.bump_to_end();
                     }
                 }
@@ -827,10 +932,10 @@ impl<'de> ParseHelper<'de> for SliceRead<'de> {
                     let mut depth = 1usize;
                     while depth > 0 {
                         if let Some(off) = memchr2(b'*', b'/', self.rest()) {
-                            decode_utf8(&self.rest()[..off]).map_err(self.fixing_valid_utf8_up_to())?;
+                            self.str_till(off)?;
                             self.bump(off);
                         } else {
-                            decode_utf8(self.rest()).map_err(self.fixing_valid_utf8_up_to())?;
+                            self.str_till_end()?;
                             self.bump_to_end();
                         }
                         match self.rest() {
@@ -906,7 +1011,14 @@ impl<'de> ParseHelper<'de> for SliceRead<'de> {
     }
 }
 
-impl<'de> ParseToConcr<'de> for SliceRead<'de> {
+impl<'de, S> ParseToConcr<'de> for SliceRead<'de, S>
+where
+    S: ?Sized + Slice,
+    RangeFull: SliceIndex<S, Output = S>,
+    Range<usize>: SliceIndex<S, Output = S>,
+    RangeTo<usize>: SliceIndex<S, Output = S>,
+    RangeFrom<usize>: SliceIndex<S, Output = S>,
+{
     fn try_byte(&mut self) -> ResultKind<bool> {
         Ok(self.consume("b'"))
     }
@@ -1066,9 +1178,9 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
         scratch: &'t mut Vec<u8>,
     ) -> ResultKind<Either<&'de str, &'t str>> {
         scratch.clear();
+
         let mut buf = [0; 4];
         let mut offset = 0;
-        let mut scratched = false;
         match kind {
             StringKind::Normal => {
                 loop {
@@ -1083,22 +1195,20 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                             let (ch, len) = self
                                 .peek_escape_char_from(offset + 1)
                                 .inspect_err(|_| self.bump(offset + 1))?;
-                            scratched = true;
                             scratch.extend_from_slice(frag);
                             scratch.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-                            offset += 1 + len
+                            offset += 1 + len;
                         }
                         b'\r' => {
                             let Some(b'\n') = self.rest().get(offset + 1) else {
                                 return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
                             };
-                            scratched = true;
                             scratch.extend_from_slice(frag);
                             scratch.push(b'\n');
                             offset += 1 + 1;
                         }
                         b'\"' => {
-                            if scratched {
+                            if !scratch.is_empty() {
                                 scratch.extend_from_slice(frag);
                             }
                             break;
@@ -1107,10 +1217,10 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                     }
                 }
 
-                let content = if !scratched {
-                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(self.fixing_valid_utf8_up_to())?)
+                let content = if scratch.is_empty() {
+                    Either::Left(self.str_till(offset)?)
                 } else {
-                    Either::Right(decode_utf8(scratch).map_err(self.fixing_valid_utf8_up_to())?)
+                    Either::Right(unsafe { S::decode_utf8(&mut self.offset, scratch)? })
                 };
 
                 self.bump(offset + 1);
@@ -1130,7 +1240,6 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                             let Some(b'\n') = self.rest().get(offset + 1) else {
                                 return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
                             };
-                            scratched = true;
                             scratch.extend_from_slice(frag);
                             scratch.push(b'\n');
                             offset += 1 + 1;
@@ -1140,7 +1249,7 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                             match ticks.cmp(&r_ticks) {
                                 Ordering::Greater => offset += 1 + r_ticks,
                                 Ordering::Equal => {
-                                    if scratched {
+                                    if !scratch.is_empty() {
                                         scratch.extend_from_slice(frag);
                                     }
                                     break;
@@ -1152,10 +1261,10 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                     }
                 }
 
-                let content = if !scratched {
-                    Either::Left(decode_utf8(&self.rest()[..offset]).map_err(self.fixing_valid_utf8_up_to())?)
+                let content = if scratch.is_empty() {
+                    Either::Left(self.str_till(offset)?)
                 } else {
-                    Either::Right(decode_utf8(scratch).map_err(self.fixing_valid_utf8_up_to())?)
+                    Either::Right(unsafe { S::decode_utf8(&mut self.offset, scratch)? })
                 };
 
                 self.bump(offset + 1 + ticks);
@@ -1168,29 +1277,29 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                 let mut par_break = false;
                 loop {
                     self.consume(" ");
-                    let offset = memchr2(b'\r', b'\n', self.rest());
-                    let line = Self::trim_end(match offset {
-                        Some(off) => &self.rest()[..off],
-                        None => self.rest(),
-                    });
 
-                    if let Some(off) = offset {
-                        if let Some(b'\r') = self.rest().get(off) {
-                            let Some(b'\n') = self.rest().get(off + 1) else {
-                                return self.raise(off, ErrorKind::UnexpectedCarriageReturn);
-                            };
-                            self.bump(off + 1 + 1);
-                        } else {
-                            self.bump(off + 1);
+                    let line;
+                    match memchr2(b'\r', b'\n', self.rest()) {
+                        Some(off) => {
+                            line = Self::trim_end(&self.rest()[..off]);
+                            if let Some(b'\r') = self.rest().get(off) {
+                                let Some(b'\n') = self.rest().get(off + 1) else {
+                                    return self.raise(off, ErrorKind::UnexpectedCarriageReturn);
+                                };
+                                self.bump(off + 1 + 1);
+                            } else {
+                                self.bump(off + 1);
+                            }
                         }
-                    } else {
-                        self.bump_to_end();
+                        None => {
+                            line = Self::trim_end(self.rest());
+                            self.bump_to_end();
+                        }
                     }
 
                     'stage_line: {
-                        if !scratched {
+                        if scratch.is_empty() {
                             if let Some(first_line) = prev_line {
-                                scratched = true;
                                 scratch.extend_from_slice(first_line);
                             } else {
                                 break 'stage_line;
@@ -1232,14 +1341,15 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                     if ticks != r_ticks {
                         return raise(ErrorKind::UnbalancedRawTicks);
                     }
+
                     self.bump(1);
                     line_type = init;
                 }
 
-                let content = if !scratched {
-                    Either::Left(decode_utf8(prev_line.unwrap()).map_err(self.fixing_valid_utf8_up_to())?)
+                let content = if scratch.is_empty() {
+                    Either::Left(unsafe { S::decode_utf8(&mut self.offset, prev_line.unwrap())? })
                 } else {
-                    Either::Right(decode_utf8(scratch).map_err(self.fixing_valid_utf8_up_to())?)
+                    Either::Right(unsafe { S::decode_utf8(&mut self.offset, scratch)? })
                 };
 
                 Ok(content)
@@ -1252,11 +1362,11 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
         kind: BytesKind,
         scratch: &'t mut Vec<u8>,
     ) -> ResultKind<Either<&'de [u8], &'t [u8]>> {
+        scratch.clear();
+
         let mut offset = 0;
-        let mut scratched = false;
         match kind {
             BytesKind::Normal => {
-                scratch.clear();
                 loop {
                     let Some(off) = memchr3(b'\\', b'\r', b'\"', &self.rest()[offset..]) else {
                         return raise(ErrorKind::ExpectedUnquote);
@@ -1269,22 +1379,20 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                             let (byte, len) = self
                                 .peek_escape_byte_from(offset + 1)
                                 .inspect_err(|_| self.bump(offset + 1))?;
-                            scratched = true;
                             scratch.extend_from_slice(frag);
                             scratch.push(byte);
-                            offset += 1 + len
+                            offset += 1 + len;
                         }
                         b'\r' => {
                             let Some(b'\n') = self.rest().get(offset + 1) else {
                                 return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
                             };
-                            scratched = true;
                             scratch.extend_from_slice(frag);
                             scratch.push(b'\n');
                             offset += 1 + 1;
                         }
                         b'\"' => {
-                            if scratched {
+                            if !scratch.is_empty() {
                                 scratch.extend_from_slice(frag);
                             }
                             break;
@@ -1293,7 +1401,7 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                     }
                 }
 
-                let content = if !scratched {
+                let content = if scratch.is_empty() {
                     Either::Left(&self.rest()[..offset])
                 } else {
                     Either::Right(&scratch[..])
@@ -1304,7 +1412,6 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
             }
 
             BytesKind::Raw { ticks } => {
-                scratch.clear();
                 loop {
                     let Some(off) = memchr2(b'\r', b'\"', &self.rest()[offset..]) else {
                         return raise(ErrorKind::ExpectedUnquote);
@@ -1317,7 +1424,6 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                             let Some(b'\n') = self.rest().get(offset + 1) else {
                                 return self.raise(offset, ErrorKind::UnexpectedCarriageReturn);
                             };
-                            scratched = true;
                             scratch.extend_from_slice(frag);
                             scratch.push(b'\n');
                             offset += 1 + 1;
@@ -1327,7 +1433,7 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                             match ticks.cmp(&r_ticks) {
                                 Ordering::Greater => offset += 1 + r_ticks,
                                 Ordering::Equal => {
-                                    if scratched {
+                                    if !scratch.is_empty() {
                                         scratch.extend_from_slice(frag);
                                     }
                                     break;
@@ -1339,7 +1445,7 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
                     }
                 }
 
-                let content = if !scratched {
+                let content = if scratch.is_empty() {
                     Either::Left(&self.rest()[..offset])
                 } else {
                     Either::Right(&scratch[..])
@@ -1428,7 +1534,14 @@ impl<'de> ParseToConcr<'de> for SliceRead<'de> {
     }
 }
 
-impl<'de> ParseToValue<'de> for SliceRead<'de> {
+impl<'de, S> ParseToValue<'de> for SliceRead<'de, S>
+where
+    S: ?Sized + Slice,
+    RangeFull: SliceIndex<S, Output = S>,
+    Range<usize>: SliceIndex<S, Output = S>,
+    RangeTo<usize>: SliceIndex<S, Output = S>,
+    RangeFrom<usize>: SliceIndex<S, Output = S>,
+{
     fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Indicator<'t>>
     where
         'de: 't,

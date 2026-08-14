@@ -19,7 +19,7 @@ pub use crate::ser::Serializer;
 pub use crate::{
     de::{
         error::{Error, Result},
-        Deserializer,
+        from_bytes, from_str, parse_bytes, parse_str, Deserializer,
     },
     ser::{stringify, stringify_pretty},
     value::Value,

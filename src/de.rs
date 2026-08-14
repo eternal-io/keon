@@ -9,12 +9,18 @@ mod de_to_value;
 pub mod error;
 pub mod source;
 
+pub fn parse_str<'de, T: Deserialize<'de>>(s: &'de str) -> Result<T> {
+    Deserializer::new(SliceRead::from_str(s)).deserialize()
+}
 pub fn parse_bytes<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T> {
-    Deserializer::new(SliceRead::new(bytes)).deserialize()
+    Deserializer::new(SliceRead::from_bytes(bytes)).deserialize()
 }
 
+pub fn from_str(s: &str) -> Result<Value> {
+    Deserializer::new(SliceRead::from_str(s)).deserialize()
+}
 pub fn from_bytes(bytes: &[u8]) -> Result<Value> {
-    Deserializer::new(SliceRead::new(bytes)).deserialize()
+    Deserializer::new(SliceRead::from_bytes(bytes)).deserialize()
 }
 
 //==================================================================================================
