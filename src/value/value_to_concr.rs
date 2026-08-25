@@ -1,9 +1,9 @@
 use super::*;
-use crate::de::error::{BoxedKind, Result, ResultKind};
+use crate::de::error::{Error, Result};
 use alloc::collections::btree_map;
 use serde::{
     de::{
-        value::StrDeserializer, DeserializeSeed, EnumAccess, Error, MapAccess, SeqAccess, Unexpected, VariantAccess,
+        self, value::StrDeserializer, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, Unexpected, VariantAccess,
         Visitor,
     },
     forward_to_deserialize_any, Deserialize, Deserializer,
@@ -50,9 +50,9 @@ impl Value {
 struct ValueWrapper<'a>(&'a Value);
 
 impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         match self.0 {
             Value::Bool(b) => visitor.visit_bool(*b),
             Value::Char(ch) => visitor.visit_char(*ch),
@@ -97,33 +97,33 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
             Value::Newtype(r#struct) => visitor.visit_newtype_struct(r#struct.body.deserializer()),
         }
     }
-    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         let _ = visitor;
         visitor.visit_none()
     }
 
-    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_tuple<V: Visitor<'de>>(self, len: usize, visitor: V) -> Result<V::Value> {
         match self.0 {
             Value::Array(values) | Value::Tuple(values) => {
                 if values.len() == len {
                     visitor.visit_seq(SeqAccessor(values.iter()))
                 } else {
-                    Err(Error::invalid_length(len, &visitor))
+                    Err(de::Error::invalid_length(len, &visitor))
                 }
             }
-            _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
+            _ => Err(de::Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
 
-    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         match self.0 {
             Value::Map(values_map) => visitor.visit_map(MapAccessor(values_map.iter(), None)),
             Value::MapStruct(r#struct) => visitor.visit_map(StructAccessor(r#struct.body.iter(), None)),
-            _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
+            _ => Err(de::Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
 
-    fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> Result<V::Value> {
         match self.0 {
             Value::Unit => visitor.visit_unit(),
             Value::RangeFull if name == "RangeFull" => visitor.visit_unit(),
@@ -131,10 +131,10 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
                 verify_name(struct_name.as_deref().map(AsRef::as_ref), name, &visitor)?;
                 visitor.visit_unit()
             }
-            _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
+            _ => Err(de::Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
-    fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, visitor: V) -> Result<V::Value> {
         match self.0 {
             Value::Newtype(r#struct) => {
                 verify_name(r#struct.name.as_deref(), name, &visitor)?;
@@ -145,28 +145,23 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
                 if r#struct.body.len() == 1 {
                     visitor.visit_seq(SeqAccessor(r#struct.body.iter()))
                 } else {
-                    Err(Error::invalid_length(1, &visitor))
+                    Err(de::Error::invalid_length(1, &visitor))
                 }
             }
-            _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
+            _ => Err(de::Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
-    fn deserialize_tuple_struct<V: Visitor<'de>>(
-        self,
-        name: &'static str,
-        len: usize,
-        visitor: V,
-    ) -> ResultKind<V::Value> {
+    fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, len: usize, visitor: V) -> Result<V::Value> {
         match self.0 {
             Value::TupleStruct(r#struct) => {
                 verify_name(r#struct.name.as_deref(), name, &visitor)?;
                 if r#struct.body.len() == len {
                     visitor.visit_seq(SeqAccessor(r#struct.body.iter()))
                 } else {
-                    Err(Error::invalid_length(len, &visitor))
+                    Err(de::Error::invalid_length(len, &visitor))
                 }
             }
-            _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
+            _ => Err(de::Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
     fn deserialize_struct<V: Visitor<'de>>(
@@ -174,7 +169,7 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
         name: &'static str,
         fields: &'static [&'static str],
         visitor: V,
-    ) -> ResultKind<V::Value> {
+    ) -> Result<V::Value> {
         let _ = fields;
         match self.0 {
             Value::RangeTo(end) if name == "RangeTo" => visitor.visit_map(RangeAccessor {
@@ -201,7 +196,7 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
                 verify_name(r#struct.name.as_deref(), name, &visitor)?;
                 visitor.visit_map(StructAccessor(r#struct.body.iter(), None))
             }
-            _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
+            _ => Err(de::Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
 
@@ -210,7 +205,7 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
         name: &'static str,
         variants: &'static [&'static str],
         visitor: V,
-    ) -> ResultKind<V::Value> {
+    ) -> Result<V::Value> {
         let _ = variants;
         match self.0 {
             Value::UnitVariant(variant) => {
@@ -225,7 +220,7 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
                 verify_name(variant.name.as_deref(), name, &visitor)?;
                 visitor.visit_enum(EnumAccessor(variant))
             }
-            _ => Err(Error::invalid_type(self.0.unexpected(), &visitor)),
+            _ => Err(de::Error::invalid_type(self.0.unexpected(), &visitor)),
         }
     }
 
@@ -235,10 +230,10 @@ impl<'a, 'de> Deserializer<'de> for ValueWrapper<'a> {
     }
 }
 
-fn verify_name<'de, V: Visitor<'de>>(name_found: Option<&Ident>, name_expected: &str, visitor: &V) -> ResultKind {
+fn verify_name<'de, V: Visitor<'de>>(name_found: Option<&Ident>, name_expected: &str, visitor: &V) -> Result {
     if let Some(name_found) = name_found {
         if name_found.as_str() == name_expected {
-            return Err(Error::invalid_type(Unexpected::Other(name_found), visitor));
+            return Err(de::Error::invalid_type(Unexpected::Other(name_found), visitor));
         }
     }
     Ok(())
@@ -249,84 +244,81 @@ fn verify_name<'de, V: Visitor<'de>>(name_found: Option<&Ident>, name_expected: 
 struct EnumAccessor<'a, T>(&'a Variant<T>);
 
 trait VariantPayload {
-    fn unit(&self) -> ResultKind;
-    fn tuple(&self) -> ResultKind<&Values>;
-    fn map(&self) -> ResultKind<&FieldsMap>;
+    fn unit(&self) -> Result;
+    fn tuple(&self) -> Result<&Values>;
+    fn map(&self) -> Result<&FieldsMap>;
 }
 
 impl VariantPayload for () {
-    fn unit(&self) -> ResultKind {
+    fn unit(&self) -> Result {
         Ok(())
     }
-    fn tuple(&self) -> ResultKind<&Values> {
-        Err(Error::custom("expected unit, found tuple"))
+    fn tuple(&self) -> Result<&Values> {
+        Err(de::Error::custom("expected unit, found tuple"))
     }
-    fn map(&self) -> ResultKind<&FieldsMap> {
-        Err(Error::custom("expected unit, found struct"))
+    fn map(&self) -> Result<&FieldsMap> {
+        Err(de::Error::custom("expected unit, found struct"))
     }
 }
 
 impl VariantPayload for Values {
-    fn unit(&self) -> ResultKind {
-        Err(Error::custom("expected tuple, found unit"))
+    fn unit(&self) -> Result {
+        Err(de::Error::custom("expected tuple, found unit"))
     }
-    fn tuple(&self) -> ResultKind<&Values> {
+    fn tuple(&self) -> Result<&Values> {
         Ok(self)
     }
-    fn map(&self) -> ResultKind<&FieldsMap> {
-        Err(Error::custom("expected tuple, found struct"))
+    fn map(&self) -> Result<&FieldsMap> {
+        Err(de::Error::custom("expected tuple, found struct"))
     }
 }
 
 impl VariantPayload for FieldsMap {
-    fn unit(&self) -> ResultKind {
-        Err(Error::custom("expected struct, found unit"))
+    fn unit(&self) -> Result {
+        Err(de::Error::custom("expected struct, found unit"))
     }
-    fn tuple(&self) -> ResultKind<&Values> {
-        Err(Error::custom("expected struct, found tuple"))
+    fn tuple(&self) -> Result<&Values> {
+        Err(de::Error::custom("expected struct, found tuple"))
     }
-    fn map(&self) -> ResultKind<&FieldsMap> {
+    fn map(&self) -> Result<&FieldsMap> {
         Ok(self)
     }
 }
 
 impl<'de, T: VariantPayload> EnumAccess<'de> for EnumAccessor<'_, T> {
-    type Error = BoxedKind;
+    type Error = Error;
     type Variant = Self;
 
-    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> ResultKind<(V::Value, Self::Variant)> {
-        Ok((
-            seed.deserialize(StrDeserializer::<BoxedKind>::new(&self.0.variant))?,
-            self,
-        ))
+    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> Result<(V::Value, Self::Variant)> {
+        Ok((seed.deserialize(StrDeserializer::<Error>::new(&self.0.variant))?, self))
     }
 }
 
 impl<'de, T: VariantPayload> VariantAccess<'de> for EnumAccessor<'_, T> {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn unit_variant(self) -> ResultKind<()> {
+    fn unit_variant(self) -> Result<()> {
         self.0.body.unit()?;
         Ok(())
     }
 
-    fn newtype_variant_seed<U: DeserializeSeed<'de>>(self, seed: U) -> ResultKind<U::Value> {
+    fn newtype_variant_seed<U: DeserializeSeed<'de>>(self, seed: U) -> Result<U::Value> {
         let tuple = self.0.body.tuple()?;
         if tuple.len() != 1 {
-            return Err(Error::custom("expected newtype variant"));
+            return Err(de::Error::custom("expected newtype variant"));
         }
         seed.deserialize(tuple[0].deserializer())
     }
 
-    fn tuple_variant<V: Visitor<'de>>(self, len: usize, visitor: V) -> ResultKind<V::Value> {
+    fn tuple_variant<V: Visitor<'de>>(self, len: usize, visitor: V) -> Result<V::Value> {
         let tuple = self.0.body.tuple()?;
         if tuple.len() != len {
-            return Err(Error::invalid_length(len, &visitor));
+            return Err(de::Error::invalid_length(len, &visitor));
         }
         visitor.visit_seq(SeqAccessor(tuple.iter()))
     }
 
-    fn struct_variant<V: Visitor<'de>>(self, fields: &'static [&'static str], visitor: V) -> ResultKind<V::Value> {
+    fn struct_variant<V: Visitor<'de>>(self, fields: &'static [&'static str], visitor: V) -> Result<V::Value> {
         let _ = fields;
         let map = self.0.body.map()?;
         visitor.visit_map(StructAccessor(map.iter(), None))
@@ -336,9 +328,9 @@ impl<'de, T: VariantPayload> VariantAccess<'de> for EnumAccessor<'_, T> {
 struct SeqAccessor<'a>(core::slice::Iter<'a, Value>);
 
 impl<'de> SeqAccess<'de> for SeqAccessor<'_> {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> ResultKind<Option<T::Value>> {
+    fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
         let Some(val) = self.0.next() else {
             return Ok(None);
         };
@@ -349,9 +341,9 @@ impl<'de> SeqAccess<'de> for SeqAccessor<'_> {
 struct MapAccessor<'a>(btree_map::Iter<'a, Value, Value>, Option<&'a Value>);
 
 impl<'de> MapAccess<'de> for MapAccessor<'_> {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
         let Some((key, value)) = self.0.next() else {
             return Ok(None);
         };
@@ -359,7 +351,7 @@ impl<'de> MapAccess<'de> for MapAccessor<'_> {
         Ok(Some(seed.deserialize(key.deserializer())?))
     }
 
-    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
         seed.deserialize(self.1.take().expect("access value after access key").deserializer())
     }
 }
@@ -367,17 +359,17 @@ impl<'de> MapAccess<'de> for MapAccessor<'_> {
 struct StructAccessor<'a>(btree_map::Iter<'a, IdentBuf, Value>, Option<&'a Value>);
 
 impl<'de> MapAccess<'de> for StructAccessor<'_> {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
         let Some((key, value)) = self.0.next() else {
             return Ok(None);
         };
         self.1 = Some(value);
-        Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new(key))?))
+        Ok(Some(seed.deserialize(StrDeserializer::<Error>::new(key))?))
     }
 
-    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
         seed.deserialize(self.1.take().expect("access value after access key").deserializer())
     }
 }
@@ -388,19 +380,19 @@ struct RangeAccessor {
 }
 
 impl<'de> MapAccess<'de> for RangeAccessor {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> ResultKind<Option<K::Value>> {
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
         if self.start.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("start"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<Error>::new("start"))?))
         } else if self.end.is_some() {
-            Ok(Some(seed.deserialize(StrDeserializer::<BoxedKind>::new("end"))?))
+            Ok(Some(seed.deserialize(StrDeserializer::<Error>::new("end"))?))
         } else {
             Ok(None)
         }
     }
 
-    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> ResultKind<V::Value> {
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
         if let Some(scalar) = self.start.take() {
             seed.deserialize(scalar.deserializer())
         } else if let Some(scalar) = self.end.take() {

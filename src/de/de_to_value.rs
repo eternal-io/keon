@@ -5,7 +5,7 @@ use either::Either;
 
 impl<'de> Deserialize<'de> for Value {
     #[expect(private_interfaces)]
-    fn deserialize_with<R: Read<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self> {
+    fn deserialize_with<R: Read<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> Result<Self> {
         let range_component = 'non_range: {
             let val = match der.src.begin(&mut der.buf)? {
                 Indicator::Unit => Self::Unit,
@@ -132,14 +132,14 @@ impl<'de> Deserialize<'de> for Value {
     }
 }
 
-fn deserialize_value<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<Value> {
+fn deserialize_value<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> Result<Value> {
     der.enter_nesting()?;
     let value = Value::deserialize_with(der, PrivateMethod)?;
     der.exit_nesting();
     Ok(value)
 }
 
-fn deserialize_values<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<Values> {
+fn deserialize_values<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> Result<Values> {
     der.enter_nesting()?;
     let mut values = Values::new();
     loop {
@@ -154,7 +154,7 @@ fn deserialize_values<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKin
     Ok(values)
 }
 
-fn deserialize_values_map<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<ValuesMap> {
+fn deserialize_values_map<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> Result<ValuesMap> {
     der.enter_nesting()?;
     let mut values_map = ValuesMap::new();
     loop {
@@ -171,7 +171,7 @@ fn deserialize_values_map<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> Resul
     Ok(values_map)
 }
 
-fn deserialize_fields_map<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> ResultKind<FieldsMap> {
+fn deserialize_fields_map<'de, R: Read<'de>>(der: &mut Deserializer<R>) -> Result<FieldsMap> {
     der.enter_nesting()?;
     let mut fields_map = FieldsMap::new();
     loop {

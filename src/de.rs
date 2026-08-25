@@ -1,6 +1,6 @@
 use self::{error::*, source::*};
 use crate::{value::*, PrivateMethod};
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 use either::Either;
 
@@ -28,7 +28,7 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Value> {
 #[expect(private_interfaces)]
 pub trait Deserialize<'de>: Sized {
     #[doc(hidden)]
-    fn deserialize_with<R: Read<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> ResultKind<Self>;
+    fn deserialize_with<R: Read<'de>>(der: &mut Deserializer<R>, _: PrivateMethod) -> Result<Self>;
 }
 
 pub struct Deserializer<R> {
@@ -63,7 +63,7 @@ impl<R> Deserializer<R> {
         self.ttl == 0
     }
 
-    fn enter_nesting(&mut self) -> ResultKind {
+    fn enter_nesting(&mut self) -> Result {
         if self.ttl > 0 {
             self.ttl -= 1;
             Ok(())
@@ -92,25 +92,19 @@ impl<'de, R: Read<'de>> Deserializer<R> {
 
     pub fn finish(&mut self) -> Result {
         if self.ttl == 0 {
-            return Err(Error {
-                kind: ErrorKind::Corrupted,
-                position: self.position(),
-            });
+            return Err(Error::from(ErrorKind::Corrupted).with_position(self.position()));
         }
         self.finish_all().map_err(self.fixing_pos())
     }
 
     fn deserialize_partial<T: Deserialize<'de>>(&mut self) -> Result<T> {
         if self.ttl == 0 {
-            return Err(Error {
-                kind: ErrorKind::Corrupted,
-                position: self.position(),
-            });
+            return Err(Error::from(ErrorKind::Corrupted).with_position(self.position()));
         }
         T::deserialize_with(self, PrivateMethod).map_err(self.fixing_pos())
     }
 
-    fn deserialize_scalar(&mut self) -> ResultKind<Scalar> {
+    fn deserialize_scalar(&mut self) -> Result<Scalar> {
         let scalar = match self.src.begin(&mut self.buf)? {
             Indicator::Char(ch) => Scalar::Char(ch),
             Indicator::Byte(byte) => Scalar::Number(byte.into()),
@@ -120,17 +114,14 @@ impl<'de, R: Read<'de>> Deserializer<R> {
         Ok(scalar)
     }
 
-    fn fixing_pos(&mut self) -> impl FnOnce(BoxedKind) -> Error + '_ {
+    fn fixing_pos(&mut self) -> impl FnOnce(Error) -> Error + '_ {
         |e| {
             self.ttl = 0;
-            Error {
-                kind: *e.0,
-                position: self.position(),
-            }
+            e.with_position(self.position())
         }
     }
 }
 
-fn raise<T>(kind: ErrorKind) -> ResultKind<T> {
-    Err(BoxedKind(Box::new(kind)))
+fn raise<T>(kind: ErrorKind) -> Result<T> {
+    Err(Error::from(kind))
 }

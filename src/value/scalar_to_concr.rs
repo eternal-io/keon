@@ -1,5 +1,5 @@
 use super::*;
-use crate::de::error::{BoxedKind, Result, ResultKind};
+use crate::de::error::{Error, Result};
 use serde::{de::Visitor, forward_to_deserialize_any, Deserialize, Deserializer};
 
 impl Number {
@@ -15,9 +15,9 @@ impl Number {
 pub(crate) struct NumberWrapper<'a>(&'a Number);
 
 impl<'de> Deserializer<'de> for NumberWrapper<'_> {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         match *self.0 {
             Number::Int8(v) => visitor.visit_i8(v),
             Number::Int16(v) => visitor.visit_i16(v),
@@ -36,7 +36,7 @@ impl<'de> Deserializer<'de> for NumberWrapper<'_> {
             Number::FloatNoSuffix(Float64(v)) => visitor.visit_f64(v),
         }
     }
-    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         visitor.visit_none()
     }
 
@@ -62,15 +62,15 @@ impl Scalar {
 pub(crate) struct ScalarWrapper<'a>(&'a Scalar);
 
 impl<'de> Deserializer<'de> for ScalarWrapper<'_> {
-    type Error = BoxedKind;
+    type Error = Error;
 
-    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         match self.0 {
             Scalar::Char(ch) => visitor.visit_char(*ch),
             Scalar::Number(num) => num.deserializer().deserialize_any(visitor),
         }
     }
-    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> ResultKind<V::Value> {
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         visitor.visit_none()
     }
 

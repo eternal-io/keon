@@ -24,3 +24,8 @@
 //         .unwrap()
 //     );
 // }
+
+#[test]
+fn foo() {
+    keon::_test_roundtrip(&()).unwrap();
+}

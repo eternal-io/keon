@@ -168,63 +168,63 @@ pub(super) trait ParseHelper<'de> {
     fn position(&self) -> Position;
 
     /// Skips WS: Consumes the subsequent whitespaces and comments.
-    fn eat_ws(&mut self) -> ResultKind;
+    fn eat_ws(&mut self) -> Result;
 
     /// Skips WS and consumes the specified delimiter if possible:
     /// - returns `None` on success;
     /// - returns `Some` if another delimiter is found;
     /// - returns `Err` if no delimiter is found.
-    fn delim(&mut self, delim: Delimiter) -> ResultKind<Option<Delimiter>>;
+    fn delim(&mut self, delim: Delimiter) -> Result<Option<Delimiter>>;
 
     /// Skips WS and consumes the specified delimiter. Returns `Err` if not found.
-    fn delim_expected(&mut self, delim: Delimiter, reason: ErrorKind) -> ResultKind {
+    fn delim_expected(&mut self, delim: Delimiter, reason: ErrorKind) -> Result {
         self.delim(delim)?
             .is_none()
             .then_some(())
             .ok_or(reason)
-            .map_err(BoxedKind::from)
+            .map_err(Error::from)
     }
 
     /// Skips WS and checks the presence of a subsequent delimiter.
-    fn adjacent_to_delim(&mut self) -> ResultKind<bool>;
+    fn adjacent_to_delim(&mut self) -> Result<bool>;
 
     /// Skips WS and checks the presence of a subsequent delimiter. Returns `Err(reason)` if not found.
-    fn adjacent_to_delim_expected(&mut self, reason: ErrorKind) -> ResultKind {
+    fn adjacent_to_delim_expected(&mut self, reason: ErrorKind) -> Result {
         self.adjacent_to_delim()?
             .then_some(())
             .ok_or(reason)
-            .map_err(BoxedKind::from)
+            .map_err(Error::from)
     }
 
     /// Skips WS and checks whether the subsequent content appears to be a scalar.
-    fn adjacent_to_scalar(&mut self) -> ResultKind<bool>;
+    fn adjacent_to_scalar(&mut self) -> Result<bool>;
 
     /// Skips WS and checks whether the subsequent content appears to be a scalar. Returns `Err` if false.
-    fn adjacent_to_scalar_expected(&mut self) -> ResultKind {
+    fn adjacent_to_scalar_expected(&mut self) -> Result {
         self.adjacent_to_scalar()?
             .then_some(())
             .ok_or(ErrorKind::ExpectedScalar)
-            .map_err(BoxedKind::from)
+            .map_err(Error::from)
     }
 
-    fn finish_one(&mut self) -> ResultKind;
-    fn finish_all(&mut self) -> ResultKind;
+    fn finish_one(&mut self) -> Result;
+    fn finish_all(&mut self) -> Result;
 }
 
 pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
     /// If the subsequent content starts with `b'`, consume it and return true.
-    fn try_byte(&mut self) -> ResultKind<bool>;
+    fn try_byte(&mut self) -> Result<bool>;
 
-    fn begin_char(&mut self) -> ResultKind;
+    fn begin_char(&mut self) -> Result;
 
-    fn begin_string(&mut self) -> ResultKind<StringKind>;
+    fn begin_string(&mut self) -> Result<StringKind>;
 
-    fn begin_bytes(&mut self) -> ResultKind<BytesKind>;
+    fn begin_bytes(&mut self) -> Result<BytesKind>;
 
-    fn begin_maybe(&mut self) -> ResultKind;
+    fn begin_maybe(&mut self) -> Result;
 
-    fn begin_array(&mut self) -> ResultKind;
-    fn end_array(&mut self) -> ResultKind {
+    fn begin_array(&mut self) -> Result;
+    fn end_array(&mut self) -> Result {
         if let Some(delim) = self.delim(Delimiter::Array)? {
             if let Delimiter::Comma = delim {
                 raise(ErrorKind::DuplicatedComma)
@@ -236,8 +236,8 @@ pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
         }
     }
 
-    fn begin_tuple(&mut self) -> ResultKind;
-    fn end_tuple(&mut self) -> ResultKind {
+    fn begin_tuple(&mut self) -> Result;
+    fn end_tuple(&mut self) -> Result {
         if let Some(delim) = self.delim(Delimiter::Tuple)? {
             if let Delimiter::Comma = delim {
                 raise(ErrorKind::DuplicatedComma)
@@ -249,8 +249,8 @@ pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
         }
     }
 
-    fn begin_map_like(&mut self) -> ResultKind;
-    fn end_map_like(&mut self) -> ResultKind {
+    fn begin_map_like(&mut self) -> Result;
+    fn end_map_like(&mut self) -> Result {
         if let Some(delim) = self.delim(Delimiter::MapLike)? {
             if let Delimiter::Comma = delim {
                 raise(ErrorKind::DuplicatedComma)
@@ -264,69 +264,67 @@ pub(super) trait ParseToConcr<'de>: ParseHelper<'de> {
 
     /// Skips WS and consumes the specified range separator if possible,
     /// either `..` (not inclusive) or `..=` (inclusive). Returns true on success.
-    fn range_to(&mut self, inclusive: bool) -> ResultKind<bool>;
+    fn range_to(&mut self, inclusive: bool) -> Result<bool>;
 
     /// Skips WS and consumes the subsequent `..`. Returns `Err` if not found.
-    fn end_range_from(&mut self) -> ResultKind;
+    fn end_range_from(&mut self) -> Result;
 
-    fn parse_unit(&mut self) -> ResultKind;
+    fn parse_unit(&mut self) -> Result;
 
-    fn parse_bool(&mut self) -> ResultKind<bool>;
+    fn parse_bool(&mut self) -> Result<bool>;
 
     // NOTE: According to the grammar spec, WS is not allowed between negative signs and digits.
-    fn parse_i8(&mut self) -> ResultKind<i8>;
-    fn parse_i16(&mut self) -> ResultKind<i16>;
-    fn parse_i32(&mut self) -> ResultKind<i32>;
-    fn parse_i64(&mut self) -> ResultKind<i64>;
-    fn parse_i128(&mut self) -> ResultKind<i128>;
-    fn parse_u8(&mut self) -> ResultKind<u8>;
-    fn parse_u16(&mut self) -> ResultKind<u16>;
-    fn parse_u32(&mut self) -> ResultKind<u32>;
-    fn parse_u64(&mut self) -> ResultKind<u64>;
-    fn parse_u128(&mut self) -> ResultKind<u128>;
-    fn parse_f32(&mut self) -> ResultKind<f32>;
-    fn parse_f64(&mut self) -> ResultKind<f64>;
+    fn parse_i8(&mut self) -> Result<i8>;
+    fn parse_i16(&mut self) -> Result<i16>;
+    fn parse_i32(&mut self) -> Result<i32>;
+    fn parse_i64(&mut self) -> Result<i64>;
+    fn parse_i128(&mut self) -> Result<i128>;
+    fn parse_u8(&mut self) -> Result<u8>;
+    fn parse_u16(&mut self) -> Result<u16>;
+    fn parse_u32(&mut self) -> Result<u32>;
+    fn parse_u64(&mut self) -> Result<u64>;
+    fn parse_u128(&mut self) -> Result<u128>;
+    fn parse_f32(&mut self) -> Result<f32>;
+    fn parse_f64(&mut self) -> Result<f64>;
 
-    fn parse_byte(&mut self) -> ResultKind<u8>;
+    fn parse_byte(&mut self) -> Result<u8>;
 
-    fn parse_char(&mut self) -> ResultKind<char>;
+    fn parse_char(&mut self) -> Result<char>;
 
-    fn parse_string<'t>(&mut self, kind: StringKind, scratch: &'t mut Vec<u8>)
-        -> ResultKind<Either<&'de str, &'t str>>;
+    fn parse_string<'t>(&mut self, kind: StringKind, scratch: &'t mut Vec<u8>) -> Result<Either<&'de str, &'t str>>;
 
-    fn parse_bytes<'t>(&mut self, kind: BytesKind, scratch: &'t mut Vec<u8>)
-        -> ResultKind<Either<&'de [u8], &'t [u8]>>;
+    fn parse_bytes<'t>(&mut self, kind: BytesKind, scratch: &'t mut Vec<u8>) -> Result<Either<&'de [u8], &'t [u8]>>;
 
-    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<&'t Ident>
+    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<&'t Ident>
     where
         'de: 't;
 
-    fn parse_struct_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    fn parse_struct_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<Option<&'t Ident>>
     where
         'de: 't;
 
-    fn parse_newtype_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    fn parse_newtype_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<Option<&'t Ident>>
     where
         'de: 't;
 
     // NOTE: According to the grammar spec, WS is not allowed surrounding path separators.
-    fn parse_variant_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<(Option<&'t Ident>, &'t Ident)>
+    fn parse_variant_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<(Option<&'t Ident>, &'t Ident)>
     where
         'de: 't;
 }
 
 pub(super) trait ParseToValue<'de>: ParseToConcr<'de> {
-    fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Indicator<'t>>
+    fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<Indicator<'t>>
     where
         'de: 't;
 
-    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number>;
+    fn parse_number(&mut self, kind: NumberKind) -> Result<Number>;
 
     /// Skips WS and consumes the subsequent range separator. Returns `None` if not found.
-    fn range_separator(&mut self) -> ResultKind<Option<RangeSeparator>>;
+    fn range_separator(&mut self) -> Result<Option<RangeSeparator>>;
 
     /// Skips WS and consumes the subsequent nominal body initiator. Returns `None` if not found.
-    fn nominal_body_initiator(&mut self) -> ResultKind<Option<NominalBodyInitiator>>;
+    fn nominal_body_initiator(&mut self) -> Result<Option<NominalBodyInitiator>>;
 }
 
 //==================================================================================================
@@ -348,20 +346,20 @@ macro_rules! try_downcast_integer {
 
 macro_rules! fn_parse_integer_immediate {
     ($name:ident, $ty:ty) => {
-        fn $name(bytes: &[u8], radix: Radix) -> ResultKind<$ty> {
+        fn $name(bytes: &[u8], radix: Radix) -> Result<$ty> {
             #[cold]
-            fn power_of_two(bytes: &[u8], radix: Radix) -> ResultKind<$ty> {
+            fn power_of_two(bytes: &[u8], radix: Radix) -> Result<$ty> {
                 match radix {
                     Radix::Hex => <$ty>::from_lexical_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Oct => <$ty>::from_lexical_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Bin => <$ty>::from_lexical_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Dec => unsafe { core::hint::unreachable_unchecked() },
                 }
-                .map_err(BoxedKind::from)
+                .map_err(Error::from)
             }
             match radix {
                 Radix::Dec => <$ty>::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_INTEGER_OPTIONS)
-                    .map_err(BoxedKind::from),
+                    .map_err(Error::from),
                 radix => power_of_two(bytes, radix),
             }
         }
@@ -372,27 +370,27 @@ fn_parse_integer_immediate!(parse_i64, i64);
 fn_parse_integer_immediate!(parse_i128, i128);
 fn_parse_integer_immediate!(parse_u64, u64);
 fn_parse_integer_immediate!(parse_u128, u128);
-fn parse_f64(bytes: &[u8]) -> ResultKind<f64> {
-    f64::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_FLOAT_OPTIONS).map_err(BoxedKind::from)
+fn parse_f64(bytes: &[u8]) -> Result<f64> {
+    f64::from_lexical_with_options::<NUMBER_FORMAT>(bytes, &PARSE_FLOAT_OPTIONS).map_err(Error::from)
 }
 
 macro_rules! fn_parse_integer {
     ($method:ident, $ty:ty) => {
         #[rustfmt::skip]
-        fn $method(&mut self) -> ResultKind<$ty> {
+        fn $method(&mut self) -> Result<$ty> {
             #[cold]
-            fn power_of_two(bytes: &[u8], radix: Radix) -> ResultKind<($ty, usize)> {
+            fn power_of_two(bytes: &[u8], radix: Radix) -> Result<($ty, usize)> {
                 match radix {
                     Radix::Hex => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_HEX>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Oct => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_OCT>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Bin => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT_BIN>(bytes, &PARSE_INTEGER_OPTIONS),
                     Radix::Dec => unsafe { core::hint::unreachable_unchecked() },
                 }
-                .map_err(BoxedKind::from)
+                .map_err(Error::from)
             }
             let (n, len) = match self.peek_integer_radix() {
                 Radix::Dec => <$ty>::from_lexical_partial_with_options::<NUMBER_FORMAT>(self.rest(), &PARSE_INTEGER_OPTIONS)
-                    .map_err(BoxedKind::from),
+                    .map_err(Error::from),
                 radix => power_of_two(self.rest(), radix),
             }?;
             self.bump(len);
@@ -404,7 +402,7 @@ macro_rules! fn_parse_integer {
 
 macro_rules! fn_parse_integer_case {
     ($method:ident, $ty:ty, $up_method:ident, $up_ty:ty, $suff:ident) => {
-        fn $method(&mut self) -> ResultKind<$ty> {
+        fn $method(&mut self) -> Result<$ty> {
             let n = try_downcast_integer!(self.$up_method()?, $up_ty, $ty);
             self.number_suffix(NumberSuffix::$suff)?;
             Ok(n)
@@ -414,7 +412,7 @@ macro_rules! fn_parse_integer_case {
 
 macro_rules! fn_parse_float_case {
     ($method:ident, $ty:ty, $suff:ident) => {
-        fn $method(&mut self) -> ResultKind<$ty> {
+        fn $method(&mut self) -> Result<$ty> {
             let f = self.parse_f64()?;
             self.number_suffix(NumberSuffix::$suff)?;
             Ok(f as $ty)
@@ -431,9 +429,9 @@ trait SliceDetail {
 
     fn index_raw<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &[u8];
 
-    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> ResultKind<&str>;
+    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> Result<&str>;
 
-    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> ResultKind<&'a str>;
+    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> Result<&'a str>;
 }
 
 impl Slice for [u8] {}
@@ -447,16 +445,16 @@ impl SliceDetail for [u8] {
     fn index_raw<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &[u8] {
         core::ops::Index::index(self, idx)
     }
-    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> ResultKind<&str> {
+    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> Result<&str> {
         decode_utf8(core::ops::Index::index(self, idx)).map_err(|e| {
             *delta_on_err += e.valid_up_to();
-            BoxedKind(Box::new(ErrorKind::InvalidUtf8Sequence))
+            Error::from(ErrorKind::InvalidUtf8Sequence)
         })
     }
-    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> ResultKind<&'a str> {
+    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> Result<&'a str> {
         decode_utf8(content).map_err(|e| {
             *delta_on_err += e.valid_up_to();
-            BoxedKind(Box::new(ErrorKind::InvalidUtf8Sequence))
+            Error::from(ErrorKind::InvalidUtf8Sequence)
         })
     }
 }
@@ -472,11 +470,11 @@ impl SliceDetail for str {
     fn index_raw<I: SliceIndex<Self, Output = Self>>(&self, idx: I) -> &[u8] {
         core::ops::Index::index(self, idx).as_bytes()
     }
-    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> ResultKind<&str> {
+    fn index_str<I: SliceIndex<Self, Output = Self>>(&self, delta_on_err: &mut usize, idx: I) -> Result<&str> {
         let _ = delta_on_err;
         Ok(core::ops::Index::index(self, idx))
     }
-    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> ResultKind<&'a str> {
+    unsafe fn decode_utf8<'a>(delta_on_err: &mut usize, content: &'a [u8]) -> Result<&'a str> {
         let _ = delta_on_err;
         Ok(unsafe { core::str::from_utf8_unchecked(content) })
     }
@@ -514,15 +512,15 @@ where
         self.src.index(self.offset..).index_raw(..)
     }
 
-    fn str_till(&mut self, offset: usize) -> ResultKind<&'de str> {
+    fn str_till(&mut self, offset: usize) -> Result<&'de str> {
         self.src.index(self.offset..).index_str(&mut self.offset, ..offset)
     }
 
-    fn str_till_end(&mut self) -> ResultKind<&'de str> {
+    fn str_till_end(&mut self) -> Result<&'de str> {
         self.src.index(self.offset..).index_str(&mut self.offset, ..)
     }
 
-    fn raise<T>(&mut self, offset: usize, reason: ErrorKind) -> ResultKind<T> {
+    fn raise<T>(&mut self, offset: usize, reason: ErrorKind) -> Result<T> {
         self.bump(offset);
         raise(reason)
     }
@@ -574,7 +572,7 @@ where
     }
 
     /// Skips WS and peeks the subsequent delimiter.
-    fn seek_delim(&mut self) -> ResultKind<Option<Delimiter>> {
+    fn seek_delim(&mut self) -> Result<Option<Delimiter>> {
         self.eat_ws()?;
         'delim: {
             Ok(Some(match self.rest() {
@@ -600,11 +598,8 @@ where
         }
     }
 
-    fn consume_expected(&mut self, needle: &str, reason: ErrorKind) -> ResultKind {
-        self.consume(needle)
-            .then_some(())
-            .ok_or(reason)
-            .map_err(BoxedKind::from)
+    fn consume_expected(&mut self, needle: &str, reason: ErrorKind) -> Result {
+        self.consume(needle).then_some(()).ok_or(reason).map_err(Error::from)
     }
 
     fn consume_ticks_peek_initiator(&mut self) -> (usize, Option<u8>) {
@@ -631,7 +626,7 @@ where
         }
     }
 
-    fn number_suffix(&mut self, accepted: NumberSuffix) -> ResultKind {
+    fn number_suffix(&mut self, accepted: NumberSuffix) -> Result {
         let suff = 'suff: {
             Some(match self.rest() {
                 [b'i', b'8', ..] => NumberSuffix::Int8,
@@ -682,14 +677,14 @@ where
     fn_parse_integer!(parse_i128, i128);
     fn_parse_integer!(parse_u64, u64);
     fn_parse_integer!(parse_u128, u128);
-    fn parse_f64(&mut self) -> ResultKind<f64> {
+    fn parse_f64(&mut self) -> Result<f64> {
         let (f, len) = f64::from_lexical_partial_with_options::<NUMBER_FORMAT>(self.rest(), &PARSE_FLOAT_OPTIONS)?;
         self.bump(len);
 
         Ok(f)
     }
 
-    fn peek_escape_byte_from(&self, offset: usize) -> ResultKind<(u8, usize)> {
+    fn peek_escape_byte_from(&self, offset: usize) -> Result<(u8, usize)> {
         let byte = match &self.rest()[offset..] {
             [b'\\', ..] => b'\\',
             [b'\"', ..] => b'\"',
@@ -711,7 +706,7 @@ where
         Ok((byte, 1))
     }
 
-    fn peek_escape_char_from(&self, offset: usize) -> ResultKind<(char, usize)> {
+    fn peek_escape_char_from(&self, offset: usize) -> Result<(char, usize)> {
         let ch = match &self.rest()[offset..] {
             [b'\\', ..] => '\\',
             [b'\"', ..] => '\"',
@@ -755,14 +750,14 @@ where
         Ok((ch, 1))
     }
 
-    fn parse_u8_fmt_02_hex(bytes: &[u8; 2]) -> ResultKind<u8> {
+    fn parse_u8_fmt_02_hex(bytes: &[u8; 2]) -> Result<u8> {
         Ok(u8::from_lexical_with_options::<NUMBER_FORMAT_HEX_NO_PREFIX>(
             bytes,
             &PARSE_INTEGER_OPTIONS,
         )?)
     }
 
-    fn decode_from(&self, offset: usize) -> ResultKind<Option<(char, usize)>> {
+    fn decode_from(&self, offset: usize) -> Result<Option<(char, usize)>> {
         // Copyright (c) 2008-2010 Bjoern Hoehrmann <bjoern@hoehrmann.de>
         // See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
         const UTF8_ACCEPT: u32 = 0;
@@ -815,19 +810,19 @@ where
         raise(ErrorKind::InvalidUtf8Sequence)
     }
 
-    fn decode_expected(&self) -> ResultKind<(char, usize)> {
+    fn decode_expected(&self) -> Result<(char, usize)> {
         self.decode_from(0)?
             .ok_or(ErrorKind::ExpectedContent)
-            .map_err(BoxedKind::from)
+            .map_err(Error::from)
     }
 
-    fn parse_identifier(&mut self) -> ResultKind<&'de Ident> {
+    fn parse_identifier(&mut self) -> Result<&'de Ident> {
         self.parse_identifier_or_underscore()?
             .ok_or(ErrorKind::UnexpectedUnderscoreIdentifier)
-            .map_err(BoxedKind::from)
+            .map_err(Error::from)
     }
 
-    fn parse_identifier_or_underscore(&mut self) -> ResultKind<Option<&'de Ident>> {
+    fn parse_identifier_or_underscore(&mut self) -> Result<Option<&'de Ident>> {
         if let Some((raw_mode, ident)) = self.parse_identifier_or_underscore_raw()? {
             if !raw_mode && matches!(ident.as_str(), "true" | "false" | "inf" | "NaN") {
                 raise(ErrorKind::UnexpectedKeywordAsIdentifier)
@@ -841,7 +836,7 @@ where
         }
     }
 
-    fn parse_identifier_or_underscore_raw(&mut self) -> ResultKind<Option<(bool, &'de Ident)>> {
+    fn parse_identifier_or_underscore_raw(&mut self) -> Result<Option<(bool, &'de Ident)>> {
         let raw_mode = self.consume("`");
         let mut contd = false;
         let mut offset = 0;
@@ -913,7 +908,7 @@ where
         }
     }
 
-    fn eat_ws(&mut self) -> ResultKind {
+    fn eat_ws(&mut self) -> Result {
         loop {
             self.eat_ws_pure();
             match self.rest() {
@@ -958,7 +953,7 @@ where
         Ok(())
     }
 
-    fn delim(&mut self, delim: Delimiter) -> ResultKind<Option<Delimiter>> {
+    fn delim(&mut self, delim: Delimiter) -> Result<Option<Delimiter>> {
         match self.seek_delim()? {
             Some(found) => {
                 if found == delim {
@@ -973,11 +968,11 @@ where
         }
     }
 
-    fn adjacent_to_delim(&mut self) -> ResultKind<bool> {
+    fn adjacent_to_delim(&mut self) -> Result<bool> {
         Ok(self.seek_delim()?.is_some())
     }
 
-    fn adjacent_to_scalar(&mut self) -> ResultKind<bool> {
+    fn adjacent_to_scalar(&mut self) -> Result<bool> {
         self.eat_ws()?;
         let appear = match self.rest() {
             [b'0'..=b'9' | b'-', ..] => true,
@@ -992,7 +987,7 @@ where
         Ok(appear)
     }
 
-    fn finish_one(&mut self) -> ResultKind {
+    fn finish_one(&mut self) -> Result {
         if let Some(delim @ (Delimiter::SemiColon | Delimiter::EOF)) = self.seek_delim()? {
             self.bump(delim.len_utf8());
             Ok(())
@@ -1001,7 +996,7 @@ where
         }
     }
 
-    fn finish_all(&mut self) -> ResultKind {
+    fn finish_all(&mut self) -> Result {
         if let Some(delim @ (Delimiter::SemiColon | Delimiter::EOF)) = self.seek_delim()? {
             self.bump(delim.len_utf8());
             self.delim_expected(Delimiter::EOF, ErrorKind::ExpectedEof)
@@ -1019,16 +1014,16 @@ where
     RangeTo<usize>: SliceIndex<S, Output = S>,
     RangeFrom<usize>: SliceIndex<S, Output = S>,
 {
-    fn try_byte(&mut self) -> ResultKind<bool> {
+    fn try_byte(&mut self) -> Result<bool> {
         Ok(self.consume("b'"))
     }
 
-    fn begin_char(&mut self) -> ResultKind {
+    fn begin_char(&mut self) -> Result {
         self.eat_ws()?;
         self.consume_expected("'", ErrorKind::ExpectedCharacter)
     }
 
-    fn begin_string(&mut self) -> ResultKind<StringKind> {
+    fn begin_string(&mut self) -> Result<StringKind> {
         self.eat_ws()?;
         let kind = match self.consume_ticks_peek_initiator() {
             (0, Some(b'"')) => StringKind::Normal,
@@ -1040,7 +1035,7 @@ where
         Ok(kind)
     }
 
-    fn begin_bytes(&mut self) -> ResultKind<BytesKind> {
+    fn begin_bytes(&mut self) -> Result<BytesKind> {
         self.eat_ws()?;
         if !self.consume("b") {
             return raise(ErrorKind::ExpectedByteString);
@@ -1064,27 +1059,27 @@ where
         Ok(kind)
     }
 
-    fn begin_maybe(&mut self) -> ResultKind {
+    fn begin_maybe(&mut self) -> Result {
         self.eat_ws()?;
         self.consume_expected("?", ErrorKind::ExpectedMaybe)
     }
 
-    fn begin_array(&mut self) -> ResultKind {
+    fn begin_array(&mut self) -> Result {
         self.eat_ws()?;
         self.consume_expected("[", ErrorKind::ExpectedArray)
     }
 
-    fn begin_tuple(&mut self) -> ResultKind {
+    fn begin_tuple(&mut self) -> Result {
         self.eat_ws()?;
         self.consume_expected("(", ErrorKind::ExpectedTuple)
     }
 
-    fn begin_map_like(&mut self) -> ResultKind {
+    fn begin_map_like(&mut self) -> Result {
         self.eat_ws()?;
         self.consume_expected("{", ErrorKind::ExpectedMapLike)
     }
 
-    fn range_to(&mut self, inclusive: bool) -> ResultKind<bool> {
+    fn range_to(&mut self, inclusive: bool) -> Result<bool> {
         self.eat_ws()?;
         if self.consume("..=") {
             match inclusive {
@@ -1101,20 +1096,20 @@ where
         }
     }
 
-    fn end_range_from(&mut self) -> ResultKind {
+    fn end_range_from(&mut self) -> Result {
         self.eat_ws()?;
         self.consume_expected("..", ErrorKind::ExpectedRangeDotDot)
     }
 
     // NOTE: The following methods would not `eat_ws()` at the leading.
 
-    fn parse_unit(&mut self) -> ResultKind {
+    fn parse_unit(&mut self) -> Result {
         self.consume_expected("(", ErrorKind::ExpectedUnit)?;
         self.eat_ws()?;
         self.consume_expected(")", ErrorKind::ExpectedUnitEnd)
     }
 
-    fn parse_bool(&mut self) -> ResultKind<bool> {
+    fn parse_bool(&mut self) -> Result<bool> {
         if self.consume("true") {
             Ok(true)
         } else if self.consume("false") {
@@ -1137,7 +1132,7 @@ where
     fn_parse_float_case!(parse_f32, f32, Float32);
     fn_parse_float_case!(parse_f64, f64, Float64);
 
-    fn parse_byte(&mut self) -> ResultKind<u8> {
+    fn parse_byte(&mut self) -> Result<u8> {
         let (byte, len) = if self.consume("\\") {
             self.peek_escape_byte_from(0)?
         } else {
@@ -1156,7 +1151,7 @@ where
         Ok(byte)
     }
 
-    fn parse_char(&mut self) -> ResultKind<char> {
+    fn parse_char(&mut self) -> Result<char> {
         let (ch, len) = if self.consume("\\") {
             self.peek_escape_char_from(0)?
         } else {
@@ -1172,11 +1167,7 @@ where
         Ok(ch)
     }
 
-    fn parse_string<'t>(
-        &mut self,
-        kind: StringKind,
-        scratch: &'t mut Vec<u8>,
-    ) -> ResultKind<Either<&'de str, &'t str>> {
+    fn parse_string<'t>(&mut self, kind: StringKind, scratch: &'t mut Vec<u8>) -> Result<Either<&'de str, &'t str>> {
         scratch.clear();
 
         let mut buf = [0; 4];
@@ -1357,11 +1348,7 @@ where
         }
     }
 
-    fn parse_bytes<'t>(
-        &mut self,
-        kind: BytesKind,
-        scratch: &'t mut Vec<u8>,
-    ) -> ResultKind<Either<&'de [u8], &'t [u8]>> {
+    fn parse_bytes<'t>(&mut self, kind: BytesKind, scratch: &'t mut Vec<u8>) -> Result<Either<&'de [u8], &'t [u8]>> {
         scratch.clear();
 
         let mut offset = 0;
@@ -1487,7 +1474,7 @@ where
         }
     }
 
-    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<&'t Ident>
+    fn parse_identifier<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<&'t Ident>
     where
         'de: 't,
     {
@@ -1495,7 +1482,7 @@ where
         self.parse_identifier()
     }
 
-    fn parse_struct_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    fn parse_struct_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<Option<&'t Ident>>
     where
         'de: 't,
     {
@@ -1503,7 +1490,7 @@ where
         self.parse_identifier_or_underscore()
     }
 
-    fn parse_newtype_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Option<&'t Ident>>
+    fn parse_newtype_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<Option<&'t Ident>>
     where
         'de: 't,
     {
@@ -1516,7 +1503,7 @@ where
         }
     }
 
-    fn parse_variant_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<(Option<&'t Ident>, &'t Ident)>
+    fn parse_variant_name<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<(Option<&'t Ident>, &'t Ident)>
     where
         'de: 't,
     {
@@ -1542,7 +1529,7 @@ where
     RangeTo<usize>: SliceIndex<S, Output = S>,
     RangeFrom<usize>: SliceIndex<S, Output = S>,
 {
-    fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> ResultKind<Indicator<'t>>
+    fn begin<'t>(&mut self, scratch: &'t mut Vec<u8>) -> Result<Indicator<'t>>
     where
         'de: 't,
     {
@@ -1654,7 +1641,7 @@ where
         Ok(indicator)
     }
 
-    fn parse_number(&mut self, kind: NumberKind) -> ResultKind<Number> {
+    fn parse_number(&mut self, kind: NumberKind) -> Result<Number> {
         const BIN_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'1' | b'_');
         const OCT_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'7' | b'_');
         const HEX_DIGIT: fn(&&u8) -> bool = |byte| matches!(byte, b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f' | b'_');
@@ -1743,7 +1730,7 @@ where
         Ok(num)
     }
 
-    fn range_separator(&mut self) -> ResultKind<Option<RangeSeparator>> {
+    fn range_separator(&mut self) -> Result<Option<RangeSeparator>> {
         if self.consume("..=") {
             Ok(Some(RangeSeparator::DotDotEq))
         } else if self.consume("..") {
@@ -1753,7 +1740,7 @@ where
         }
     }
 
-    fn nominal_body_initiator(&mut self) -> ResultKind<Option<NominalBodyInitiator>> {
+    fn nominal_body_initiator(&mut self) -> Result<Option<NominalBodyInitiator>> {
         if self.consume("(") {
             Ok(Some(NominalBodyInitiator::Tuple))
         } else if self.consume("{") {

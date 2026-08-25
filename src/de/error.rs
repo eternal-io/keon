@@ -3,37 +3,30 @@ use core::fmt;
 
 pub type Result<T = ()> = core::result::Result<T, Error>;
 
-pub(crate) type ResultKind<T = ()> = core::result::Result<T, BoxedKind>;
-
 //==================================================================================================
 
+pub struct Error(Box<ErrorImpl>);
+
+pub enum Category {
+    Data,
+    Syntax,
+}
+
 #[derive(Debug)]
-pub struct Position {
+pub(super) struct ErrorImpl {
+    kind: ErrorKind,
+    position: Position,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Position {
     pub line: usize,
     pub column: usize,
 }
 
-#[derive(Debug)]
-pub struct Error {
-    pub kind: ErrorKind,
-    pub position: Position,
-}
-
-impl From<BoxedKind> for Error {
-    fn from(kind: BoxedKind) -> Self {
-        Self {
-            kind: *kind.0,
-            position: Position { line: 0, column: 0 },
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct BoxedKind(pub(crate) Box<ErrorKind>);
-
 #[non_exhaustive]
 #[derive(Debug)]
-pub enum ErrorKind {
+pub(super) enum ErrorKind {
     Message(Box<str>),
     Corrupted,
     ExceededRecursionLimit,
@@ -107,17 +100,9 @@ pub enum ErrorKind {
     InvalidDataEncodingPadding,
 }
 
-impl serde::de::StdError for BoxedKind {}
-
-impl serde::de::Error for BoxedKind {
-    fn custom<T: fmt::Display>(msg: T) -> Self {
-        Self(Box::new(ErrorKind::Message(msg.to_string().into_boxed_str())))
-    }
-}
-
-impl fmt::Display for BoxedKind {
+impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match *self.0 {
+        f.write_str(match self {
             ErrorKind::Message(ref msg) => msg,
             ErrorKind::Corrupted => "deserializer already corrupted",
             ErrorKind::ExceededRecursionLimit => "exceeded recursion limit",
@@ -193,30 +178,100 @@ impl fmt::Display for BoxedKind {
     }
 }
 
-impl From<ErrorKind> for BoxedKind {
-    fn from(err: ErrorKind) -> Self {
-        Self(Box::new(err))
+//==================================================================================================
+
+impl Position {
+    pub const NULL: Self = Position { line: 0, column: 0 };
+}
+
+impl Error {
+    pub(super) fn with_position(mut self, position: Position) -> Self {
+        self.0.position = position;
+        self
+    }
+
+    pub fn classify(&self) -> Category {
+        match self.0.kind {
+            ErrorKind::Message(_) => Category::Data,
+            _ => Category::Syntax,
+        }
+    }
+
+    pub fn is_data(&self) -> bool {
+        matches!(self.classify(), Category::Data)
+    }
+
+    pub fn is_syntax(&self) -> bool {
+        matches!(self.classify(), Category::Syntax)
     }
 }
 
-impl From<lexical_util::Error> for BoxedKind {
-    fn from(err: lexical_util::Error) -> Self {
-        Self(Box::new(match err {
-            lexical_util::Error::Overflow(_) => ErrorKind::IntegerOverflow,
-            lexical_util::Error::Underflow(_) => ErrorKind::IntegerUnderflow,
-            lexical_util::Error::InvalidSpecial => ErrorKind::InvalidFloatSpecial,
-            _ => ErrorKind::InvalidNumber(err.description()),
+impl serde::de::StdError for Error {}
+
+impl serde::de::Error for Error {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Self(Box::new(ErrorImpl {
+            kind: ErrorKind::Message(msg.to_string().into_boxed_str()),
+            position: Position::NULL,
         }))
     }
 }
 
-impl From<data_encoding::DecodeKind> for BoxedKind {
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Error")
+            .field(&self.0.kind)
+            .field(&format_args!(
+                "Position {{ line: {}, column: {} }}",
+                self.0.position.line, self.0.position.column
+            ))
+            .finish()
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ErrorImpl { kind, position } = &*self.0;
+        if *position != Position::NULL {
+            write!(f, ":{}:{} ", position.line, position.column)?;
+        }
+        write!(f, "{}", kind)
+    }
+}
+
+impl From<ErrorKind> for Error {
+    fn from(kind: ErrorKind) -> Self {
+        Self(Box::new(ErrorImpl {
+            kind,
+            position: Position::NULL,
+        }))
+    }
+}
+
+impl From<lexical_util::Error> for Error {
+    fn from(err: lexical_util::Error) -> Self {
+        Self(Box::new(ErrorImpl {
+            kind: match err {
+                lexical_util::Error::Overflow(_) => ErrorKind::IntegerOverflow,
+                lexical_util::Error::Underflow(_) => ErrorKind::IntegerUnderflow,
+                lexical_util::Error::InvalidSpecial => ErrorKind::InvalidFloatSpecial,
+                _ => ErrorKind::InvalidNumber(err.description()),
+            },
+            position: Position::NULL,
+        }))
+    }
+}
+
+impl From<data_encoding::DecodeKind> for Error {
     fn from(err: data_encoding::DecodeKind) -> Self {
-        Self(Box::new(match err {
-            data_encoding::DecodeKind::Length => ErrorKind::InvalidDataEncodingLength,
-            data_encoding::DecodeKind::Symbol => ErrorKind::InvalidDataEncodingSymbol,
-            data_encoding::DecodeKind::Trailing => ErrorKind::InvalidDataEncodingTrailing,
-            data_encoding::DecodeKind::Padding => ErrorKind::InvalidDataEncodingPadding,
+        Self(Box::new(ErrorImpl {
+            kind: match err {
+                data_encoding::DecodeKind::Length => ErrorKind::InvalidDataEncodingLength,
+                data_encoding::DecodeKind::Symbol => ErrorKind::InvalidDataEncodingSymbol,
+                data_encoding::DecodeKind::Trailing => ErrorKind::InvalidDataEncodingTrailing,
+                data_encoding::DecodeKind::Padding => ErrorKind::InvalidDataEncodingPadding,
+            },
+            position: Position::NULL,
         }))
     }
 }
